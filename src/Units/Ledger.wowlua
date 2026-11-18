@@ -1,0 +1,752 @@
+-- Units/Ledger.wowlua
+-- The Ledger (asked 2026-11-18; design board "Ledger", page "windows"):
+-- SuuUI's own window for money. This is its data (build order step 2); the
+-- window, its micro menu button, Alt-click on items and the notes come
+-- next, built on the methods below. A built-in module written against the
+-- public API only; it works with the auction house module off (its prices
+-- then stop growing).
+--
+-- What it keeps, in its own SavedVariable SuuUILedger (account-wide, kept
+-- out of SuuUIDB so settings and profiles stay light):
+--   prices   per ruleset (SuuUI.Ruleset(): each has its own house), per
+--            item, the looks of the last 60 days (Ledger/Pack: one short
+--            string an item): per day and time of day (Night 0–6, Morning
+--            6–10, Noon 10–16, Evening 16–24 by the computer's clock) the
+--            lowest buyout per unit, what most sell it for, how many
+--            offered in how many auctions. From the auction house module's
+--            looks: SUUUI_AUCTION_SEEN (a search) and SUUUI_AUCTION_SCANNED
+--            (Scan all, read a slice a frame here).
+--   scans    per ruleset, the last Scan all: when, how many items, how
+--            many deals and how many of them under vendor price.
+--   watches  per ruleset, per item: your price, and the last look's.
+--   gold     per character: name, class, ruleset, last seen, and its money
+--            at the end of each day it played.
+--
+-- For the window (step 3) and the notes (step 4), the module's methods.
+-- `ruleset` is optional everywhere (nil: this character's); a day is a day
+-- number (Ledger/Days: dayOf, dateOf, weekday), a period 1 Night … 4
+-- Evening; prices are copper per unit, 0 where not known.
+--
+--   Ruleset() -> key; SuuUI.RulesetName(key) -> "Normal Ruleset"
+--   Rulesets() -> keys with prices (this one first)
+--   Today() -> day, period (now)
+--   Items(ruleset) -> itemIDs with prices
+--   Latest(itemID, ruleset) -> Look? { day, period, low, most, qty, n }
+--   Summary(itemID, ruleset) -> { itemID, look, usual?, change? } (cached;
+--       change in percent, negative under: the Prices row)
+--   Usual(itemID, ruleset) -> copper?
+--   DailyLows(itemID, days, ruleset) -> lows[], mosts[] (index `days` is
+--       today, 0: no look that day): the price history (7/30/60) and the
+--       30-day sparkline (Spark)
+--   Looks(itemID, days, ruleset) -> Look[] newest first (every period)
+--   WhenCheapest(itemID, ruleset) -> Stats.When { weekdays[7], times[4]
+--       ({ pct, looks }), days, periods ({ enough, out, best, worst }) }
+--   VendorPrice(itemID) -> copper? (nil: nothing, or not cached yet)
+--   Deal(itemID, price, ruleset) -> under%?, underVendor (the settings')
+--   Deals(ruleset) -> { itemID, low, usual?, under?, underVendor, vendor?
+--       }[] furthest under first (the latest look of each item)
+--   LastScan(ruleset) -> { at, items, deals, underVendor }?
+--   WatchItem(itemID, target, ruleset) / UnwatchItem(itemID, ruleset) /
+--       WatchOf(itemID, ruleset) -> { target, low?, at? }? /
+--       WatchedUnder(ruleset) -> { itemID, low, target, at }[]: watched
+--       items whose last look (no older than the last scan) is under
+--   Characters() -> { key, name, class?, ruleset, money, seen, you }[]
+--   GoldSeries(scope, fromDay, toDay) -> copper[] (scope: nil all, {
+--       ruleset = key }, { char = key }); GoldFirstDay(scope),
+--       GoldTotal(scope)
+-- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
+-- "watches" or "gold".
+--
+-- The ledger service (SuuUI.Services.LEDGER) gives other modules the usual
+-- price (the auction house's tooltip line) and what an offer is (Deal).
+
+import SuuUI, Module from "/Core/API"
+import type SettingsSection from "/Core/API"
+import * as saved from "wowlua:saved"
+import * as secret from "wowlua:secret"
+import * as days from "./Ledger/Days"
+import * as store from "./Ledger/Store"
+import type Look, PriceMap from "./Ledger/Store"
+import * as stats from "./Ledger/Stats"
+import type When from "./Ledger/Stats"
+import * as gold from "./Ledger/Gold"
+import type GoldMap, GoldScope from "./Ledger/Gold"
+
+local DEFAULTS = { dealPercent = 25, dealVendor = true, markDeals = true, scanNote = false, tipUsual = true }
+
+-- Scan all's looks read a slice a frame (about 6,400 items in all for a
+-- big house), and the kept prices pruned the same way once a day.
+local SCAN_SLICE = 800
+local PRUNE_SLICE = 800
+
+export const SECTION: SettingsSection = {
+    id = "ledger",
+    label = "Ledger",
+    category = "General",
+    order = 29,
+    groups = {
+        {
+            title = "Deals",
+            description = "An item whose lowest buyout is far under its usual price, or under what a vendor pays for it.",
+            rows = {
+                {
+                    key = "dealPercent",
+                    label = "Counts as a deal",
+                    control = "slider",
+                    min = 10,
+                    max = 60,
+                    step = 5,
+                    unit = "%",
+                    description = "How far under its usual price (the middle of the lowest buyouts of its last 14 days) an item must be offered.",
+                },
+                {
+                    key = "dealVendor",
+                    label = "Under vendor price",
+                    control = "toggle",
+                    description = "An item offered for less than a vendor pays for it counts as a deal too.",
+                },
+                {
+                    key = "markDeals",
+                    label = "Mark deals at the auction house",
+                    control = "toggle",
+                    description = "Beside a result's name: how far under its usual price, and Under vendor.",
+                },
+                {
+                    key = "scanNote",
+                    label = "A note after Scan all",
+                    control = "toggle",
+                    description = "How many deals the scan found, the furthest under first.",
+                },
+            },
+        },
+        {
+            title = "Item tooltips",
+            rows = {
+                {
+                    key = "tipUsual",
+                    label = "Usual price in item tooltips",
+                    control = "toggle",
+                    description = "In the auction house's lines of an item's tooltip: the middle of the lowest buyouts of its last 14 days.",
+                    disabled = function(): (boolean, string)
+                        local ah = SuuUI.GetModule("auctionhouse")
+                        if not (ah and ah:IsEnabled()) then
+                            return true, "The auction house module is off."
+                        end
+                        return ah:Setting("tipShow") == false, "Auction prices in item tooltips are off."
+                    end,
+                },
+            },
+        },
+    },
+}
+
+-- The last Scan all of a ruleset's house.
+export type ScanInfo = { at: number, items: number, deals: number, underVendor: number }
+-- A watched item: your price, and its last look's lowest buyout and when.
+export type Watch = { target: number, low?: number, at?: number }
+-- What SuuUILedger holds (see the top).
+export type LedgerData = {
+    prices?: { [string]: PriceMap },
+    scans?: { [string]: ScanInfo },
+    watches?: { [string]: { [number]: Watch } },
+    gold?: GoldMap,
+    pruned?: { [string]: number },
+}
+
+-- An item's latest look and what it makes of it (cached for the day).
+export type ItemSummary = { itemID: number, look: Look, usual?: number, change?: number }
+export type DealEntry = {
+    itemID: number,
+    low: number,
+    usual?: number,
+    under?: number,
+    underVendor: boolean,
+    vendor?: number,
+    order: number,
+}
+export type UnderEntry = { itemID: number, low: number, target: number, at: number }
+export type CharacterInfo = {
+    key: string,
+    name: string,
+    class?: string,
+    ruleset: string,
+    money: number,
+    seen: number,
+    you: boolean,
+}
+
+local db = saved.bind("SuuUILedger", { version = 1, defaults = {} :: { [string]: unknown }, stripDefaults = false })
+
+export class LedgerModule extends Module<typeof(DEFAULTS)>
+    -- the summaries per ruleset and item, for `cacheDay` only
+    cache: { [string]: { [number]: ItemSummary } } = {}
+    cacheDay: number = 0
+    -- what vendors pay, per item (0: nothing), as the game told it
+    vendor: { [number]: number } = {}
+    -- SUUUI_LEDGER_CHANGED waiting to be told, by what
+    pendingChanges: { [string]: boolean } = {}
+    -- Scan all's looks being read, and a prune running
+    scanTicker: TickerHandle? = nil
+    pruneTicker: TickerHandle? = nil
+
+    constructor()
+        super({
+            id = "ledger",
+            name = "Ledger",
+            description = "What the auction house showed, per ruleset, for 60 days: usual prices, deals, when items are cheapest; your characters' gold day by day.",
+            api = "0.48",
+            defaults = DEFAULTS,
+        })
+    end
+
+    -- SuuUILedger (see the top), its parts made on first use.
+    function Data(): LedgerData
+        return db :: unknown :: LedgerData
+    end
+
+    -- A ruleset's prices: nil when it has none and `make` isn't set.
+    function PriceMap(ruleset: string?, make: boolean?): PriceMap?
+        local d = self:Data()
+        local all = d.prices
+        if not all then
+            if not make then
+                return nil
+            end
+            all = {}
+            d.prices = all
+        end
+        local key = ruleset or SuuUI.Ruleset()
+        local map = all[key]
+        if not map and make then
+            map = {}
+            all[key] = map
+        end
+        return map
+    end
+
+    function Ruleset(): string
+        return SuuUI.Ruleset()
+    end
+
+    -- The rulesets with prices, this character's first, then by name.
+    function Rulesets(): string[]
+        local here = SuuUI.Ruleset()
+        local out: string[] = { here }
+        for key, map in pairs(self:Data().prices or {}) do
+            if key ~= here and next(map) ~= nil then
+                out[#out + 1] = key
+            end
+        end
+        table.sort(out, function(a: string, b: string): boolean
+            if a == here or b == here then
+                return a == here and b ~= here
+            end
+            return a < b
+        end)
+        return out
+    end
+
+    function Today(): (number, number)
+        return days.dayOf()
+    end
+
+    -- The items with prices on a ruleset.
+    function Items(ruleset: string?): number[]
+        local out: number[] = {}
+        for itemID in pairs(self:PriceMap(ruleset) or {}) do
+            out[#out + 1] = itemID
+        end
+        return out
+    end
+
+    ----------------------------------------------------------------------------
+    -- Reading prices
+    ----------------------------------------------------------------------------
+
+    -- An item's kept looks (Ledger/Pack), nil: none.
+    function Packed(itemID: number, ruleset: string?): string?
+        local map = self:PriceMap(ruleset)
+        return map and map[itemID]
+    end
+
+    function Latest(itemID: number, ruleset: string?): Look?
+        return store.latest(self:Packed(itemID, ruleset))
+    end
+
+    -- An item's summary (nil: never seen on that ruleset), kept until it
+    -- changes or the day turns.
+    function Summary(itemID: number, ruleset: string?): ItemSummary?
+        local today = days.dayOf()
+        if today ~= self.cacheDay then
+            self.cache, self.cacheDay = {}, today
+        end
+        local key = ruleset or SuuUI.Ruleset()
+        local cached = self.cache[key]
+        if not cached then
+            cached = {}
+            self.cache[key] = cached
+        end
+        local known = cached[itemID]
+        if known then
+            return known
+        end
+        local s = self:Packed(itemID, key)
+        local look = store.latest(s)
+        if not look then
+            return nil
+        end
+        local usual = store.usualOf(s, today)
+        local summary: ItemSummary = {
+            itemID = itemID,
+            look = look,
+            usual = usual,
+            change = usual and stats.change(look.low, usual) or nil,
+        }
+        cached[itemID] = summary
+        return summary
+    end
+
+    -- An item's summary dropped (a look changed it).
+    function Forget(ruleset: string, itemID: number)
+        local cached = self.cache[ruleset]
+        if cached then
+            cached[itemID] = nil
+        end
+    end
+
+    function Usual(itemID: number, ruleset: string?): number?
+        local sm = self:Summary(itemID, ruleset)
+        return sm and sm.usual
+    end
+
+    function DailyLows(itemID: number, count: number, ruleset: string?): (number[], number[])
+        return store.dailyLows(self:Packed(itemID, ruleset), days.dayOf(), count)
+    end
+
+    -- The Prices row's 30 days.
+    function Spark(itemID: number, ruleset: string?): number[]
+        local lows = self:DailyLows(itemID, 30, ruleset)
+        return lows
+    end
+
+    function Looks(itemID: number, count: number?, ruleset: string?): Look[]
+        local today = days.dayOf()
+        return store.looks(
+            self:Packed(itemID, ruleset),
+            today - math.min(count or store.KEEP_DAYS, store.KEEP_DAYS) + 1
+        )
+    end
+
+    function WhenCheapest(itemID: number, ruleset: string?): When
+        return store.whenOf(self:Packed(itemID, ruleset), days.dayOf())
+    end
+
+    ----------------------------------------------------------------------------
+    -- Deals
+    ----------------------------------------------------------------------------
+
+    -- What a vendor pays for an item (nil: nothing, or the game doesn't
+    -- know the item yet: it is never asked for here, so a scan of 6,400
+    -- items doesn't ask the server for each).
+    function VendorPrice(itemID: number): number?
+        local known = self.vendor[itemID]
+        if known then
+            return known > 0 and known or nil
+        end
+        if not C_Item.IsItemDataCachedByID(itemID) then
+            return nil
+        end
+        local price = secret.asNumber((select(11, C_Item.GetItemInfo(itemID))))
+        self.vendor[itemID] = price or 0
+        return price and price > 0 and price or nil
+    end
+
+    -- What an offer at `price` per unit is: how far under its usual price
+    -- in percent when that counts as a deal (nil: it doesn't), and whether
+    -- it is under what a vendor pays (with that setting on).
+    function Deal(itemID: number, price: number, ruleset: string?): (number?, boolean)
+        local under = stats.dealUnder(price, self:Usual(itemID, ruleset), self:Get("dealPercent"))
+        local vendor = self:Get("dealVendor") and stats.underVendor(price, self:VendorPrice(itemID))
+        return under, vendor
+    end
+
+    -- Every item whose latest look is a deal, furthest under first.
+    function Deals(ruleset: string?): DealEntry[]
+        local out: DealEntry[] = {}
+        for itemID in pairs(self:PriceMap(ruleset) or {}) do
+            local sm = self:Summary(itemID, ruleset)
+            if sm then
+                local low = sm.look.low
+                local under, uv = self:Deal(itemID, low, ruleset)
+                if under or uv then
+                    local vendor = self:VendorPrice(itemID)
+                    out[#out + 1] = {
+                        itemID = itemID,
+                        low = low,
+                        usual = sm.usual,
+                        under = under,
+                        underVendor = uv,
+                        vendor = vendor,
+                        order = stats.dealOrder(under, low, uv and vendor or nil),
+                    }
+                end
+            end
+        end
+        table.sort(out, function(a: DealEntry, b: DealEntry): boolean
+            if a.order ~= b.order then
+                return a.order > b.order
+            end
+            return a.itemID < b.itemID
+        end)
+        return out
+    end
+
+    function LastScan(ruleset: string?): ScanInfo?
+        local scans = self:Data().scans
+        return scans and scans[ruleset or SuuUI.Ruleset()]
+    end
+
+    ----------------------------------------------------------------------------
+    -- Recording looks
+    ----------------------------------------------------------------------------
+
+    -- SUUUI_LEDGER_CHANGED(what), once for any number of changes in a frame.
+    function Changed(what: string)
+        if self.pendingChanges[what] then
+            return
+        end
+        self.pendingChanges[what] = true
+        self:After(0, function()
+            self.pendingChanges[what] = nil
+            self:Emit("SUUUI_LEDGER_CHANGED", what)
+        end)
+    end
+
+    -- A watched item's last look; whether that changed whether it is under.
+    function SeeWatched(ruleset: string, itemID: number, low: number, at: number): boolean
+        local all = self:Data().watches
+        local list = all and all[ruleset]
+        local w = list and list[itemID]
+        if not w then
+            return false
+        end
+        local was = w.low ~= nil and w.low < w.target
+        w.low, w.at = low, at
+        return was ~= (low < w.target) or low < w.target
+    end
+
+    -- One look (a search's): on this ruleset, now (or at `at`). -> whether
+    -- it changed what is kept.
+    function RecordLook(itemID: number, low: number, most: number, qty: number, n: number, at: number?): boolean
+        if not (itemID and low and low > 0) then
+            return false
+        end
+        local ruleset = SuuUI.Ruleset()
+        local t = at or time()
+        local day, period = days.dayOf(t)
+        local changed = store.record(assert(self:PriceMap(ruleset, true)), itemID, day, period, low, most, qty, n)
+        if self:SeeWatched(ruleset, itemID, low, t) then
+            self:Changed("watches")
+        end
+        if changed then
+            self:Forget(ruleset, itemID)
+            self:Changed("prices")
+        end
+        return changed
+    end
+
+    -- Scan all's looks (SUUUI_AUCTION_SCANNED: five numbers an item), read
+    -- a slice a frame; then the scan's deals counted and kept.
+    function RecordScan(looks: number[], items: number, at: number?)
+        local ruleset = SuuUI.Ruleset()
+        local t = at or time()
+        local day, period = days.dayOf(t)
+        local map = assert(self:PriceMap(ruleset, true))
+        local prev = self.scanTicker
+        if prev then
+            prev:Cancel()
+        end
+        local i, deals, underVendor, watched = 0, 0, 0, false
+        local function step(ticker: TickerHandle?)
+            local stop = math.min(items, i + SCAN_SLICE)
+            for k = i, stop - 1 do
+                local b = k * 5
+                local itemID, low = looks[b + 1], looks[b + 2]
+                if itemID and low and low > 0 then
+                    store.record(map, itemID, day, period, low, looks[b + 3] or 0, looks[b + 4] or 0, looks[b + 5] or 0)
+                    self:Forget(ruleset, itemID)
+                    local under, uv = self:Deal(itemID, low, ruleset)
+                    if under or uv then
+                        deals += 1
+                    end
+                    if uv then
+                        underVendor += 1
+                    end
+                    if self:SeeWatched(ruleset, itemID, low, t) then
+                        watched = true
+                    end
+                end
+            end
+            i = stop
+            if i < items then
+                return
+            end
+            if ticker then
+                ticker:Cancel()
+            end
+            self.scanTicker = nil
+            local d = self:Data()
+            local scans = d.scans or {}
+            d.scans = scans
+            scans[ruleset] = { at = t, items = items, deals = deals, underVendor = underVendor }
+            self:Changed("prices")
+            self:Changed("scan")
+            -- (a watched item missing from the scan is no longer under)
+            if watched or next(self:Watches(ruleset)) ~= nil then
+                self:Changed("watches")
+            end
+        end
+        -- the first slice now, the rest a slice a frame
+        step(nil)
+        if i < items then
+            self.scanTicker = self:Every(0, step)
+        end
+    end
+
+    -- Whether a ruleset's prices weren't pruned today yet.
+    function NeedsPrune(): boolean
+        local today = days.dayOf()
+        local d = self:Data()
+        local pruned = d.pruned or {}
+        for ruleset in pairs(d.prices or {}) do
+            if pruned[ruleset] ~= today then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Every kept look older than 60 days dropped, a slice of items a
+    -- frame, once a day per ruleset.
+    function Prune()
+        local today = days.dayOf()
+        local d = self:Data()
+        local pruned = d.pruned or {}
+        d.pruned = pruned
+        local queue: { ruleset: string, itemID: number }[] = {}
+        for ruleset, map in pairs(d.prices or {}) do
+            if pruned[ruleset] ~= today then
+                pruned[ruleset] = today
+                for itemID in pairs(map) do
+                    queue[#queue + 1] = { ruleset = ruleset, itemID = itemID }
+                end
+            end
+        end
+        if #queue == 0 or self.pruneTicker then
+            return
+        end
+        local i = 0
+        self.pruneTicker = self:Every(0, function(ticker)
+            local stop = math.min(#queue, i + PRUNE_SLICE)
+            local prices = self:Data().prices or {}
+            for k = i + 1, stop do
+                local q = queue[k]
+                local map = prices[q.ruleset]
+                if map and store.prune(map, q.itemID, today) then
+                    self:Forget(q.ruleset, q.itemID)
+                end
+            end
+            i = stop
+            if i >= #queue then
+                ticker:Cancel()
+                self.pruneTicker = nil
+                self:Changed("prices")
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Watches
+    ----------------------------------------------------------------------------
+
+    function Watches(ruleset: string?): { [number]: Watch }
+        local all = self:Data().watches
+        return all and all[ruleset or SuuUI.Ruleset()] or {}
+    end
+
+    function WatchOf(itemID: number, ruleset: string?): Watch?
+        return self:Watches(ruleset)[itemID]
+    end
+
+    -- Tell me when a scan or search finds it under `target` per unit.
+    function WatchItem(itemID: number, target: number, ruleset: string?)
+        local d = self:Data()
+        local all = d.watches or {}
+        d.watches = all
+        local key = ruleset or SuuUI.Ruleset()
+        local list = all[key] or {}
+        all[key] = list
+        local look = self:Latest(itemID, key)
+        local w: Watch = { target = math.floor(target) }
+        if look then
+            -- (no older than the last scan: Latest has no time, so the
+            -- look counts from the start of its day)
+            local y, m, dd = days.dateOf(look.day)
+            w.low, w.at = look.low, time({ year = y, month = m, day = dd, hour = 0 })
+        end
+        list[itemID] = w
+        self:Changed("watches")
+    end
+
+    function UnwatchItem(itemID: number, ruleset: string?)
+        local all = self:Data().watches
+        local list = all and all[ruleset or SuuUI.Ruleset()]
+        if list and list[itemID] then
+            list[itemID] = nil
+            self:Changed("watches")
+        end
+    end
+
+    -- The watched items whose last look is under your price, and no older
+    -- than the ruleset's last Scan all (one it didn't find is no longer
+    -- offered), the furthest under first.
+    function WatchedUnder(ruleset: string?): UnderEntry[]
+        local scan = self:LastScan(ruleset)
+        local out: UnderEntry[] = {}
+        for itemID, w in pairs(self:Watches(ruleset)) do
+            local low, at = w.low, w.at
+            if low and at and low < w.target and (not scan or at >= scan.at) then
+                out[#out + 1] = { itemID = itemID, low = low, target = w.target, at = at }
+            end
+        end
+        table.sort(out, function(a: UnderEntry, b: UnderEntry): boolean
+            local ua, ub = a.low / a.target, b.low / b.target
+            if ua ~= ub then
+                return ua < ub
+            end
+            return a.itemID < b.itemID
+        end)
+        return out
+    end
+
+    ----------------------------------------------------------------------------
+    -- Gold
+    ----------------------------------------------------------------------------
+
+    function GoldMap(): GoldMap
+        local d = self:Data()
+        local map = d.gold or {}
+        d.gold = map
+        return map
+    end
+
+    -- This character's money today (at login, on each change, at logout;
+    -- `quiet`: nothing told, as when the module starts).
+    function RecordMoney(quiet: boolean?)
+        local key = self:CharKey()
+        local money = secret.asNumber(GetMoney())
+        if not (key and money) then
+            return
+        end
+        local name = secret.asString(UnitName("player")) or key
+        local _, class = UnitClass("player")
+        local day = days.dayOf()
+        gold.record(self:GoldMap(), key, name, secret.asString(class), SuuUI.Ruleset(), day, money, time())
+        if not quiet then
+            self:Changed("gold")
+        end
+    end
+
+    -- Your characters, by ruleset, then name.
+    function Characters(): CharacterInfo[]
+        local me = self:CharKey()
+        local out: CharacterInfo[] = {}
+        local map = self:GoldMap()
+        for _, key in ipairs(gold.chosen(map, nil)) do
+            local c = map[key]
+            if c then
+                out[#out + 1] = {
+                    key = key,
+                    name = c.name,
+                    class = c.class,
+                    ruleset = c.ruleset,
+                    money = gold.total(map, { char = key }),
+                    seen = c.seen,
+                    you = key == me,
+                }
+            end
+        end
+        table.sort(out, function(a: CharacterInfo, b: CharacterInfo): boolean
+            if a.ruleset ~= b.ruleset then
+                return a.ruleset < b.ruleset
+            end
+            return a.name < b.name
+        end)
+        return out
+    end
+
+    function GoldSeries(scope: GoldScope?, fromDay: number, toDay: number): number[]
+        return gold.series(self:GoldMap(), scope, fromDay, toDay)
+    end
+
+    function GoldFirstDay(scope: GoldScope?): number?
+        return gold.firstDay(self:GoldMap(), scope)
+    end
+
+    function GoldTotal(scope: GoldScope?): number
+        return gold.total(self:GoldMap(), scope)
+    end
+
+    ----------------------------------------------------------------------------
+    -- On and off
+    ----------------------------------------------------------------------------
+
+    override function OnEnable()
+        self:RegisterSettings(SECTION)
+        self:On("SUUUI_AUCTION_SEEN", function(_, itemID, low, most, qty, n)
+            self:RecordLook(itemID, low, most, qty, n)
+        end)
+        self:On("SUUUI_AUCTION_SCANNED", function(_, looks, items)
+            self:RecordScan(looks, items)
+        end)
+        -- the deals change with their settings
+        self:WatchAll({ "dealPercent", "dealVendor" }, function()
+            self:Changed("prices")
+        end)
+        self:RecordMoney(true)
+        self:OnGameEvent("PLAYER_MONEY", function()
+            self:RecordMoney()
+        end)
+        self:OnGameEvent("PLAYER_LOGOUT", function()
+            self:RecordMoney()
+        end)
+        self:ProvideService(SuuUI.Services.LEDGER, {
+            UsualPrice = function(itemID: number): number?
+                return self:Usual(itemID)
+            end,
+            TooltipUsual = function(itemID: number): number?
+                if not self:Get("tipUsual") then
+                    return nil
+                end
+                return self:Usual(itemID)
+            end,
+            Deal = function(itemID: number, price: number): (number?, boolean)
+                return self:Deal(itemID, price)
+            end,
+        })
+        -- (after login's rush)
+        if self:NeedsPrune() then
+            self:After(10, function()
+                self:Prune()
+            end)
+        end
+    end
+
+    -- (its listeners, timers and the service go with the release)
+    override function OnDisable()
+        self.scanTicker, self.pruneTicker = nil, nil
+        self.cache, self.pendingChanges = {}, {}
+    end
+end
+
+export local M = SuuUI.AddModule(LedgerModule.new())

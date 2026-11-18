@@ -4,9 +4,14 @@
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
 import internal M from "/Units/AuctionHouse"
-import ORE, BLADE, setUp, tearDown, plain from "./AuctionHouseHelpers"
+import internal M as Ledger from "/Units/Ledger"
+import ORE, BLADE, RING, setUp, tearDown, plain from "./AuctionHouseHelpers"
 import * as ahPrices from "/Units/AuctionHouse/Prices"
+import * as events from "/Core/Events"
+
+const LISTENER = { name = "AuctionHousePricesTest" }
 
 @beforeEach
 local function start()
@@ -15,6 +20,7 @@ end
 
 @afterEach
 local function cleanup()
+    events.offAll(LISTENER)
     tearDown()
 end
 
@@ -123,4 +129,101 @@ local function memory()
     local cheapest = assert(ahPrices.market(M, { { price = 150, qty = 200 }, { price = 100, qty = 10 } }))
     expect(cheapest.ref.price).toBe(100)
     expect(cheapest.cheap).toBe(0)
+end
+
+@test("the Ledger's usual price after what most sell it for, while it is on and its setting says so")
+local function usualLine()
+    local d = Ledger:Data()
+    d.prices = nil
+    Ledger.cache = {}
+    -- four days before at 1s 10c … 1s 40c, and today's 1s: usual 1s 20c
+    for k, low in ipairs({ 110, 120, 130, 140 }) do
+        Ledger:RecordLook(ORE, low, 0, 10, 2, time() - k * 86400)
+    end
+    M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 } }))
+    local lines = oreTooltip()
+    local most, usual = 0, 0
+    for i, l in ipairs(lines) do
+        if l:find("^Most sell it for") then
+            most = i
+        elseif l == "Usual price = 1s 20c each" then
+            usual = i
+        end
+    end
+    expect(most > 0).toBe(true)
+    expect(usual).toBe(most + 1)
+    -- its setting off: no line
+    Ledger:Set("tipUsual", false)
+    expect(hasLine(oreTooltip(), "^Usual price")).toBe(false)
+    Ledger:Reset("tipUsual")
+    -- never seen by the Ledger: no line
+    d.prices = nil
+    Ledger.cache = {}
+    expect(hasLine(oreTooltip(), "^Usual price")).toBe(false)
+end
+
+@test("each look told (0.48): SUUUI_AUCTION_SEEN with the lowest, what most sell it for, how many; not Scan all's")
+local function told()
+    local heard: unknown[][] = {}
+    events.on(
+        "SUUUI_AUCTION_SEEN",
+        function(_, itemID, low, most, qty, n, source)
+            heard[#heard + 1] = { itemID, low, most, qty, n, source }
+        end,
+        LISTENER
+    )
+    M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 }, { price = 160, qty = 90 } }))
+    M:Seen(BLADE, 50000, 2)
+    M:Seen(RING, 3000)
+    -- one of Scan all's (told with the rest), nothing, no price
+    M:Seen(ORE, 90, nil, true)
+    M:Seen(nil, 5)
+    M:Seen(ORE, 0)
+    expect(heard).toEqual({
+        { ORE, 100, 150, 300, 3, "search" },
+        { BLADE, 50000, 0, 2, 0, "search" },
+        { RING, 3000, 0, 0, 0, "search" },
+    })
+end
+
+@test("the price memory reads the characters on this ruleset only; one saved before says it by its key's realm")
+local function rulesets()
+    local here = SuuUI.Ruleset()
+    local real = M.AllCharData
+    local later = time() + 100
+    mock.stub(M, "AllCharData", function(_: unknown): { [string]: { [string]: unknown } }
+        local entries: { [string]: { [string]: unknown } } = {}
+        for k, v in pairs(real(M)) do
+            entries[k] = v
+        end
+        -- on another ruleset: newer, but another house
+        entries["Otherplayer - Elsewhere"] = {
+            ruleset = "Elsewhere",
+            seen = { [ORE] = { price = 1, at = later } },
+            posted = { [ORE] = { price = 2, at = later } },
+            scanAt = later,
+            scanSeconds = 99,
+            scanCount = 5,
+        }
+        -- saved before it said its ruleset: its key's realm is this one
+        entries["Thirdplayer - " .. here] = { seen = { [BLADE] = { price = 3, at = 1 } } }
+        -- saved before, on another
+        entries["Fourthplayer - Elsewhere"] = { seen = { [RING] = { price = 4, at = 1 } } }
+        return entries
+    end)
+    M:Seen(ORE, 120, 40)
+    expect(assert(M:LowestSeen(ORE)).price).toBe(120)
+    expect(M:LastPosted(ORE)).toBeNil()
+    expect(assert(M:LowestSeen(BLADE)).price).toBe(3)
+    expect(M:LowestSeen(RING)).toBeNil()
+    -- this character's data says its ruleset now
+    expect(M:CharData().ruleset).toBe(here)
+    -- the last scan and its size: this ruleset's house
+    expect(M:LastScan()).toBeNil()
+    expect(M:LastScanSize()).toBeNil()
+    -- the game's wait between two Scan alls is per account: every character's
+    expect(M:NextScanAt()).toBe(later + 15 * 60)
+    -- the service's price too
+    local price = assert(assert(SuuUI.UseService(SuuUI.Services.AUCTION_HOUSE)).Price)(ORE)
+    expect(assert(price).price).toBe(120)
 end

@@ -191,8 +191,12 @@ local WIDTH, HEIGHT = 840, 580
 local TONE: { [string]: string } = { info = "ink-muted", ok = "fel", error = "ember-text" }
 
 -- What SuuUI remembers per item, per character: what the house showed last,
--- what you posted at; your bids; the last Scan all.
+-- what you posted at; your bids; the last Scan all. `ruleset`: the
+-- character's (SuuUI.Ruleset(), kept since API 0.48; before, its key's
+-- realm says it): each ruleset has its own house, so prices are read only
+-- from characters on this one.
 export type CharStore = {
+    ruleset?: string,
     seen?: { [number]: SeenEntry },
     posted?: { [number]: PostedEntry },
     bids?: { [number]: number },
@@ -292,14 +296,30 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         })
     end
 
-    -- What SuuUI keeps for this character, and for each of yours.
+    -- What SuuUI keeps for this character (marked with its ruleset), and
+    -- for each of yours: all of them (the game's wait between two Scan alls
+    -- is per account), or those on this character's ruleset (its house's
+    -- prices and scans).
     function Saved(): CharStore
-        return self:CharData() :: unknown :: CharStore
+        local d = self:CharData() :: unknown :: CharStore
+        d.ruleset = SuuUI.Ruleset()
+        return d
     end
     function AllSaved(): CharStore[]
         local out: CharStore[] = {}
         for _, d in pairs(self:AllCharData()) do
             out[#out + 1] = d :: unknown :: CharStore
+        end
+        return out
+    end
+    function RulesetSaved(): CharStore[]
+        local out: CharStore[] = {}
+        local here = SuuUI.Ruleset()
+        for key, data in pairs(self:AllCharData()) do
+            local d = data :: unknown :: CharStore
+            if (d.ruleset or SuuUI.RulesetOfCharKey(key)) == here then
+                out[#out + 1] = d
+            end
         end
         return out
     end
@@ -516,8 +536,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- What SuuUI remembers per item, and the item tooltips (AuctionHouse/Prices)
     ----------------------------------------------------------------------------
 
-    function Seen(itemID: number?, m: Market | number | nil, qty: number?)
-        ahPrices.recordSeen(self, itemID, m, qty)
+    -- (`scan`: one of Scan all's, told with the rest when it is done)
+    function Seen(itemID: number?, m: Market | number | nil, qty: number?, scan: boolean?)
+        ahPrices.recordSeen(self, itemID, m, qty, scan)
     end
 
     function LowestSeen(itemID: number?): SeenEntry?
@@ -968,7 +989,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             SearchItem = function(item: number | string): boolean
                 return self:SearchItem(item)
             end,
-            -- (0.44) the newest price any of your characters saw (crafting costs)
+            -- (0.44) the newest price any of your characters saw (crafting
+            -- costs); 0.48: those on this ruleset
             Price = function(itemID: number): AuctionPrice?
                 local e = self:LowestSeen(itemID)
                 return e and { price = e.price, at = e.at } or nil

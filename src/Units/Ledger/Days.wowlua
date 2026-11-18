@@ -1,0 +1,71 @@
+-- Units/Ledger/Days.wowlua
+-- The Ledger's calendar (Units/Ledger): a day as a number (days since
+-- 1 January 1970 by the computer's own calendar, so "today" turns at the
+-- player's midnight), the time of day as one of four periods by the
+-- computer's clock (Night 0–6, Morning 6–10, Noon 10–16, Evening 16–24),
+-- the day of the week (1 Monday … 7 Sunday), and a day back as a date.
+-- Pure: every function takes the time or the date it works on.
+
+-- The periods in clock order: PERIODS[p] is period p's name.
+export const NIGHT = 1
+export const MORNING = 2
+export const NOON = 3
+export const EVENING = 4
+export const PERIODS: string[] = { "Night", "Morning", "Noon", "Evening" }
+export const WEEKDAYS: string[] = { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" }
+
+-- The period an hour (0-23) falls in.
+export function periodOfHour(hour: number): number
+    if hour < 6 then
+        return NIGHT
+    elseif hour < 10 then
+        return MORNING
+    elseif hour < 16 then
+        return NOON
+    end
+    return EVENING
+end
+
+-- A date's day number (proleptic Gregorian; month 1-12).
+export function dayNumber(year: number, month: number, day: number): number
+    local y = month <= 2 and year - 1 or year
+    local era = math.floor(y / 400)
+    local yoe = y - era * 400
+    local mp = (month + 9) % 12
+    local doy = math.floor((153 * mp + 2) / 5) + day - 1
+    local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+    return era * 146097 + doe - 719468
+end
+
+-- A day number's date: year, month (1-12), day of the month.
+export function dateOf(dayNum: number): (number, number, number)
+    local z = dayNum + 719468
+    local era = math.floor(z / 146097)
+    local doe = z - era * 146097
+    local yoe = math.floor((doe - math.floor(doe / 1460) + math.floor(doe / 36524) - math.floor(doe / 146096)) / 365)
+    local doy = doe - (365 * yoe + math.floor(yoe / 4) - math.floor(yoe / 100))
+    local mp = math.floor((5 * doy + 2) / 153)
+    local d = doy - math.floor((153 * mp + 2) / 5) + 1
+    local m = mp < 10 and mp + 3 or mp - 9
+    local y = yoe + era * 400
+    return m <= 2 and y + 1 or y, m, d
+end
+
+-- A day's weekday: 1 Monday … 7 Sunday (day 0, 1 January 1970, was a
+-- Thursday).
+export function weekday(dayNum: number): number
+    return (dayNum + 3) % 7 + 1
+end
+
+-- The day and period of a time (time()'s seconds; nil: now), by the
+-- computer's clock. (The last second's answer is kept: a page of search
+-- results asks it for each row.)
+local lastAt, lastDay, lastPeriod = -1, 0, 0
+export function dayOf(at: number?): (number, number)
+    local when = at or time()
+    if when ~= lastAt then
+        local t = date("*t", when) :: { year: number, month: number, day: number, hour: number }
+        lastAt, lastDay, lastPeriod = when, dayNumber(t.year, t.month, t.day), periodOfHour(t.hour)
+    end
+    return lastDay, lastPeriod
+end

@@ -1,10 +1,11 @@
 -- Units/AuctionHouse/Prices.wowlua
 -- The auction house's price memory (Units/AuctionHouse): what the house
 -- showed last per item and what you last posted at, kept per character and
--- read across all of them; what a list of offers says (the lowest price,
--- and the one past a cheap few); the item tooltips' block of it. The
--- module's methods for it (Seen, LowestSeen, LastPosted, Market,
--- AddTooltipPrices, HookTooltips) call the functions here.
+-- read across those on the same ruleset (each has its own house); what a
+-- list of offers says (the lowest price, and the one past a cheap few);
+-- the item tooltips' block of it. The module's methods for it (Seen,
+-- LowestSeen, LastPosted, Market, AddTooltipPrices, HookTooltips) call the
+-- functions here.
 
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
@@ -14,6 +15,7 @@ import coins, when from "./Common"
 import type AuctionHouseModule from "../AuctionHouse"
 
 local T = SuuUI.Tokens
+local LEDGER = SuuUI.Services.LEDGER
 local try, tryValue, tryMethod, field, list = errors.try, errors.tryValue, errors.tryMethod, tbl.field, tbl.list
 local asNumber = secret.asNumber
 
@@ -24,18 +26,28 @@ export type Market = { low: number, ref: Offer, cheap: number, total: number, n:
 
 --------------------------------------------------------------------------------
 -- What SuuUI remembers per item (by item ID), kept per character and read
--- across all of them: what the house showed last (each search; Scan all
--- fills it too) and the price you last posted at. A seen entry: price (the
--- lowest buyout per unit), at, and what is known of: most (what most sell
--- it for, when a cheap few sell under them), qty (units offered), n
--- (auctions). The newest look wins.
+-- across those on this character's ruleset (each ruleset has its own
+-- house): what the house showed last (each search; Scan all fills it too)
+-- and the price you last posted at. A seen entry: price (the lowest buyout
+-- per unit), at, and what is known of: most (what most sell it for, when a
+-- cheap few sell under them), qty (units offered), n (auctions). The newest
+-- look wins.
+-- Each look is also told (0.48), for the Ledger and plugins: a search's as
+-- SUUUI_AUCTION_SEEN, Scan all's together as SUUUI_AUCTION_SCANNED (Scan).
 --------------------------------------------------------------------------------
 
 export type SeenEntry = { price: number, at: number, qty?: number, n?: number, most?: number }
 export type PostedEntry = { price: number, at: number }
 
--- `m`: a price, or a Market() result (with qty and n when known).
-export function recordSeen(self: AuctionHouseModule, itemID: number?, m: Market | number | nil, qty: number?)
+-- `m`: a price, or a Market() result (with qty and n when known). `scan`:
+-- one of Scan all's (told with the rest once the scan is read).
+export function recordSeen(
+    self: AuctionHouseModule,
+    itemID: number?,
+    m: Market | number | nil,
+    qty: number?,
+    scan: boolean?
+)
     local low: number?, total: number?, n: number?, most: number? = nil, qty, nil, nil
     if type(m) == "number" then
         low = m
@@ -50,6 +62,9 @@ export function recordSeen(self: AuctionHouseModule, itemID: number?, m: Market 
     local seen = d.seen or {}
     d.seen = seen
     seen[itemID] = { price = low, at = time(), qty = total, n = n, most = most }
+    if not scan then
+        self:Emit("SUUUI_AUCTION_SEEN", itemID, low, most or 0, total or 0, n or 0, "search")
+    end
 end
 
 export function lowestSeen(self: AuctionHouseModule, itemID: number?): SeenEntry?
@@ -57,7 +72,7 @@ export function lowestSeen(self: AuctionHouseModule, itemID: number?): SeenEntry
     if not itemID then
         return nil
     end
-    for _, d in ipairs(self:AllSaved()) do
+    for _, d in ipairs(self:RulesetSaved()) do
         local e = d.seen and d.seen[itemID]
         if e and (not best or (e.at or 0) > (best.at or 0)) then
             best = e
@@ -71,7 +86,7 @@ export function lastPosted(self: AuctionHouseModule, itemID: number?): PostedEnt
     if not itemID then
         return nil
     end
-    for _, d in ipairs(self:AllSaved()) do
+    for _, d in ipairs(self:RulesetSaved()) do
         local e = d.posted and d.posted[itemID]
         if e and (not best or (e.at or 0) > (best.at or 0)) then
             best = e
@@ -132,7 +147,8 @@ end
 
 -- Item tooltips anywhere: a small block of what the house showed last
 -- (Settings › Auction house › Item tooltips): the lowest buyout, what most
--- sell it for, how many are offered, and on a stack in your bags its price.
+-- sell it for, its usual price (the Ledger's, Settings › Ledger), how many
+-- are offered, and on a stack in your bags its price.
 export function addTooltipPrices(self: AuctionHouseModule, tooltip: GameTooltip, data: unknown)
     if not self:Get("tipShow") then
         return
@@ -157,6 +173,12 @@ export function addTooltipPrices(self: AuctionHouseModule, tooltip: GameTooltip,
     local most, qty, n = e.most, e.qty, e.n
     if self:Get("tipMost") and most then
         row("Most sell it for", coins(most) .. each)
+    end
+    -- (0.48) the Ledger's usual price, while it is on and says to
+    local ledger = SuuUI.UseService(LEDGER)
+    local usual = ledger and ledger.TooltipUsual and ledger.TooltipUsual(itemID)
+    if usual then
+        row("Usual price", coins(usual) .. each)
     end
     if self:Get("tipOffered") and qty then
         row("Offered", n and n ~= qty and ("%d in %d auctions"):format(qty, n) or tostring(qty))

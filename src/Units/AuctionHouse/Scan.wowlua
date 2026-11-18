@@ -35,10 +35,10 @@ end
 -- lowest buyout per item into the memory the sell view and tooltips use
 --------------------------------------------------------------------------------
 
--- When any of your characters last scanned (the game's wait is per account).
+-- When any of your characters on this ruleset last scanned its house.
 export function lastScan(self: AuctionHouseModule): number?
     local last: number? = nil
-    for _, d in ipairs(self:AllSaved()) do
+    for _, d in ipairs(self:RulesetSaved()) do
         local at = d.scanAt
         if at and (not last or at > last) then
             last = at
@@ -61,10 +61,11 @@ export function nextScanAt(self: AuctionHouseModule): number?
     return latest and (latest + SCAN_WAIT)
 end
 
--- How long the last scan took and how many it read (any character).
+-- How long the last scan of this ruleset's house took and how many it read
+-- (any character on it).
 export function lastScanSize(self: AuctionHouseModule): (number?, number?)
     local best: CharStore? = nil
-    for _, d in ipairs(self:AllSaved()) do
+    for _, d in ipairs(self:RulesetSaved()) do
         local at = d.scanAt
         if at and d.scanSeconds and (not best or at > (best.scanAt or 0)) then
             best = d
@@ -291,15 +292,27 @@ export function readScan(self: AuctionHouseModule)
         if i >= n then
             ticker:Cancel()
             self.readTicker = nil
+            -- every item's look, kept and told in one flat list (0.48:
+            -- SUUUI_AUCTION_SCANNED, five numbers an item) rather than a
+            -- message each
             local items = 0
+            local looks: number[] = {}
             for itemID, offered in pairs(offers) do
-                self:Seen(itemID, self:Market(offered))
-                items = items + 1
+                local m = self:Market(offered)
+                self:Seen(itemID, m, nil, true)
+                if m then
+                    local k = items * 5
+                    looks[k + 1], looks[k + 2] = itemID, m.low
+                    looks[k + 3] = m.cheap > 0 and m.ref.price or 0
+                    looks[k + 4], looks[k + 5] = m.total, m.n
+                    items = items + 1
+                end
             end
             local d = self:Saved()
             d.writs = fromScan(writNames, byName, d.writs)
             local seconds = GetTime() - sc.started
             d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
+            self:Emit("SUUUI_AUCTION_SCANNED", looks, items)
             self:EndScan()
             self:Note(
                 ("Scan done: %s auctions, %s items, in %d s."):format(

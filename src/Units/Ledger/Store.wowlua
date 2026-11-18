@@ -1,0 +1,147 @@
+-- Units/Ledger/Store.wowlua
+-- The Ledger's price store (Units/Ledger): per ruleset, per item, the
+-- looks of the last 60 days (Pack: one string per item), and what the
+-- window reads of them: the latest look, the daily lows (and what most
+-- sell it for) of the last days, the last 14 days' lows for the usual
+-- price, every look of a range. Pure over the strings it is given; the
+-- module keeps them in SuuUILedger.
+
+import * as pack from "./Pack"
+import type Points from "./Pack"
+import * as stats from "./Stats"
+
+-- How long looks are kept (and read back), in days.
+export const KEEP_DAYS = 60
+
+-- One look as the window reads it: its day (Days) and period (1 Night … 4
+-- Evening), the lowest buyout per unit, what most sell it for, how many
+-- were offered in how many auctions (copper; 0: not known).
+export type Look = { day: number, period: number, low: number, most: number, qty: number, n: number }
+
+-- One item's looks per ruleset: { [itemID] = packed string }.
+export type PriceMap = { [number]: string }
+
+local scratch = pack.newPoints()
+
+-- The oldest day kept on `today`.
+export function oldestKept(today: number): number
+    return today - KEEP_DAYS + 1
+end
+
+-- The newest look (nil: none).
+export function latest(s: string?): Look?
+    local day, period, low, most, qty, n = pack.newest(s)
+    if not day then
+        return nil
+    end
+    return { day = day, period = period, low = low, most = most, qty = qty, n = n }
+end
+
+-- The looks from `oldest` on, the newest first (into `out`, a reused
+-- buffer, when given).
+export function points(s: string?, oldest: number, out: Points?): Points
+    local p = pack.decode(s, out or pack.newPoints(), oldest)
+    return p
+end
+
+-- Every look from `oldest` on, the newest first.
+export function looks(s: string?, oldest: number): Look[]
+    local p = pack.decode(s, scratch, oldest)
+    local out: Look[] = {}
+    for k = 1, p.count do
+        out[k] = { day = p.day[k], period = p.period[k], low = p.low[k], most = p.most[k], qty = p.qty[k], n = p.n[k] }
+    end
+    return out
+end
+
+-- The daily lows of the `days` days up to `today` (lows[days] is today's,
+-- lows[1] the oldest; 0: no look that day), and per day what most sell it
+-- for at the day's lowest look (0: not known).
+export function dailyLows(s: string?, today: number, days: number): (number[], number[])
+    local lows: number[], mosts: number[] = {}, {}
+    for i = 1, days do
+        lows[i], mosts[i] = 0, 0
+    end
+    local first = today - days + 1
+    local p = pack.decode(s, scratch, first)
+    for k = 1, p.count do
+        local i = p.day[k] - first + 1
+        if i >= 1 and i <= days then
+            local low, most = p.low[k], p.most[k]
+            local was = lows[i]
+            if was == 0 or low < was then
+                lows[i], mosts[i] = low, most > 0 and most or mosts[i]
+            elseif low == was and mosts[i] == 0 then
+                mosts[i] = most
+            end
+        end
+    end
+    return lows, mosts
+end
+
+-- The daily lows of the last `count` days that have a look (kept days up
+-- to `today`), the newest first.
+export function recentLows(s: string?, today: number, count: number): number[]
+    local out: number[] = {}
+    local p = pack.decode(s, scratch, oldestKept(today))
+    local day: number? = nil
+    for k = 1, p.count do
+        local d, low = p.day[k], p.low[k]
+        if d <= today then
+            if d == day then
+                if low < out[#out] then
+                    out[#out] = low
+                end
+            elseif #out >= count then
+                break
+            else
+                out[#out + 1] = low
+                day = d
+            end
+        end
+    end
+    return out
+end
+
+-- The usual price (Stats.usual) on `today`; nil: no look kept.
+export function usualOf(s: string?, today: number): number?
+    return stats.usual(recentLows(s, today, stats.USUAL_DAYS))
+end
+
+-- When it's cheapest (Stats.whenCheapest) from the kept looks.
+export function whenOf(s: string?, today: number): stats.When
+    return stats.whenCheapest(pack.decode(s, scratch, oldestKept(today)))
+end
+
+-- A look recorded for an item in `map` (Pack.record): whether it changed
+-- what is kept.
+export function record(
+    map: PriceMap,
+    itemID: number,
+    day: number,
+    period: number,
+    low: number,
+    most: number,
+    qty: number,
+    n: number
+): boolean
+    local s = map[itemID]
+    local after = pack.record(s, day, period, low, most, qty, n)
+    if after == s then
+        return false
+    end
+    map[itemID] = after
+    return true
+end
+
+-- An item's looks before the kept days dropped (the item too, with none
+-- left): whether it changed.
+export function prune(map: PriceMap, itemID: number, today: number): boolean
+    local s = map[itemID]
+    local after = pack.prune(s, oldestKept(today))
+    if after == s then
+        return false
+    end
+    map[itemID] = after
+    return true
+end

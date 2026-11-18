@@ -6,6 +6,7 @@
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/AuctionHouse"
+import * as events from "/Core/Events"
 import ORE, BLADE, buy, setUp, tearDown, open, note, tipText, replicate from "./AuctionHouseHelpers"
 
 local AH = C_AuctionHouse
@@ -54,6 +55,16 @@ local function scanRunning()
     -- the categories' cover says why
     mock.hover(buy().catBlock)
     mock.hover(nil)
+    -- (0.48) every item's look told at the end, in one flat list
+    local scanned: unknown[][] = {}
+    local listener = { name = "AuctionHouseScanTest" }
+    events.on(
+        "SUUUI_AUCTION_SCANNED",
+        function(_, looks, items)
+            scanned[#scanned + 1] = { looks, items }
+        end,
+        listener
+    )
     -- the list came: read a slice a frame
     setGot(5000)
     mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
@@ -70,6 +81,18 @@ local function scanRunning()
     local d = M:CharData()
     expect(d.scanCount).toBe(5000)
     expect(d.scanSeconds).toBe(2)
+    expect(#scanned).toBe(1)
+    expect(scanned[1][2]).toBe(2)
+    local looks = scanned[1][1] :: number[]
+    expect(#looks).toBe(10)
+    -- (in the order the scan's items come)
+    local byItem: { [number]: number[] } = {}
+    for k = 0, 1 do
+        byItem[looks[k * 5 + 1]] = { looks[k * 5 + 2], looks[k * 5 + 3], looks[k * 5 + 4], looks[k * 5 + 5] }
+    end
+    expect(byItem[ORE]).toEqual({ 100, 0, 200, 10 })
+    expect(byItem[BLADE]).toEqual({ 40000, 0, 3992, 3992 })
+    events.offAll(listener)
     -- after: the game's wait
     expect(buy().scanView).never.toBeShown()
     expect(buy().searchButton:IsEnabled()).toBe(true)
