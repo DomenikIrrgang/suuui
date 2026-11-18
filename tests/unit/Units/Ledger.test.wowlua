@@ -14,6 +14,7 @@ import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
 import * as days from "/Units/Ledger/Days"
 import * as books from "/Units/Ledger/Books"
+import * as store from "/Units/Ledger/Store"
 import * as secret from "wowlua:secret"
 import expectNoErrors, cycle, NOTHING from "../../helpers"
 
@@ -361,6 +362,53 @@ local function prune()
     -- once a day
     M:Prune()
     expect(M.pruneTicker).toBeNil()
+end
+
+@test("an account's data from before the transactions: the first books prune keeps today's prices and the rest")
+local function firstBooksPrune()
+    -- as the build before the transactions saved it: today's looks of 8
+    -- items (the prices pruned today already), the gold, the goal, no books
+    local d = M:Data()
+    d.books, d.booksPruned, d.mail = nil, nil, nil
+    local today, period = days.dayOf()
+    local here = SuuUI.Ruleset()
+    local map = assert(M:PriceMap(here, true))
+    for i = 1, 8 do
+        store.record(map, 990410 + i, today, period, 1000 * i, 0, i, 1)
+    end
+    d.pruned = { [here] = today }
+    d.goal = { name = "Test Goal", amount = 10000000 }
+    local saved: { [number]: string } = {}
+    for id, s in pairs(map) do
+        saved[id] = s
+    end
+    expect(M:NeedsPrune()).toBe(false)
+    expect(M:Store():NeedsPrune()).toBe(true)
+    -- the new build starts; its prunes run after login's rush
+    cycle("ledger")
+    mock.advanceTime(10)
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+    expect(M:Data().booksPruned).toBe(today)
+    expect(M:Store():NeedsPrune()).toBe(false)
+    expect(M:Data().prices).toBe(d.prices)
+    expect(assert(M:Data().prices)[here]).toEqual(saved)
+    expect(#M:Items(here)).toBe(8)
+    expect(assert(M:Latest(990418)).low).toBe(8000)
+    expect(assert(d.pruned)[here]).toBe(today)
+    expect(assert(d.goal).name).toBe("Test Goal")
+    expect(M:GoldMap()[assert(M:CharKey())]).toBeTruthy()
+    -- and a day later: the prices pruned too, today's looks kept
+    d.pruned = { [here] = today - 1 }
+    d.booksPruned = today - 1
+    cycle("ledger")
+    mock.advanceTime(10)
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+    expect(assert(M:Data().prices)[here]).toEqual(saved)
+    expect(M:Data().booksPruned).toBe(today)
+    expect(assert(d.pruned)[here]).toBe(today)
+    d.books, d.goal = nil, nil
 end
 
 @test("settings: Deals, Transactions and Item tooltips; the tooltip row waits for the auction house's tooltips")
