@@ -123,6 +123,8 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V57](#v57) | VM | low | open | `SetFontObject` keeps a font string's colour; the game's sets the font object's |
 | [V58](#v58) | VM | low | open | `wowlua screenshot` draws no `Line` regions |
 | [V59](#v59) | VM | low | open | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
+| [V60](#v60) | VM | low | open | `/use <bag> <slot>` at a vendor sells nothing |
+| [V61](#v61) | VM | medium | open | A trade has no money and never completes |
 
 ## Test runner and mock issues
 
@@ -1066,6 +1068,22 @@ A `Line` (`frame:CreateLine`, `SetStartPoint`/`SetEndPoint`, `SetThickness`, a c
 
 An item defined with `{ cached = false, delay = d }` is cached `d` seconds after `C_Item.RequestLoadItemDataByID`, but the engine sends no `GET_ITEM_INFO_RECEIVED` (the game does). Code that fills names in as they arrive (the Ledger's Prices and item page) is tested by firing the event after the delay (`tests/unit/Units/Ledger/PricesPage.test.wowlua`, `ItemPage.test.wowlua`). (the Ledger window 2026-11-18)
 
+<a id="v60"></a>
+
+### V60. `/use <bag> <slot>` at a vendor sells nothing
+
+*Status: open (0.13.15).*
+
+In the game a right-click on a bag item at a vendor sells it: the bag slot's secure `/use` runs `C_Container.UseContainerItem(bag, slot)` from Blizzard's code (the Ledger's post-hook on it sees every sale, `/suu probe ledger` 2026-11-18). In the engine `mock.slash("/use 0 1")` with a vendor open changes nothing (no lock, no money, no refusal), and `C_Container.UseContainerItem` from a test is protected (the engine's list of protected globals). The Ledger's vendor test (`tests/unit/Units/Ledger/Recorder.test.wowlua`) calls its hook's handler with the bag slot, then `mock.sell(bag, slot)` for the server's answer. Wanted: the secure `/use` of a bag slot reaching `UseContainerItem` (sold at a vendor), as in the game. (the Ledger's transactions 2026-11-18)
+
+<a id="v61"></a>
+
+### V61. A trade has no money and never completes
+
+*Status: open (0.13.15).*
+
+`unit:openTrade()` opens the trade (`TRADE_SHOW`, `UnitName("NPC")` the other side), but `GetPlayerTradeMoney` and `GetTargetTradeMoney` always answer 0, `SetTradeMoney` doesn't exist (as on Forever), and nothing accepts it: no `TRADE_ACCEPT_UPDATE`, no "Trade complete." (`UI_INFO_MESSAGE` with `ERR_TRADE_COMPLETE`, then `PLAYER_MONEY` about 0.26 s later in the game, `/suu probe ledger` 2026-11-18). The Ledger's trade test stubs the two money functions and plays the completion itself (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Taking a COD item still pays nothing (V51): its test plays the money change. (the Ledger's transactions 2026-11-18)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:
@@ -1088,7 +1106,8 @@ These match the game; the tests follow them:
   hovering it again.
 - A zero-delay timer set while `mock.advanceTime` runs comes due just after
   that advance; `GetScript` gives a script without its `HookScript` hooks;
-  the emulated clock starts at midnight on 1 January.
+  the emulated clock starts on 1 January (2026, about noon UTC by
+  `time()`): a time a few days back is in 2025.
 - Forever's spells window has no tab row (`IsTabSystemAvailable` is false
   on Camelot), and your own health is secret to addons (`UnitHealth`).
 - A party forms a moment after the invite: wait before `joinGroup` and

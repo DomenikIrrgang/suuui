@@ -95,3 +95,25 @@ the fixed engine without workarounds.
 ## Not tested, and why
 
 Nothing in these four files.
+
+## The Ledger's transactions (2026-11-18, wowlua 0.13.15)
+
+| Source | Test file | Tests |
+|---|---|---|
+| Ledger/Books | `Units/Ledger/Books.test.wowlua` | a row kept and read back (every field, a player's name, any characters), changed in place, a year kept and pruned, characters merged, the totals, where it came from and went (a sale after the cut, its deposit back against Deposits lost), an item's sales; a busy year's size (19,089 rows: 17 bytes a row, 317 KB) |
+| Ledger/Matcher | `Units/Ledger/Matcher.test.wowlua` | several changes in flight to the oldest of their amount, other amounts, a direction only after the exact ones, a change before its expectation, Other after a moment, an expectation dropped in time |
+| Ledger/Recorder | `Units/Ledger/Recorder.test.wowlua` | the game's formats; vendors (two sales in flight, a purchase, buyback, repairs, not the guild's), the mail (a sale with its invoice, a player's money, a COD, an expired auction, the money waiting, money sent with postage), trade, looted coin (one row per zone, the line before or after the money), a quest and Other merged, training, travel, the auction house (a post's deposit, a commodity bought, a buyout named by its notice, a bid, a cancel) |
+| Ledger/TransactionsPage | `Units/Ledger/TransactionsPage.test.wowlua` | by day with each day's net, the totals, the time, Kinds and Money, the search, the characters chosen, a row's item tooltip and page, the texts without an item, 2,000 rows drawn only in sight |
+
+The engine runs the vendor (purchases, buyback, repairs; `mock.sell` for a
+sale's answer), the mailbox (`TakeInboxMoney`, `TakeInboxItem`,
+`SendMail` with postage), the trainer, the flight master and the auction
+house (a post's deposit, a commodity's purchase). What it lacks is played
+by the test: a bag slot's `/use` at a vendor sells nothing (V60: the
+hook's handler is called, then `mock.sell`), a trade has no money and never
+completes (V61), a COD take pays nothing (V51), a single auction's bid or
+buyout does nothing (V48: the hook's handler, the house's events and the
+money). `AUCTION_HOUSE_SHOW_NOTIFICATION` with a kind that takes a name
+(sold, won, outbid, expired) makes Blizzard's own handler fail without the
+name (`ChatFrameUtil.GetAuctionHouseNotificationText`): the game always
+names those, so the Sold note's test fires the formatted one.
