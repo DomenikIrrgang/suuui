@@ -1,0 +1,249 @@
+-- Diagnostics/LedgerProbe: "/suu probe ledger" saves the ruleset, the
+-- clocks, vendor prices and the money strings, then listens until stopped:
+-- money changes with the windows open and the calls and events around
+-- them, the mailbox's letters and invoices (no names), auction and money
+-- lines, the trade window's money.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as DB from "/Core/DB"
+import * as ledgerProbe from "/Diagnostics/LedgerProbe"
+import type Ledger, Letter from "/Diagnostics/LedgerProbe"
+import internal onLine from "/Diagnostics/LedgerProbe"
+import expectNoErrors from "../../helpers"
+
+local TOME, LATE = 990301, 990302
+mock.defineItem(TOME, { name = "Test Tome", quality = 3, stackCount = 1, sellPrice = 100 })
+mock.defineItem(LATE, { name = "Test Late", quality = 1, stackCount = 1, sellPrice = 7 }, { delay = 0.5 })
+
+local function saved(): Ledger
+    return DB.probe.ledger :: unknown :: Ledger
+end
+
+local function logHas(text: string): boolean
+    for _, l in ipairs(saved().log) do
+        if l:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- every string in a record, nested
+local function strings(v: unknown, out: string[])
+    if type(v) == "string" then
+        out[#out + 1] = v
+    elseif type(v) == "table" then
+        for k, x in pairs(v :: { [unknown]: unknown }) do
+            strings(k, out)
+            strings(x, out)
+        end
+    end
+end
+
+local function anywhere(text: string): boolean
+    local all: string[] = {}
+    strings(saved(), all)
+    for _, s in ipairs(all) do
+        if s:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+@afterEach
+local function cleanup()
+    mock.slash("/suu probe ledger reset")
+    mock.advanceTime(6)
+    expectNoErrors()
+end
+
+@test("the snapshot: ruleset, clocks, vendor prices, strings and events; then listening")
+local function snapshot()
+    mock.slash("/suu probe ledger")
+    local s = saved()
+    expect(ledgerProbe.isArmed()).toBe(true)
+    expect(s.armed).toBe(true)
+    expect(#s.sessions).toBe(1)
+    expect(type(s.ruleset.GetRealmName)).toBe("string")
+    expect(s.ruleset.GetRealmName ~= "missing").toBe(true)
+    expect(s.ruleset.gameRules).toBeTruthy()
+    expect(type(s.ruleset.functions)).toBe("table")
+    expect(type(s.clock.time)).toBe("number")
+    expect(s.clock.GetServerTime ~= "missing").toBe(true)
+    for _, id in ipairs(ledgerProbe.PRICE_ITEMS) do
+        expect(s.prices[tostring(id)]).toBeTruthy()
+    end
+    expect(s.globals.ERR_AUCTION_SOLD_S ~= "missing").toBe(true)
+    expect(s.events.PLAYER_MONEY).toBe("valid")
+    expect(s.hooks.RepairAllItems).toBe("hooked")
+    expect(s.hooks["C_AuctionHouse.PostItem"]).toBe("hooked")
+    expect(s.priceApis.C_Item).toBeTruthy()
+    expect(logHas("armed: money")).toBe(true)
+end
+
+@test("an item the client doesn't have yet: empty at first, its price once it arrives")
+local function uncached()
+    ledgerProbe.command()
+    ledgerProbe.snapshotPrices(saved(), { TOME, LATE })
+    local late = assert(saved().prices[tostring(LATE)])
+    local tome = assert(saved().prices[tostring(TOME)])
+    -- the global GetItemInfo is gone on this client; C_Item's answers
+    expect(tome.GetItemInfo).toBe("missing")
+    expect(tome.C_Item).toBe("100")
+    expect(late.C_Item).toBe("nil")
+    expect(late.requested ~= nil).toBe(true)
+    mock.advanceTime(1)
+    expect(#(late.events :: string[]) > 0).toBe(true)
+    expect(late.afterEvent).toBe("7")
+    mock.advanceTime(5)
+    expect(late.after5s).toBe("7")
+end
+
+@test("a repair: the call with its cost, then the money change with the vendor open and the call before it")
+local function repair()
+    mock.player:setMoney(100000)
+    ledgerProbe.command()
+    mock.openMerchant({ name = "Smith", canRepair = true, repairCost = 1234, damaged = 2, items = {} })
+    mock.advanceTime(0.5)
+    expect(logHas("MERCHANT_SHOW")).toBe(true)
+    expect(logHas("repair 1234")).toBe(true)
+    RepairAllItems()
+    mock.advanceTime(1)
+    expect(logHas("call RepairAllItems() money 100000 cost now 1234")).toBe(true)
+    local money = saved().money
+    local e = money[#money]
+    assert(e, "no money change")
+    expect(e.delta).toBe(-1234)
+    expect(e.money).toBe(100000 - 1234)
+    expect(e.open:find("merchant", 1, true) ~= nil).toBe(true)
+    expect(e.group).toBe("solo")
+    local called = false
+    for _, l in ipairs(e.before) do
+        called = called or l:find("call RepairAllItems", 1, true) ~= nil
+    end
+    expect(called).toBe(true)
+    mock.closeMerchant()
+    mock.advanceTime(0.5)
+    local closed = false
+    for _, l in ipairs(e.after) do
+        closed = closed or l:find("MERCHANT_CLOSED", 1, true) ~= nil
+    end
+    expect(closed).toBe(true)
+end
+
+@test("the mailbox: an auction sale's invoice in full, a player's letter without names")
+local function mailbox()
+    ledgerProbe.command()
+    local box = mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    mock.defineMailbox(box, {
+        letters = {
+            { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 2.5, canReply = true },
+            {
+                sender = "Auction House",
+                subject = AUCTION_SOLD_MAIL_SUBJECT:format("Test Tome"),
+                money = 9700,
+                daysLeft = 29,
+                invoice = { "seller", "Test Tome", "Ashford", 10000, 0, 200, 500 },
+            },
+        },
+    })
+    mock.player:interact(box)
+    mock.advanceTime(1)
+    local m = saved().mail
+    expect(m.reads > 0).toBe(true)
+    expect(#m.letters).toBe(2)
+    local sale: Letter? = nil
+    local mine: Letter? = nil
+    for _, l in ipairs(m.letters) do
+        if l.header.subjectKind == "AUCTION_SOLD_MAIL_SUBJECT" then
+            sale = l
+        else
+            mine = l
+        end
+    end
+    assert(sale and mine, "both letters")
+    expect(sale.header.sender).toBe("Auction House")
+    expect(sale.header.money).toBe(9700)
+    local inv = assert(sale.invoice)
+    expect(inv.invoiceType).toBe("seller")
+    expect(inv.itemName).toBe("Test Tome")
+    -- the buyer's name: never kept ("empty" until the server's names come)
+    expect(inv.playerName == "a name" or inv.playerName == "empty").toBe(true)
+    expect(inv.bid).toBe(10000)
+    expect(inv.deposit).toBe(200)
+    expect(inv.consignment).toBe(500)
+    expect(mine.header.sender).toBe("a name")
+    expect(mine.header.subject).toBe("<player's subject>")
+    expect(mine.invoice).toBeNil()
+    expect(mine.noInvoice).toBeTruthy()
+    expect(anywhere("Tamsin")).toBe(false)
+    expect(anywhere("Ashford")).toBe(false)
+    CloseMail()
+    mock.advanceTime(0.5)
+end
+
+@test("auction and money lines kept and named; other system lines only counted")
+local function lines()
+    ledgerProbe.command()
+    mock.systemMessage(ERR_AUCTION_SOLD_S:format("Test Tome"))
+    mock.systemMessage("Tamsin has come online.")
+    -- the loot's share line, as CHAT_MSG_MONEY brings it
+    onLine("CHAT_MSG_MONEY", LOOT_MONEY_SPLIT:format("5 Silver"))
+    local s = saved()
+    expect(#s.system).toBe(2)
+    expect(s.system[1].kind).toBe("ERR_AUCTION_SOLD_S")
+    expect(((s.system[1].text :: string)):find("Test Tome", 1, true) ~= nil).toBe(true)
+    expect(s.system[2].kind).toBe("LOOT_MONEY_SPLIT")
+    expect(s.systemOther).toBe(1)
+    expect(anywhere("Tamsin")).toBe(false)
+    expect(logHas("CHAT_MSG_SYSTEM ERR_AUCTION_SOLD_S")).toBe(true)
+end
+
+@test("the trade window: its money read at each change")
+local function trade()
+    ledgerProbe.command()
+    mock.fireEvent("TRADE_SHOW")
+    mock.fireEvent("TRADE_MONEY_CHANGED")
+    mock.fireEvent("TRADE_ACCEPT_UPDATE", 1, 0)
+    local t = saved().trade
+    expect(#t).toBe(3)
+    expect(t[3].event).toBe("TRADE_ACCEPT_UPDATE")
+    expect(t[3].args).toBe("1 0")
+    expect(t[2].player).toBeTruthy()
+    expect(t[2].target).toBeTruthy()
+    mock.fireEvent("TRADE_CLOSED")
+end
+
+@test("stopped: nothing more recorded; armed again: a new snapshot, the lists go on")
+local function stopAndAgain()
+    mock.player:setMoney(1000)
+    ledgerProbe.command()
+    mock.player:setMoney(1500)
+    expect(#saved().money).toBe(1)
+    expect(saved().money[1].delta).toBe(500)
+    mock.slash("/suu probe ledger stop")
+    expect(ledgerProbe.isArmed()).toBe(false)
+    expect(saved().armed).toBe(false)
+    mock.player:setMoney(2000)
+    expect(#saved().money).toBe(1)
+    mock.slash("/suu probe ledger status")
+    ledgerProbe.command()
+    expect(ledgerProbe.isArmed()).toBe(true)
+    expect(#saved().sessions).toBe(2)
+    -- the hooks went in once; every record still names them
+    expect(saved().hooks.RepairAllItems).toBe("hooked")
+    mock.player:setMoney(2100)
+    expect(#saved().money).toBe(2)
+    expect(saved().money[2].delta).toBe(100)
+end
+
+@test("clean: item links as their ID and name, colours and textures out, long text cut")
+local function cleaned()
+    expect(ledgerProbe.clean("|cffffffff|Hitem:3356::|h[Kingsblood]|h|r sold")).toBe("item:3356 [Kingsblood] sold")
+    expect(ledgerProbe.clean("|Hplayer:Tamsin|h[Tamsin]|h waves")).toBe("[link] waves")
+    expect(ledgerProbe.clean("5 Silver\n3 Copper")).toBe("5 Silver / 3 Copper")
+    expect(ledgerProbe.clean(mock.secret("x"))).toBe("secret")
+    expect(#ledgerProbe.clean(("x"):rep(500), 10)).toBe(10 + #"…")
+end
