@@ -101,8 +101,8 @@ Nothing in these four files.
 | Source | Test file | Tests |
 |---|---|---|
 | Ledger/Books | `Units/Ledger/Books.test.wowlua` | a row kept and read back (every field, a player's name, any characters), changed in place, a year kept and pruned, characters merged, the totals, where it came from and went (a sale after the cut, its deposit back against Deposits lost), an item's sales; a busy year's size (19,089 rows: 17 bytes a row, 317 KB) |
-| Ledger/Matcher | `Units/Ledger/Matcher.test.wowlua` | several changes in flight to the oldest of their amount, other amounts, a direction only after the exact ones, a change before its expectation, Other after a moment, an expectation dropped in time |
-| Ledger/Recorder | `Units/Ledger/Recorder.test.wowlua` | the game's formats; vendors (two sales in flight, a purchase, buyback, repairs, not the guild's), the mail (a sale with its invoice, a player's money, a COD, an expired auction, the money waiting, money sent with postage), trade, looted coin (one row per zone, the line before or after the money), a quest and Other merged, training, travel, the auction house (a post's deposit, a commodity bought, a buyout named by its notice, a bid, a cancel) |
+| Ledger/Matcher | `Units/Ledger/Matcher.test.wowlua` | several changes in flight to the oldest of their amount, other amounts, a direction only after the exact ones, a change before its expectation, Other after a moment, an expectation dropped in time or when its call failed |
+| Ledger/Recorder | `Units/Ledger/Recorder.test.wowlua` | the game's formats; vendors (two sales in flight, a purchase, buyback, repairs, not the guild's), the mail (a sale with its invoice, a player's money, a COD, an expired auction, the money waiting, money sent with postage), trade, looted coin (one row per zone, the line before or after the money), a quest and Other merged, training, travel, the auction house (a post's deposit, a commodity bought, a buyout named by its notice, a bid, a cancel); as the second probe saw them: a letter with 1 copper charged the postage alone (-31), a send the server refused (`MAIL_FAILED`) expecting nothing, coin looted alone from the window (its line after the money not counted again) and a group's share by its line, a free cancel with nothing left waiting, an expired and a cancelled auction's letters taken with `AutoLootMailItem` |
 | Ledger/TransactionsPage | `Units/Ledger/TransactionsPage.test.wowlua` | by day with each day's net, the totals, the time, Kinds and Money, the search, the characters chosen, a row's item tooltip and page, the texts without an item, 2,000 rows drawn only in sight |
 
 The engine runs the vendor (purchases, buyback, repairs; `mock.sell` for a
@@ -111,7 +111,8 @@ sale's answer), the mailbox (`TakeInboxMoney`, `TakeInboxItem`,
 house (a post's deposit, a commodity's purchase). What it lacks is played
 by the test: a bag slot's `/use` at a vendor sells nothing (V60: the
 hook's handler is called, then `mock.sell`), a trade has no money and never
-completes (V61), a COD take pays nothing (V51), a single auction's bid or
+completes (V61), the postage leaves out the money attached and no send
+fails (V62), a loot window has no coin (V63: the slot functions faked), a COD take pays nothing (V51), a single auction's bid or
 buyout does nothing (V48: the hook's handler, the house's events and the
 money). `AUCTION_HOUSE_SHOW_NOTIFICATION` with a kind that takes a name
 (sold, won, outbid, expired) makes Blizzard's own handler fail without the

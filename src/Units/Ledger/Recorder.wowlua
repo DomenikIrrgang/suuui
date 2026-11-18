@@ -24,14 +24,20 @@
 --                  else Mail from its sender); TakeInboxItem /
 --                  AutoLootMailItem on a COD letter: its COD paid; an
 --                  expired auction's letter: Expired, no money; SendMail:
---                  the money sent and the postage. MAIL_INBOX_UPDATE: the
---                  money waiting in the inbox (the Overview's figure).
+--                  the postage, which on Forever counts the money sent
+--                  too (GetSendMailPrice: 31 with 1 copper attached, 30
+--                  without), or the postage and the money; MAIL_FAILED:
+--                  nothing. MAIL_INBOX_UPDATE: the money waiting in the
+--                  inbox (the Overview's figure).
 --   Trade          the money on both sides while it is open; "Trade
 --                  complete." (UI_INFO_MESSAGE): theirs less yours, the
 --                  partner's name.
---   Looted coin    CHAT_MSG_MONEY's amount (readable on Forever, unlike
---                  CHAT_MSG_SYSTEM); one row per zone and session, with
---                  how many corpses.
+--   Looted coin    alone, the loot window's coin slot as it clears (its
+--                  money comes 0.1 s later, the "You loot" line 0.76 s
+--                  after that: then not counted again); in a group (the
+--                  coin shared, often no window), CHAT_MSG_MONEY's amount
+--                  (readable on Forever, unlike CHAT_MSG_SYSTEM). One row
+--                  per zone and session, with how many corpses.
 --   Quests         QUEST_TURNED_IN's money; training BuyTrainerService
 --                  (its cost); travel TakeTaxiNode (its cost, from and to).
 -- What nothing explains is Other; consecutive ones the same way within a
@@ -45,6 +51,8 @@ import type LedgerModule from "../Ledger"
 
 -- consecutive unexplained changes the same way merge within this time
 const OTHER_MERGE = 300
+-- how long after a loot window's coin its "You loot" line may come
+const COIN_LINE = 10
 
 local asNumber, asString = secret.asNumber, secret.asString
 
@@ -105,6 +113,20 @@ export function placeOf(name: string?): string?
     return name:match("^(.-),") or name
 end
 
+-- What sending a letter expects: the postage as the game tells it (on
+-- Forever it counts the money attached: 31 for 1 copper, probed), or the
+-- postage and the money (where it doesn't). Nil: nothing to pay.
+export function sendExpectation(money: number, postage: number, to: string?): Expectation?
+    if postage <= 0 and money <= 0 then
+        return nil
+    end
+    local e: Expectation = { kind = "mail", amount = -(postage > 0 and postage or money), text = to, who = to ~= nil }
+    if money > 0 and postage > 0 then
+        e.alts = { -(postage + money) }
+    end
+    return e
+end
+
 -- A letter as the hooks read it.
 export type Letter = {
     sender?: string,
@@ -130,6 +152,12 @@ export class Recorder
     letters: { [number]: Letter } = {}
     -- the money set to send (SetSendMailMoney), the fallback for SendMail
     sendMoney: number = 0
+    -- the letter being sent: what it expects (dropped when it fails)
+    sending: Expectation? = nil
+    -- the loot window's coin per slot (alone), and the coin taken from it
+    -- lately whose "You loot" line may still come (GetTime)
+    coin: { [number]: number } = {}
+    coinTaken: { amount: number, at: number }[] = {}
     -- the trade open: its partner and the money on both sides
     partner: string? = nil
     mine: number = 0
@@ -492,14 +520,75 @@ export class Recorder
     -- Looted coin
     ----------------------------------------------------------------------------
 
+    function ExpectLoot(c: number)
+        local zone = asString(GetRealZoneText()) or asString(GetZoneText()) or ""
+        self:Expect({ kind = "loot", amount = c, text = zone ~= "" and zone or nil, merge = "loot:" .. zone })
+    end
+
+    -- The copper in a loot slot (0: not coin).
+    function SlotCoin(slot: number): number
+        local okT, kind = pcall(GetLootSlotType, slot)
+        if not okT or asNumber(kind) ~= ((Enum.LootSlotType and Enum.LootSlotType.Money) or 2) then
+            return 0
+        end
+        local ok, _icon, text = pcall(GetLootSlotInfo, slot)
+        local t = ok and asString(text) or nil
+        return t and coinsOf(t) or 0
+    end
+
+    -- LOOT_OPENED: the coin in the window, while alone (in a group the
+    -- window shows the whole coin and the line tells your share).
+    function OnLootOpened()
+        self.coin = {}
+        local okG, grouped = pcall(IsInGroup)
+        if not okG or secret.flag(grouped) then
+            return
+        end
+        local ok, n = pcall(GetNumLootItems)
+        for i = 1, (ok and asNumber(n) or 0) do
+            local c = self:SlotCoin(i)
+            if c > 0 then
+                self.coin[i] = c
+            end
+        end
+    end
+
+    -- LOOT_SLOT_CLEARED (twice for a slot, as the game sends it): the
+    -- coin taken, expected now.
+    function OnLootSlotCleared(slot: unknown)
+        local i = asNumber(slot)
+        local c = i and self.coin[i]
+        if not (i and c) then
+            return
+        end
+        self.coin[i] = nil
+        self.coinTaken[#self.coinTaken + 1] = { amount = c, at = GetTime() }
+        self:ExpectLoot(c)
+    end
+
+    -- CHAT_MSG_MONEY: coin a window didn't tell (a group's share), expected.
     function OnMoneyLine(text: unknown)
         local t = asString(text)
         local c = t and lootOf(t)
         if not c then
             return
         end
-        local zone = asString(GetRealZoneText()) or asString(GetZoneText()) or ""
-        self:Expect({ kind = "loot", amount = c, text = zone ~= "" and zone or nil, merge = "loot:" .. zone })
+        local now = GetTime()
+        local kept: { amount: number, at: number }[] = {}
+        local told = false
+        for _, x in ipairs(self.coinTaken) do
+            if now - x.at <= COIN_LINE then
+                if not told and x.amount == c then
+                    told = true
+                else
+                    kept[#kept + 1] = x
+                end
+            end
+        end
+        self.coinTaken = kept
+        if not told then
+            self:ExpectLoot(c)
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -778,18 +867,20 @@ export class Recorder
         local okP, p = pcall(GetSendMailPrice)
         local postage = okP and asNumber(p) or 0
         self.sendMoney = 0
-        local total = money + postage
-        if total <= 0 then
-            return
+        local e = sendExpectation(money, postage, asString(recipient))
+        self.sending = e
+        if e then
+            self:Expect(e)
         end
-        local to = asString(recipient)
-        self:Expect({
-            kind = "mail",
-            amount = -total,
-            alts = { -money, -postage },
-            text = to,
-            who = to ~= nil,
-        })
+    end
+
+    -- MAIL_FAILED: the letter wasn't sent, nothing charged.
+    function OnMailFailed()
+        local e = self.sending
+        self.sending = nil
+        if e and not e.booked then
+            self.matcher:Drop(e)
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -878,6 +969,15 @@ export class Recorder
         m:OnGameEvent("CHAT_MSG_MONEY", function(_, text)
             self:OnMoneyLine(text)
         end)
+        m:OnGameEvent("LOOT_OPENED", function()
+            self:OnLootOpened()
+        end)
+        m:OnGameEvent("LOOT_SLOT_CLEARED", function(_, slot)
+            self:OnLootSlotCleared(slot)
+        end)
+        m:OnGameEvent("LOOT_CLOSED", function()
+            self.coin = {}
+        end)
         -- the auction house
         self:HookIn("C_AuctionHouse", "PostItem", function(loc: unknown, d: unknown, q: unknown, _bid: unknown, buyout: unknown)
             local qty = asNumber(q) or 1
@@ -934,11 +1034,18 @@ export class Recorder
         self:Hook("SendMail", function(to: unknown)
             self:OnSendMail(to)
         end)
+        m:OnGameEvent("MAIL_FAILED", function()
+            self:OnMailFailed()
+        end)
+        m:OnGameEvent("MAIL_SEND_SUCCESS", function()
+            self.sending = nil
+        end)
     end
 
     function Disable()
         self.matcher:Clear()
         self.bids, self.merged = {}, {}
         self.merchant, self.partner, self.ticking = nil, nil, false
+        self.sending, self.coin, self.coinTaken = nil, {}, {}
     end
 end

@@ -125,6 +125,8 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V59](#v59) | VM | low | open | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
 | [V60](#v60) | VM | low | open | `/use <bag> <slot>` at a vendor sells nothing |
 | [V61](#v61) | VM | medium | open | A trade has no money and never completes |
+| [V62](#v62) | VM | low | open | `GetSendMailPrice` leaves out the money attached; a send can't fail |
+| [V63](#v63) | VM | low | open | A loot window has no coin |
 
 ## Test runner and mock issues
 
@@ -1083,6 +1085,22 @@ In the game a right-click on a bag item at a vendor sells it: the bag slot's sec
 *Status: open (0.13.15).*
 
 `unit:openTrade()` opens the trade (`TRADE_SHOW`, `UnitName("NPC")` the other side), but `GetPlayerTradeMoney` and `GetTargetTradeMoney` always answer 0, `SetTradeMoney` doesn't exist (as on Forever), and nothing accepts it: no `TRADE_ACCEPT_UPDATE`, no "Trade complete." (`UI_INFO_MESSAGE` with `ERR_TRADE_COMPLETE`, then `PLAYER_MONEY` about 0.26 s later in the game, `/suu probe ledger` 2026-11-18). The Ledger's trade test stubs the two money functions and plays the completion itself (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Taking a COD item still pays nothing (V51): its test plays the money change. (the Ledger's transactions 2026-11-18)
+
+<a id="v62"></a>
+
+### V62. `GetSendMailPrice` leaves out the money attached; a send can't fail
+
+*Status: open (0.13.15).*
+
+On Forever `GetSendMailPrice()` after `SetSendMailMoney(1)` answers 31 (the 30 copper postage and the copper sent), and the money changes by -31 once the letter is sent; with no money attached it answers 30 (`/suu probe ledger` 2026-11-18). The engine answers 30 either way and takes postage and money (30 + money) after "Mail sent.". The server can also refuse a letter (`MAIL_FAILED`, "Internal mail database error." as `UI_ERROR_MESSAGE` 465, no money changed: three COD letters in the probe); the engine always sends one while the mailbox is open. The Ledger expects either charge (`Recorder.sendExpectation`); its test plays the game's numbers and fires `MAIL_FAILED` itself (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Wanted: the money attached counted in `GetSendMailPrice`, and a way to have the server refuse a letter. (the Ledger's transactions 2026-11-18)
+
+<a id="v63"></a>
+
+### V63. A loot window has no coin
+
+*Status: open (0.13.15).*
+
+`player:loot(corpse)` fills the window with items only. In the game a corpse's coin is slot 1 (`GetLootSlotType` = `Enum.LootSlotType.Money`, `GetLootSlotInfo`'s text "7 Copper", quantity 0); taking it clears the slot (`LOOT_SLOT_CLEARED(1)` twice), the window closes, `PLAYER_MONEY` comes about 0.1 s later and the "You loot 7 Copper" line (`CHAT_MSG_MONEY`) 0.76 s after the money; in a party the share's line came 0.8 s after it (`/suu probe ledger` 2026-11-18). The Ledger's test fakes the three slot functions and plays the events (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Wanted: a corpse's coin in the window, paid when taken, and its chat line. (the Ledger's transactions 2026-11-18)
 
 ## Not bugs (for test writers)
 

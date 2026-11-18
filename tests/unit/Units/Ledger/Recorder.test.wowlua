@@ -13,7 +13,7 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/Ledger"
 import type Tx from "/Units/Ledger/Books"
-import patternOf, coinsOf, lootOf, placeOf from "/Units/Ledger/Recorder"
+import patternOf, coinsOf, lootOf, placeOf, sendExpectation from "/Units/Ledger/Recorder"
 import type Recorder from "/Units/Ledger/Recorder"
 import expectNoErrors from "../../../helpers"
 import * as ah from "../AuctionHouse/AuctionHouseHelpers"
@@ -59,7 +59,8 @@ end
 @beforeEach
 local function start()
     mock.player:setMoney(1000000)
-    mock.advanceTime(2)
+    -- (that change booked as Other before the books are cleared)
+    mock.advanceTime(3.5)
     M:Data().books, M:Data().mail = nil, nil
     M:Store().decoded = {}
     rec().merged, rec().lastKind = {}, nil
@@ -240,6 +241,49 @@ local function mail()
     CloseMail()
 end
 
+@test("an expired and a cancelled auction's letters taken with AutoLootMailItem: no money, nothing expected")
+local function auctionLetters()
+    mock.setBag(0, { slots = 8, items = {} })
+    openMailbox({
+        {
+            sender = "Horde Auction House",
+            subject = AUCTION_EXPIRED_MAIL_SUBJECT:format("Test Spring Water"),
+            items = { { id = WATER, count = 20 } },
+            daysLeft = 30,
+            wasRead = true,
+        },
+        {
+            sender = "Horde Auction House",
+            subject = AUCTION_REMOVED_MAIL_SUBJECT:format("Test Dreamfoil"),
+            items = { { id = HERB, count = 15 } },
+            daysLeft = 30,
+            wasRead = true,
+        },
+    })
+    local function indexOf(subject: string): number
+        for i = 1, GetInboxNumItems() do
+            if select(4, GetInboxHeaderInfo(i)) == subject then
+                return i
+            end
+        end
+        error("no letter " .. subject)
+    end
+    local n = #rows()
+    AutoLootMailItem(indexOf(AUCTION_EXPIRED_MAIL_SUBJECT:format("Test Spring Water")))
+    expect(rec().matcher:Waiting()).toBe(false)
+    mock.advanceTime(1.5)
+    expect(#rows()).toBe(n + 1)
+    expect(rows()[1].kind).toBe("expired")
+    expect(rows()[1].amount).toBe(0)
+    expect(rows()[1].item).toBe(WATER)
+    -- the cancelled auction's item back: its cancel was booked already
+    AutoLootMailItem(indexOf(AUCTION_REMOVED_MAIL_SUBJECT:format("Test Dreamfoil")))
+    expect(rec().matcher:Waiting()).toBe(false)
+    mock.advanceTime(1.5)
+    expect(#rows()).toBe(n + 1)
+    CloseMail()
+end
+
 @test("money sent by mail with the postage, to whom")
 local function sending()
     openMailbox({})
@@ -251,7 +295,46 @@ local function sending()
     expect(t.amount < -10000).toBe(true)
     expect(t.text).toBe("Brannoc")
     expect(t.who).toBe(true)
+    expect(t.amount).toBe(-10030)
+    expect(#rec().matcher.expects).toBe(0)
     CloseMail()
+end
+
+@test("sending: Forever's postage counts the money (1 copper: 31 charged), one row; a send that fails expects nothing")
+local function sendingAsProbed()
+    -- what each send expects: the postage as the game tells it, or that
+    -- and the money (the engine's postage leaves the money out)
+    expect(sendExpectation(1, 31, "Brannoc")).toEqual({ kind = "mail", amount = -31, alts = { -32 }, text = "Brannoc", who = true })
+    expect(sendExpectation(0, 30, "Brannoc")).toEqual({ kind = "mail", amount = -30, text = "Brannoc", who = true })
+    expect(sendExpectation(500, 0, nil)).toEqual({ kind = "mail", amount = -500, who = false })
+    expect(sendExpectation(0, 0, "Brannoc")).toBeNil()
+    -- as the probe saw it: 1 copper and 31 postage, then -31 only
+    local n = #rows()
+    rec():Expect(assert(sendExpectation(1, 31, "Brannoc")))
+    mock.advanceTime(0.6)
+    money(-31)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 1)
+    expect(rows()[1].kind).toBe("mail")
+    expect(rows()[1].amount).toBe(-31)
+    expect(rows()[1].text).toBe("Brannoc")
+    expect(rec().matcher:Waiting()).toBe(false)
+    -- a COD letter the server refuses ("Internal mail database error."):
+    -- MAIL_FAILED, no money; nothing left to take a later change
+    openMailbox({})
+    SetSendMailCOD(1)
+    SendMail("Brannoc", "Pay me", "")
+    expect(#rec().matcher.expects).toBe(1)
+    mock.fireEvent("MAIL_FAILED", nil)
+    expect(#rec().matcher.expects).toBe(0)
+    expect(rec().sending).toBeNil()
+    CloseMail()
+    mock.advanceTime(3)
+    local before = #rows()
+    money(-30)
+    mock.advanceTime(4)
+    expect(#rows()).toBe(before + 1)
+    expect(rows()[1].kind).toBe("other")
 end
 
 --------------------------------------------------------------------------------
@@ -313,6 +396,74 @@ local function looting()
     expect(r[1].text).toBe(GetRealZoneText() ~= "" and GetRealZoneText() or nil)
 end
 
+-- The loot window's slots as the game tells them: slot 1 the coin (its
+-- text), slot 2 an item.
+local function lootSlots(coin: string)
+    mock.fake("GetNumLootItems", function(): number
+        return 2
+    end)
+    mock.fake("GetLootSlotType", function(slot: number): number
+        return slot == 1 and Enum.LootSlotType.Money or Enum.LootSlotType.Item
+    end)
+    mock.fake("GetLootSlotInfo", function(slot: number): (number, string, number)
+        if slot == 1 then
+            return 133788, coin, 0
+        end
+        return 134939, "Test Rusty Blade", 1
+    end)
+end
+
+-- A corpse's coin as the probe saw it alone: the window opens, its slots
+-- clear (the coin's twice), it closes, the money 0.1 s later, "You loot"
+-- 0.76 s after that.
+local function lootAlone(coin: string, copper: number)
+    lootSlots(coin)
+    rec():OnLootOpened()
+    mock.fireEvent("LOOT_SLOT_CLEARED", 1)
+    mock.fireEvent("LOOT_SLOT_CLEARED", 1)
+    mock.fireEvent("LOOT_SLOT_CLEARED", 2)
+    mock.fireEvent("LOOT_CLOSED")
+    mock.advanceTime(0.11)
+    money(copper)
+    mock.advanceTime(0.76)
+    moneyLine(YOU_LOOT_MONEY:format((coin:gsub("\n", ", "))))
+    mock.advanceTime(0.5)
+end
+
+@test("looted coin alone: the loot window's coin as it clears, its line after the money not counted again; a group's by its line")
+local function lootWindow()
+    lootAlone(COPPER_AMOUNT:format(7), 7)
+    lootAlone(SILVER_AMOUNT:format(1) .. "\n" .. COPPER_AMOUNT:format(9), 109)
+    mock.advanceTime(4)
+    local r = rows()
+    expect(#r).toBe(1)
+    expect(r[1].kind).toBe("loot")
+    expect(r[1].amount).toBe(116)
+    expect(r[1].n).toBe(2)
+    expect(rec().matcher:Waiting()).toBe(false)
+    expect(#rec().coinTaken).toBe(0)
+    -- in a group the window shows the whole coin; your share is the line's
+    local friend = mock.spawnUnit({ name = "Brannoc", reaction = "friendly", class = "WARRIOR" })
+    mock.group:add(friend)
+    mock.advanceTime(0.5)
+    lootSlots(SILVER_AMOUNT:format(5) .. "\n" .. COPPER_AMOUNT:format(12))
+    rec():OnLootOpened()
+    expect(next(rec().coin)).toBeNil()
+    mock.fireEvent("LOOT_SLOT_CLEARED", 1)
+    mock.fireEvent("LOOT_CLOSED")
+    mock.advanceTime(0.1)
+    money(256)
+    mock.advanceTime(0.8)
+    moneyLine(LOOT_MONEY_SPLIT:format(SILVER_AMOUNT:format(2) .. ", " .. COPPER_AMOUNT:format(56)))
+    mock.advanceTime(4)
+    r = rows()
+    expect(#r).toBe(1)
+    expect(r[1].amount).toBe(116 + 256)
+    expect(r[1].n).toBe(3)
+    expect(rec().matcher:Waiting()).toBe(false)
+    mock.group:leave()
+end
+
 @test("a quest's money; what nothing explains is Other, the same way in a row merged")
 local function questAndOther()
     mock.fireEvent("QUEST_TURNED_IN", 990001, 1200, 3500)
@@ -321,16 +472,19 @@ local function questAndOther()
     expect(rows()[1].kind).toBe("quest")
     expect(rows()[1].amount).toBe(3500)
     money(-700)
-    mock.advanceTime(2)
+    mock.advanceTime(3)
     money(-300)
+    -- (it waits a moment for what explains it, then Other)
     mock.advanceTime(2)
+    expect(rows()[1].amount).toBe(-700)
+    mock.advanceTime(1)
     local r = rows()
     expect(r[1].kind).toBe("other")
     expect(r[1].amount).toBe(-1000)
     expect(r[1].n).toBe(2)
     -- money in isn't merged into money out
     money(50)
-    mock.advanceTime(2)
+    mock.advanceTime(3)
     expect(rows()[1].amount).toBe(50)
     expect(#rows()).toBe(3)
 end
@@ -453,6 +607,27 @@ local function auctions()
     rec():OnCancel(99999)
     expect(rows()[1].kind).toBe("cancelled")
     expect(rows()[1].amount).toBe(0)
+    ah.tearDown()
+end
+
+@test("a free cancel as the probe saw it: one row without money, nothing left to take a later change")
+local function freeCancel()
+    ah.setUp()
+    ah.open()
+    local n = #rows()
+    rec():OnCancel(159749997)
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", 1, "", 114)
+    mock.fireEvent("AUCTION_CANCELED", 114)
+    mock.advanceTime(1)
+    expect(#rows()).toBe(n + 1)
+    expect(rows()[1].kind).toBe("cancelled")
+    expect(rows()[1].amount).toBe(0)
+    expect(rec().matcher:Waiting()).toBe(false)
+    -- a change after it isn't the cancel's
+    money(-50)
+    mock.advanceTime(4)
+    expect(#rows()).toBe(n + 2)
+    expect(rows()[1].kind).toBe("other")
     ah.tearDown()
 end
 
