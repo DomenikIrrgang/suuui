@@ -56,7 +56,7 @@ import * as frames from "wowlua:frames"
 import type LoadHandle from "wowlua:item"
 -- the pages and what the module's methods do on them, in modules of their
 -- own beside this one
-import sorts from "./AuctionHouse/Common"
+import sorts, keysMissing from "./AuctionHouse/Common"
 import type AuctionTable, Cell from "./AuctionHouse/Tables"
 import * as ahBuy from "./AuctionHouse/Buy"
 import BuyPage from "./AuctionHouse/Buy"
@@ -281,6 +281,14 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- a note for what the house is asked, cleared when its results come
     waiting: boolean = false
     refreshPending: boolean = false
+    -- the browse results' looks told to the price store since the house last
+    -- sent results, by item (Buy's tellBrowseLooks: told when results come,
+    -- never by a draw); the items told without a name, by their key
+    browseTold: { [number]: string } = {}
+    browseNameless: { [number]: ItemKey } = {}
+    -- the last draw showed an item key the game had no info for yet (drawn
+    -- again when ITEM_KEY_ITEM_INFO_RECEIVED comes, else not)
+    keysWaiting: boolean = false
     placing: boolean = false
     awayHooked: boolean = false
     postHooked: boolean = false
@@ -408,6 +416,18 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawResults()
         ahBuy.drawResults(self)
+    end
+
+    function DrawResultRows(force: boolean?)
+        ahBuy.drawResultRows(self, force)
+    end
+
+    function TellBrowseLooks()
+        ahBuy.tellBrowseLooks(self)
+    end
+
+    function KeyArrived(itemID: unknown)
+        ahBuy.keyArrived(self, itemID)
     end
 
     -- The Writs (AuctionHouse/Writs): chosen in the categories' list.
@@ -756,15 +776,30 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- Nothing without a usual price (an item seen too rarely), the Ledger
     -- off or its marks.
     function DealOf(itemID: number?, price: number?): (number?, boolean)
-        if not (itemID and price and price > 0 and self:MarksDeals()) then
-            return nil, false
-        end
-        local svc = SuuUI.UseService(LEDGER)
-        local usual, deal = svc and svc.UsualPrice, svc and svc.Deal
-        if not (usual and deal and usual(itemID)) then
+        local deal = self:DealMarks()
+        if not (deal and itemID and price and price > 0) then
             return nil, false
         end
         return deal(itemID, price)
+    end
+
+    -- What gives a result's marks (DealOf's), asked once for a draw of many
+    -- (nil: no marks: the Ledger off, or its marks).
+    function DealMarks(): ((itemID: number, price: number) -> (number?, boolean))?
+        if not self:MarksDeals() then
+            return nil
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local usual, deal = svc and svc.UsualPrice, svc and svc.Deal
+        if not (usual and deal) then
+            return nil
+        end
+        return function(itemID: number, price: number): (number?, boolean)
+            if not usual(itemID) then
+                return nil, false
+            end
+            return deal(itemID, price)
+        end
     end
 
     -- After Scan all, once the Ledger read it: the foot's "Scan done" note
@@ -872,6 +907,14 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if money then
             money:SetCopper(GetMoney() or 0)
         end
+        keysMissing()
+        self:DrawTab()
+        self.keysWaiting = keysMissing()
+    end
+
+    -- The tab shown drawn (Refresh).
+    function DrawTab()
+        local buy = assert(self.buy)
         if self.tab == "sell" then
             self:DrawSell()
             return
@@ -1000,16 +1043,27 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
             self:QueueRefresh()
         end
+        -- (the results' looks told to the price store as they come: a new
+        -- set told anew, more of it what changed)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+            self.browseTold, self.browseNameless = {}, {}
+            self:TellBrowseLooks()
             self:KeepSearch()
             results(true)
         end)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function()
+            self:TellBrowseLooks()
             self:KeepSearch()
             results(true)
         end)
-        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function()
-            results(false)
+        -- a key's info: a result's name kept; drawn again only while what
+        -- shows waits for one (a draw takes the flag, Refresh: the game's
+        -- own hidden frame asks for keys too)
+        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function(_, itemID)
+            self:KeyArrived(itemID)
+            if self.keysWaiting or keysMissing() then
+                results(false)
+            end
         end)
         self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function()
             results(true)

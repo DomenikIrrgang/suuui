@@ -412,9 +412,13 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     -- What an offer at `price` per unit is: how far under its usual price
     -- in percent when that counts as a deal (nil: it doesn't), and whether
     -- it is under what a vendor pays (with that setting on).
+    -- (the settings as the index read them: once a frame, not each row of
+    -- a draw)
     function Deal(itemID: number, price: number, ruleset: string?): (number?, boolean)
-        local under = stats.dealUnder(price, self:Usual(itemID, ruleset), self:Get("dealPercent"))
-        local vendor = self:Get("dealVendor") and stats.underVendor(price, self:VendorPrice(itemID))
+        local idx = self:Index(ruleset)
+        local sm = idx:Get(itemID)
+        local under = stats.dealUnder(price, sm and sm.usual, idx.pct)
+        local vendor = idx.vendorOn and stats.underVendor(price, self:VendorPrice(itemID))
         return under, vendor
     end
 
@@ -1038,6 +1042,9 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         end)
         -- the deals change with their settings
         self:WatchAll({ "dealPercent", "dealVendor" }, function()
+            for _, idx in pairs(self.indexes) do
+                idx:Unchecked()
+            end
             self:Changed("prices")
         end)
         self:RecordMoney(true)

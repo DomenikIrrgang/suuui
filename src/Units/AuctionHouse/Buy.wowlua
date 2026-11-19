@@ -15,7 +15,7 @@ import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as itemData from "wowlua:item"
 import trimmed, keyInfo, qualityToken, keyTooltip, QUALITY, sorts from "./Common"
-import TableRow, AuctionTable from "./Tables"
+import TableRow, AuctionTable, ROW_H from "./Tables"
 import ItemView from "./ItemView"
 import WritRow, TIERS from "./Writs"
 import type HistoryRow from "./History"
@@ -41,6 +41,8 @@ local SERVER_SORT: { [string]: AuctionHouseSortOrder } = {
     name = Enum.AuctionHouseSortOrder.Name,
     price = Enum.AuctionHouseSortOrder.Price,
 }
+-- One item's look in the browse results (its rows together).
+type BrowseLook = { itemID: number, low: number, qty: number, name?: string, quality?: number, plain?: ItemKey }
 -- A result sorted here: its value, its place in the house's order.
 type SortEntry = { r: BrowseResultInfo, v: number, i: number }
 
@@ -194,6 +196,13 @@ export class ResultRow extends TableRow
         self.qty = UI.Text(self, "numeric", "ink")
         self.qty:SetJustifyH("RIGHT")
         self.price = UI.Money(self)
+        -- (the row's item read when it's used: rows go from line to line)
+        self.onEnter = function()
+            local key = self.key
+            if key then
+                keyTooltip(self, key)
+            end
+        end
     end
 end
 
@@ -214,6 +223,11 @@ export class BuyPage extends Frame
     readonly catButtons: CatButton[] = {}
     readonly main: Frame
     readonly results: AuctionTable<ResultRow>
+    -- the results in their order (drawResults), the lines whose rows are
+    -- drawn (drawResultRows)
+    listed: BrowseResultInfo[] = {}
+    firstDrawn: number = 0
+    lastDrawn: number = -1
     -- the Writs (AuctionHouse/Writs): their tier, their table
     readonly tierBar: Segmented<string>
     readonly writs: AuctionTable<WritRow>
@@ -392,9 +406,27 @@ export class BuyPage extends Frame
             { label = "Available", w = 70, right = true, sort = "qty" },
             { label = "Lowest price", w = 120, right = true, sort = "price" },
         }, function(p: Frame): ResultRow
-            return ResultRow.new(p)
+            local row = ResultRow.new(p)
+            row:SetScript("OnClick", function()
+                local key = row.key
+                -- (0.48) Alt-click: its price page in the Ledger
+                if key and m:AltClickItem(key.itemID) then
+                    return
+                end
+                m:OpenItem(key)
+            end)
+            return row
         end)
         self.results:SetAllPoints()
+        -- (only the rows in sight are drawn: the others as they come)
+        local area = self.results.list
+        area:HookScript("OnVerticalScroll", function()
+            m:DrawResultRows()
+        end)
+        area:HookScript("OnSizeChanged", function()
+            -- (other lines in sight, or the columns' widths changed)
+            m:DrawResultRows(true)
+        end)
         self.results.onSort = function(key: string)
             m:SortBy(key)
         end
@@ -801,6 +833,68 @@ export function sortedResults(self: AuctionHouseModule, results: BrowseResultInf
     return out
 end
 
+-- The browse results' looks told to the price store (Seen), when the house
+-- sends results (never by a draw): per item the lowest price of its rows
+-- and the units of them all (an item's levels and suffixes are rows of
+-- their own), with its name (a row without a suffix tells the item's
+-- own; one whose info comes later: KeyArrived). Only what differs from
+-- what was told since the house last sent results (browseTold, emptied
+-- then). (Until 0.48's fix each draw told every row: an item's rows
+-- overwrote each other's count, each a change of the store, each change
+-- drew the results again through the Ledger's marks: a draw of every row
+-- twice a second while they showed, reported 2026-11-19.)
+export function tellBrowseLooks(self: AuctionHouseModule)
+    local byItem: { [number]: BrowseLook } = {}
+    local looks: BrowseLook[] = {}
+    for _, r in ipairs(tryValue(AH.GetBrowseResults) or {}) do
+        local key = r.itemKey
+        local itemID, price = key.itemID, r.minPrice
+        if itemID and price and price > 0 then
+            local l = byItem[itemID]
+            if not l then
+                l = { itemID = itemID, low = price, qty = 0 }
+                byItem[itemID] = l
+                looks[#looks + 1] = l
+            end
+            l.low = math.min(l.low, price)
+            l.qty += r.totalQuantity or 0
+            if (key.itemSuffix or 0) == 0 and not l.name then
+                l.plain = key
+                local info = keyInfo(key)
+                if info then
+                    l.name, l.quality = secret.asString(info.itemName), secret.asNumber(info.quality)
+                end
+            end
+        end
+    end
+    local told, nameless = self.browseTold, self.browseNameless
+    for _, l in ipairs(looks) do
+        local sig = l.low .. ":" .. l.qty
+        if told[l.itemID] ~= sig then
+            told[l.itemID] = sig
+            self:Seen(l.itemID, l.low, l.qty > 0 and l.qty or nil, l.name, l.quality)
+        end
+        nameless[l.itemID] = not l.name and l.plain or nil
+    end
+end
+
+-- An item key's info came (ITEM_KEY_ITEM_INFO_RECEIVED): the name of a
+-- result told without one kept now.
+export function keyArrived(self: AuctionHouseModule, itemID: unknown)
+    local id = secret.asNumber(itemID)
+    local key = id and self.browseNameless[id]
+    if not (id and key) then
+        return
+    end
+    local info = keyInfo(key)
+    if info then
+        self.browseNameless[id] = nil
+        SuuUI.Prices.KeepName(self, id, secret.asString(info.itemName), secret.asNumber(info.quality))
+    end
+end
+
+-- The results in the chosen order, their count and the rows in sight drawn
+-- (DrawResultRows: only those; scrolling draws the others as they come).
 export function drawResults(self: AuctionHouseModule)
     local buy = self.buy
     if not buy then
@@ -809,86 +903,9 @@ export function drawResults(self: AuctionHouseModule)
     local t = buy.results
     t:ShowSort(self.sortKey, self.sortReverse)
     local results = self:SortedResults(tryValue(AH.GetBrowseResults) or {})
-    local n = 0
-    for i, r in ipairs(results) do
-        n = i
-        local row = t:Line(i)
-        local info = keyInfo(r.itemKey)
-        local quality = info and info.quality
-        row.slot.skin:SetItem({ icon = info and info.iconFileID, quality = QUALITY[quality or 1] or "common" })
-        row.name:SetValue(info and info.itemName or "…")
-        row.name:SetColor(qualityToken(quality))
-        row.mine:SetValue(r.containsOwnerItem and "Yours" or "")
-        local itemID = r.itemKey.itemID
-        local level = r.itemKey.itemLevel
-        row.ilvl:SetValue(info and info.isEquipment and level and tostring(level) or "")
-        row.qty:SetValue(tostring(r.totalQuantity or ""))
-        row.price:SetCopper(r.minPrice or 0)
-        -- (the name told along: the item's own, not a suffix's)
-        local plain = (r.itemKey.itemSuffix or 0) == 0
-        self:Seen(
-            itemID,
-            r.minPrice,
-            r.totalQuantity,
-            plain and info and secret.asString(info.itemName) or nil,
-            plain and info and secret.asNumber(quality) or nil
-        )
-        -- (0.48) the Ledger's marks: far under its usual price, under what
-        -- a vendor pays (after the look just told, which counts)
-        local under, underVendor = self:DealOf(itemID, r.minPrice)
-        if under then
-            row.under:SetValue(("%d%% under"):format(math.floor(under + 0.5)))
-        end
-        row.under:SetShown(under ~= nil)
-        row.vendor:SetShown(underVendor)
-        -- the name cell: the slot, the name, then right after it Yours and
-        -- the marks (the name cut short to leave them room)
-        local places = t:Places(t.list:GetWidth())
-        local gap = S["space-2"]
-        local after = 0
-        if r.containsOwnerItem then
-            after = after + gap + row.mine:GetUnboundedStringWidth()
-        end
-        for _, mark in ipairs({ row.under, row.vendor }) do
-            if mark:IsShown() then
-                after = after + gap + mark:GetWidth()
-            end
-        end
-        row.slot:ClearAllPoints()
-        row.slot:SetPoint("LEFT", places[1].x, 0)
-        row.name:ClearAllPoints()
-        row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
-        local room = places[1].w - 24 - S["space-3"] - after
-        row.name:SetWidth(math.max(20, math.min(room, math.ceil(row.name:GetUnboundedStringWidth()) + 1)))
-        row.mine:ClearAllPoints()
-        row.mine:SetPoint("LEFT", row.name, "RIGHT", gap, 0)
-        local prev: Region = r.containsOwnerItem and row.mine or row.name
-        for _, mark in ipairs({ row.under, row.vendor }) do
-            mark:ClearAllPoints()
-            if mark:IsShown() then
-                mark:SetPoint("LEFT", prev, "RIGHT", gap, 0)
-                prev = mark
-            end
-        end
-        t:PlaceCells(row, { false, row.ilvl, row.qty, row.price })
-        row.key = r.itemKey
-        row.onEnter = function()
-            local key = row.key
-            if key then
-                keyTooltip(row, key)
-            end
-        end
-        row:SetScript("OnClick", function()
-            local key = row.key
-            -- (0.48) Alt-click: its price page in the Ledger
-            if key and self:AltClickItem(key.itemID) then
-                return
-            end
-            self:OpenItem(key)
-        end)
-        row:Show()
-    end
-    t:Fit(n)
+    buy.listed = results
+    local n = #results
+    self:DrawResultRows(true)
     local full = tryValue(AH.HasFullBrowseResults)
     buy.more:SetShown(n > 0 and full == false)
     buy.empty:SetShown(n == 0)
@@ -903,6 +920,99 @@ export function drawResults(self: AuctionHouseModule)
                 "Search, or choose a category."
         )
     end
+end
+
+-- rows drawn above and below the ones in sight
+local OVERSCAN = 2
+
+-- The results' rows in sight (and a few around them) drawn: the rows are
+-- handed from line to line as the list scrolls (`force`: drawn again
+-- even when the same lines are in sight). The list's height covers them
+-- all.
+export function drawResultRows(self: AuctionHouseModule, force: boolean?)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local t = buy.results
+    local results = buy.listed
+    local n = #results
+    local area = t.list
+    local h = area:GetHeight() or 0
+    local first = math.max(1, math.floor((area:GetVerticalScroll() or 0) / ROW_H) + 1 - OVERSCAN)
+    -- (not laid out yet: a screenful; its size, once known, draws again)
+    local last = math.min(n, first + (h > 0 and math.ceil(h / ROW_H) or 20) + 2 * OVERSCAN)
+    if n == 0 then
+        first, last = 1, 0
+    end
+    if not force and first == buy.firstDrawn and last == buy.lastDrawn then
+        return
+    end
+    buy.firstDrawn, buy.lastDrawn = first, last
+    -- (once a draw: the columns, the Ledger's marks)
+    local places = t:Places(area:GetWidth())
+    local deal = self:DealMarks()
+    local gap = S["space-2"]
+    local nameX, nameW = places[1].x, places[1].w - 24 - S["space-3"]
+    for i = first, last do
+        local r = results[i]
+        local row = t:LineAt(i - first + 1, i)
+        local info = keyInfo(r.itemKey)
+        local quality = info and info.quality
+        row.slot.skin:SetItem({ icon = info and info.iconFileID, quality = QUALITY[quality or 1] or "common" })
+        row.name:SetValue(info and info.itemName or "…")
+        row.name:SetColor(qualityToken(quality))
+        row.mine:SetValue(r.containsOwnerItem and "Yours" or "")
+        local level = r.itemKey.itemLevel
+        row.ilvl:SetValue(info and info.isEquipment and level and tostring(level) or "")
+        row.qty:SetValue(tostring(r.totalQuantity or ""))
+        row.price:SetCopper(r.minPrice or 0)
+        -- (0.48) the Ledger's marks: far under its usual price, under what
+        -- a vendor pays
+        local under: number?, underVendor = nil, false
+        local price = r.minPrice
+        if deal and price and price > 0 then
+            under, underVendor = deal(r.itemKey.itemID, price)
+        end
+        if under then
+            row.under:SetValue(("%d%% under"):format(math.floor(under + 0.5)))
+        end
+        row.under:SetShown(under ~= nil)
+        row.vendor:SetShown(underVendor)
+        -- the name cell: the slot, the name, then right after it Yours and
+        -- the marks (the name cut short to leave them room)
+        local after = 0
+        if r.containsOwnerItem then
+            after = after + gap + row.mine:GetUnboundedStringWidth()
+        end
+        if under then
+            after = after + gap + row.under:GetWidth()
+        end
+        if underVendor then
+            after = after + gap + row.vendor:GetWidth()
+        end
+        row.slot:ClearAllPoints()
+        row.slot:SetPoint("LEFT", nameX, 0)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
+        row.name:SetWidth(math.max(20, math.min(nameW - after, math.ceil(row.name:GetUnboundedStringWidth()) + 1)))
+        row.mine:ClearAllPoints()
+        row.mine:SetPoint("LEFT", row.name, "RIGHT", gap, 0)
+        local prev: Region = r.containsOwnerItem and row.mine or row.name
+        row.under:ClearAllPoints()
+        if under then
+            row.under:SetPoint("LEFT", prev, "RIGHT", gap, 0)
+            prev = row.under
+        end
+        row.vendor:ClearAllPoints()
+        if underVendor then
+            row.vendor:SetPoint("LEFT", prev, "RIGHT", gap, 0)
+        end
+        t:PlaceCellsAt(row, places, row.ilvl, row.qty, row.price)
+        row.key = r.itemKey
+        row:Show()
+    end
+    t:Fit(last - first + 1, n)
 end
 
 -- A Shift-click's item link (a chat link's, a bag item's: the game's

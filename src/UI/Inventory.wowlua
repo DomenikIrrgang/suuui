@@ -155,6 +155,9 @@ local function templateIcon(b: Frame): Texture?
     return nil
 end
 
+-- What a slot's Draw showed (ItemSlotSkin.drawn).
+type SlotLook = { present: boolean, q?: string, dim: boolean, locked: boolean, quest: boolean, hover: boolean }
+
 -- SuuUI's look on a slot button (its state kept here, nothing on the button).
 export class ItemSlotSkin
     readonly well: Texture
@@ -165,6 +168,8 @@ export class ItemSlotSkin
     questMark?: Texture
     hover?: boolean
     item?: SlotItem
+    -- what Draw showed last
+    drawn?: SlotLook
 
     constructor(readonly button: Frame)
         local b = button
@@ -239,6 +244,27 @@ export class ItemSlotSkin
 
     function Draw()
         local item = self.item
+        -- (what it showed last drawn again: nothing to do; a list drawing
+        -- many slots again draws only those that changed. Colours follow a
+        -- theme by themselves.)
+        local q, dim, locked, quest = nil, false, false, false
+        if item then
+            q, dim, locked, quest = item.quality, item.dim == true, item.locked == true, item.questStart == true
+        end
+        local hover = self.hover == true
+        local look = self.drawn
+        if
+            look and look.present == (item ~= nil) and look.q == q and look.dim == dim and look.locked == locked and
+            look.quest == quest and look.hover == hover
+        then
+            return
+        end
+        if not look then
+            look = { present = false, dim = false, locked = false, quest = false, hover = false }
+            self.drawn = look
+        end
+        look.present, look.q, look.dim, look.locked, look.quest, look.hover =
+            item ~= nil, q, dim, locked, quest, hover
         self:ShowQuestStart(item ~= nil and item.questStart == true)
         if not item then
             draw.paintFill(self.well, "surface-sunk")
@@ -335,6 +361,10 @@ export class Money extends Frame
 
     function SetCopper(given: unknown)
         local total = math.max(0, math.floor(tonumber(given) or 0))
+        -- (the same amount: nothing to do; a theme draws it again itself)
+        if total == self.copper and self.sign == nil then
+            return
+        end
         self.copper, self.sign = total, nil
         self:Redraw()
     end
@@ -344,7 +374,11 @@ export class Money extends Frame
     -- keep their colours.
     function SetSigned(given: unknown)
         local v = math.floor(tonumber(given) or 0)
-        self.copper, self.sign = math.abs(v), v > 0 and 1 or v < 0 and -1 or 0
+        local copper, sign = math.abs(v), v > 0 and 1 or v < 0 and -1 or 0
+        if copper == self.copper and sign == self.sign then
+            return
+        end
+        self.copper, self.sign = copper, sign
         self:Redraw()
     end
 

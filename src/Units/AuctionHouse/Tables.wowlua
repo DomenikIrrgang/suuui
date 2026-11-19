@@ -238,32 +238,60 @@ export class AuctionTable<R extends TableRow> extends Frame
         return row
     end
 
-    -- The rows past n hidden, the list's height for n.
-    function Fit(n: number)
+    -- Row k placed at line i (a table drawing only the lines in sight hands
+    -- its rows from line to line).
+    function LineAt(k: number, i: number): R
+        local row = self:Row(k)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
+        row:SetPoint("RIGHT", self.list.child, "RIGHT")
+        return row
+    end
+
+    -- The rows past n hidden, the list's height for n lines (or `lines`).
+    function Fit(n: number, lines: number?)
         for i = n + 1, #self.rows do
             self.rows[i]:Hide()
         end
-        self.list.child:SetHeight(math.max(1, n * ROW_H))
+        self.list.child:SetHeight(math.max(1, (lines or n) * ROW_H))
     end
 
     -- Places a row's cells (frames or font strings) by the columns.
     function PlaceCells(r: Frame, cells: (Frame | FontString | false)[])
-        local places = self:Places(self.list:GetWidth())
+        self:PlaceCellsIn(r, self:Places(self.list:GetWidth()), cells)
+    end
+
+    -- A results row's last three cells by columns 2 to 4 (`places`: the
+    -- draw's, worked out once; no table a row).
+    function PlaceCellsAt(r: Frame, places: Place[], a: Frame | FontString, b: Frame | FontString, c: Frame | FontString)
+        self:PlaceCell(r, places, 2, a)
+        self:PlaceCell(r, places, 3, b)
+        self:PlaceCell(r, places, 4, c)
+    end
+
+    function PlaceCellsIn(r: Frame, places: Place[], cells: (Frame | FontString | false)[])
         for i, cell in ipairs(cells) do
-            local p = places[i]
-            if p and cell then
-                cell:ClearAllPoints()
-                local col = self.cols[i]
-                if col and col.right then
-                    cell:SetPoint("RIGHT", r, "LEFT", p.x + p.w, 0)
-                else
-                    cell:SetPoint("LEFT", r, "LEFT", p.x, 0)
-                end
-                local text = frames.asFontString(cell)
-                if text then
-                    text:SetWidth(p.w)
-                end
+            if cell then
+                self:PlaceCell(r, places, i, cell)
             end
+        end
+    end
+
+    function PlaceCell(r: Frame, places: Place[], i: number, cell: Frame | FontString)
+        local p = places[i]
+        if not p then
+            return
+        end
+        cell:ClearAllPoints()
+        local col = self.cols[i]
+        if col and col.right then
+            cell:SetPoint("RIGHT", r, "LEFT", p.x + p.w, 0)
+        else
+            cell:SetPoint("LEFT", r, "LEFT", p.x, 0)
+        end
+        local text = frames.asFontString(cell)
+        if text then
+            text:SetWidth(p.w)
         end
     end
 end

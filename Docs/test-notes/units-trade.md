@@ -195,3 +195,84 @@ bytes an item; the test's entries carry every field, 123 bytes).
 
 The profiles' JSON keeps table keys as strings (`"991201"`), where WoW
 writes numbers; the migration reads both.
+
+## The auction house idle with results shown (2026-11-19, wowlua 0.13.15)
+
+Reported in game (0.21.0-dev+9568d10): the frame rate fell sharply while a
+search's results only showed. wowlua's in-game profiler (57 s, 3,036
+frames) had `AuctionHouseModule:Refresh > drawResults` 109 times while
+idle, 106 of them over the frame's budget (the slowest 573 ms): every
+row's look told to the price store, the Ledger's marks worked out per
+row, every row drawn (14,500 row draws), 900 MB of garbage.
+
+**The loop:** `drawResults` told each row's look to the price store
+(`Seen`). An item on several rows (gear at several item levels, an item
+with suffixes: common in a search) told its looks in turn; the store keeps
+one look a period and the newer look's count wins, so each row's look
+changed what the row before left, on every draw. Each change:
+`SUUUI_PRICE_CHANGED` → the Ledger (`PriceChanged`, `Changed("prices")`)
+→ `SUUUI_LEDGER_CHANGED("prices")` the next frame → the auction house's
+handler (the marks follow the usual prices) → `QueueRefresh` → the draw
+0.05 s later → the looks told again. With the Ledger off nothing listened:
+no loop (and before 9568d109 the looks went into a plain table with no
+message).
+
+**Reproduced** (a test, `--profile-out`, 80 results of 40 items at two
+item levels each, frames of 1/60 s): with the Ledger on a draw every 4th
+frame for as long as the results showed (30 draws in 120 frames, 80
+`SUUUI_PRICE_CHANGED` each), SuuUI's cost 217,000 a frame on average
+(instructions plus the client's estimated native cost; 870,000 in each
+draw's frame) against 2,000 when idle; the same with the price store
+nearly empty or holding 5,000 items. Without repeated items, a commodity's
+view, or the Ledger off: no loop.
+
+**Fixed:**
+- Drawing never writes: the results' looks are told when the house sends
+  them (`AUCTION_HOUSE_BROWSE_RESULTS_UPDATED`/`_ADDED`, Buy's
+  `tellBrowseLooks`): one look an item (the lowest price of its rows, the
+  units of them all), only what differs from what was told since the
+  house last sent results; a name that comes later (its key's info) is
+  kept by itself (`KeyArrived`).
+- The results draw only the rows in sight (and two around them); scrolling
+  hands the rows from line to line. Columns and the Ledger's marks
+  (`DealMarks`) are worked out once a draw, not a row; the rows' click and
+  hover made once.
+- `ITEM_KEY_ITEM_INFO_RECEIVED` draws again only while the last draw
+  showed a key without its info (Common's `keysMissing`; the game's own
+  hidden frame asks for keys too).
+- The Ledger's price index checks the day and the deal settings once a
+  frame (and again after a deal setting changed), and `Deal` reads the
+  settings the index read: no settings lookups a row.
+- UI: `Money` with the same amount draws nothing (its text was built
+  again on every call); an item slot draws its border and well only when
+  what it shows changed; a scroll area's thumb runs an `OnUpdate` only
+  while it is dragged (it ran on every frame for every shown table).
+
+**Before and after** (the same harness; SuuUI's cost a frame, idle over
+120 frames, and the frame of one draw the money's change asks for):
+
+| Case | Idle before | Idle after | A draw before | A draw after |
+|---|---|---|---|---|
+| 80 rows, items on two rows, 5,000 items stored | 217,000 (a draw every 4th frame) | 1,900 | 866,000 | 63,000 |
+| the same, store nearly empty | 217,000 | 1,900 | 862,000 | 63,000 |
+| 520 rows (40 items, 13 levels each) | 1,322,000 (5.3 M each draw, 97 ms in the emulator) | 2,600 | 5,296,000 | 63,000 |
+| 40 rows, one each | 2,200 | 2,200 | 379,000 | 66,000 |
+| a commodity's view | 2,600 | 2,600 | 32,000 | 28,000 |
+| 80 rows, the Ledger off | 1,200 | 1,200 | 535,000 | 57,000 |
+
+Tests (`Units/AuctionHouse/Buy.test.wowlua`): results shown and idle for
+120 frames with an item on two rows: one look (lowest price, units
+together), no `SUUUI_PRICE_CHANGED`, no `Refresh`; a redraw tells nothing,
+new results do. A key's info: drawn again only while a row waits for it,
+its name kept. 60 results: only the rows in sight made and drawn, the
+list as tall as all of them, scrolling to the end draws the last.
+
+**Looked at as well** (the same harness, 5,000 items in the store): the
+Ledger window idle on Overview, Prices, Transactions and Gold: no redraw,
+about 2,000 a frame; its names queue asks 30 names a beat (0.2 s), each
+item at most four times, then stops (5,000 unknown items: about two
+minutes). The tooltip block reads the latest look and the usual price
+(the index checks once a frame). Not fixed: `UI/CooldownTracker`'s driver
+runs an `OnUpdate` every frame while the tracker is started, to look for
+dirty cells (a few hundred instructions; making it wake on demand needs
+the cells to tell the tracker).

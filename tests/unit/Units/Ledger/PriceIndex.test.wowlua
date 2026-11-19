@@ -193,8 +193,10 @@ local function invalidated()
     expect(idx:Ready()).toBe(true)
     local gen = idx.gen
     local sm = assert(idx:Get(BASE + 10))
-    -- the deal settings: 45 % (the 40 % ones are no deals now)
+    -- the deal settings: 45 % (the 40 % ones are no deals now; the module
+    -- tells the index, which checks once a frame)
     r.pct = 45
+    idx:Unchecked()
     expect(idx:Ready()).toBe(false)
     expect(idx.gen).toBe(gen + 1)
     expect(#idx.log).toBe(0)
@@ -207,6 +209,7 @@ local function invalidated()
     expect(idx:Deals()).toEqual({})
     -- the day turned (as it was yesterday's): the summaries too
     idx.day -= 1
+    idx:Unchecked()
     expect(idx:Ready()).toBe(false)
     expect(idx.gen).toBe(gen + 2)
     expect(next(idx.items)).toBeNil()
@@ -255,5 +258,28 @@ local function redeal()
     -- known already: nothing again
     idx:Redeal(BASE + 2)
     expect(#idx.log).toBe(logged + 1)
+    expectNoErrors()
+end
+
+@test("the day and the deal settings checked once a frame: a draw of many rows reads the settings once")
+local function checkedOnce()
+    local r = rig(50)
+    local idx = r.idx
+    idx:Prepare(100)
+    mock.advanceFrames(1)
+    local reads = 0
+    local settings = idx.o.settings
+    mock.stub(idx.o, "settings", function(): (number, boolean)
+        reads += 1
+        return settings()
+    end)
+    for i = 1, 50 do
+        idx:Get(BASE + i)
+    end
+    expect(reads).toBe(1)
+    -- the next frame: once more
+    mock.advanceFrames(1)
+    idx:Get(BASE + 1)
+    expect(reads).toBe(2)
     expectNoErrors()
 end
