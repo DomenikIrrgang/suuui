@@ -606,6 +606,62 @@ local function lootWindow()
     mock.group:leave()
 end
 
+-- Your share in a group: the game's line for `c` copper.
+local function shareLine(c: number): string
+    return LOOT_MONEY_SPLIT:format(SILVER_AMOUNT:format(math.floor(c / 100)) .. ", " .. COPPER_AMOUNT:format(c % 100))
+end
+
+@test("a group's coin as the dungeon probe saw it: one share line for several changes, before, between or after them; a quest's reward not taken")
+local function lootShares()
+    local friend = mock.spawnUnit({ name = "Brannoc", reaction = "friendly", class = "WARRIOR" })
+    mock.group:add(friend)
+    mock.advanceTime(0.5)
+    -- (no loot window of ours: another member loots)
+    -- two changes, then the line for both
+    money(352)
+    mock.advanceTime(0.55)
+    money(109)
+    mock.advanceTime(0.45)
+    moneyLine(shareLine(461))
+    mock.advanceTime(1)
+    -- the line between its two changes
+    money(113)
+    mock.advanceTime(0.65)
+    moneyLine(shareLine(373))
+    mock.advanceTime(0.16)
+    money(260)
+    mock.advanceTime(1)
+    -- the line for three changes, the last after it; a quest's reward
+    -- meanwhile, smaller than what the line still waits for
+    money(199)
+    mock.advanceTime(0.4)
+    money(323)
+    mock.advanceTime(0.57)
+    moneyLine(shareLine(712))
+    mock.advanceTime(0.05)
+    mock.fireEvent("QUEST_TURNED_IN", 990001, 1200, 150)
+    money(150)
+    mock.advanceTime(0.2)
+    money(190)
+    mock.advanceTime(4)
+    local loot: Tx? = nil
+    local quest: Tx? = nil
+    for _, t in ipairs(rows()) do
+        expect(t.kind).never.toBe("other")
+        if t.kind == "loot" then
+            loot = t
+        elseif t.kind == "quest" then
+            quest = t
+        end
+    end
+    expect(#rows()).toBe(2)
+    expect(assert(loot).amount).toBe(352 + 109 + 113 + 260 + 199 + 323 + 190)
+    expect(assert(loot).n).toBe(7)
+    expect(assert(quest).amount).toBe(150)
+    expect(rec().matcher:Waiting()).toBe(false)
+    mock.group:leave()
+end
+
 @test("a quest's money; what nothing explains is Other, the same way in a row merged")
 local function questAndOther()
     mock.fireEvent("QUEST_TURNED_IN", 990001, 1200, 3500)

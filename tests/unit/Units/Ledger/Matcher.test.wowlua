@@ -3,7 +3,10 @@
 -- its other amounts, one that knows only its direction after the exact
 -- ones; a change that comes first waits for its expectation; what nothing
 -- explains is Other after a moment; an expectation without its change is
--- dropped in time.
+-- dropped in time. A sum (a group's loot share) takes several changes: a
+-- line after them, between them, or before them, its rest taken by later
+-- ones; never a change an exact expectation takes; its rest dropped in
+-- time.
 
 import test, expect from "wowlua:test"
 import Matcher, GRACE, TTL from "/Units/Ledger/Matcher"
@@ -101,5 +104,159 @@ local function failed()
     m:Money(-30, 1, 2)
     m:Expire(1 + GRACE)
     expect(out).toEqual({ { kind = "mail", amount = -30, at = 1 }, { kind = "other", amount = -30, at = 2 } })
+    expectNoErrors()
+end
+
+local function sumOf(amount: number): Expectation
+    return { kind = "loot", amount = amount, sum = true }
+end
+
+@test("a share's line after two changes: both its, each booked on its own")
+local function sumAfter()
+    local m, out = matcher()
+    m:Money(352, 197.4, 1)
+    m:Money(109, 197.9, 2)
+    m:Expect(sumOf(461), 198.4)
+    expect(out).toEqual({ { kind = "loot", amount = 352, at = 1 }, { kind = "loot", amount = 109, at = 2 } })
+    expect(m:Waiting()).toBe(false)
+    -- three changes and the line after them
+    m:Money(442, 883.6, 3)
+    m:Money(274, 884.0, 4)
+    m:Money(327, 884.4, 5)
+    m:Expect(sumOf(1043), 884.5)
+    expect(#out).toBe(5)
+    expect(out[5]).toEqual({ kind = "loot", amount = 327, at = 5 })
+    expect(m:Waiting()).toBe(false)
+    -- a single change that fits wins over a sum of others
+    m:Money(100, 900, 6)
+    m:Money(150, 900.1, 7)
+    m:Money(250, 900.2, 8)
+    m:Expect(sumOf(250), 900.5)
+    expect(out[6]).toEqual({ kind = "loot", amount = 250, at = 8 })
+    expect(#m.changes).toBe(2)
+    expectNoErrors()
+end
+
+@test("a share's line between its changes; its rest taken by the next change of exactly that")
+local function sumBetween()
+    local m, out = matcher()
+    m:Money(113, 694.4, 1)
+    m:Expect(sumOf(373), 695.0)
+    expect(out).toEqual({ { kind = "loot", amount = 113, at = 1 } })
+    expect(m.expects[1].rest).toBe(260)
+    m:Money(260, 695.2, 2)
+    expect(out[2]).toEqual({ kind = "loot", amount = 260, at = 2 })
+    expect(m:Waiting()).toBe(false)
+    -- the line before every change: each waits its moment, then is part of it
+    m:Expect(sumOf(461), 700)
+    m:Money(352, 700.3, 3)
+    m:Money(109, 700.8, 4)
+    expect(#out).toBe(2)
+    m:Expire(700.3 + GRACE)
+    expect(out[3]).toEqual({ kind = "loot", amount = 352, at = 3 })
+    expect(m.expects[1].rest).toBe(109)
+    m:Expire(700.8 + GRACE)
+    expect(out[4]).toEqual({ kind = "loot", amount = 109, at = 4 })
+    expect(m:Waiting()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a sum's rest takes later changes no bigger than it, each after its moment, until it is 0")
+local function sumRest()
+    local m, out = matcher()
+    m:Money(199, 383.8, 1)
+    m:Money(323, 384.2, 2)
+    m:Expect(sumOf(712), 384.8)
+    expect(#out).toBe(2)
+    expect(m.expects[1].rest).toBe(190)
+    -- (a change with no line of its own)
+    m:Money(150, 385.0, 3)
+    -- bigger than what is left: not the sum's
+    m:Money(500, 385.1, 4)
+    expect(#out).toBe(2)
+    m:Expire(385.1 + GRACE)
+    expect(out[3]).toEqual({ kind = "loot", amount = 150, at = 3 })
+    expect(out[4]).toEqual({ kind = "other", amount = 500, at = 4 })
+    expect(m.expects[1].rest).toBe(40)
+    m:Money(40, 388, 5)
+    expect(out[5]).toEqual({ kind = "loot", amount = 40, at = 5 })
+    expect(m:Waiting()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a sum never takes what an exact expectation explains, nor money out")
+local function sumNotSwallowing()
+    local m, out = matcher()
+    m:Expect(sumOf(500), 0)
+    -- a quest's reward, its expectation first
+    m:Expect({ kind = "quest", amount = 300 }, 0.1)
+    m:Money(300, 0.4, 1)
+    expect(out).toEqual({ { kind = "quest", amount = 300, at = 1 } })
+    -- a vendor's sale whose money comes before its expectation: it waits
+    -- its moment for it, not taken by the sum
+    m:Money(200, 1, 2)
+    m:Expect({ kind = "vendor", amount = 200, item = 1 }, 1.5)
+    expect(out[2]).toEqual({ kind = "vendor", amount = 200, at = 2 })
+    -- money out is never part of a sum
+    m:Money(-50, 2, 3)
+    m:Expire(2 + GRACE)
+    expect(out[3]).toEqual({ kind = "other", amount = -50, at = 3 })
+    expect(m.expects[1].rest).toBe(500)
+    -- a smaller change, after its moment, is the sum's, never an exact
+    -- expectation's; with no sum waiting it is Other
+    m:Expect({ kind = "mail", amount = 900 }, 5)
+    m:Money(100, 5.1, 4)
+    m:Expire(5.1 + GRACE)
+    expect(out[4]).toEqual({ kind = "loot", amount = 100, at = 4 })
+    m:Clear()
+    m:Expect({ kind = "mail", amount = 900 }, 10)
+    m:Money(100, 10.1, 5)
+    m:Expire(10.1 + GRACE)
+    expect(out[5]).toEqual({ kind = "other", amount = 100, at = 5 })
+    -- a line waiting is a sum only when it says so
+    m:Clear()
+    m:Expect({ kind = "loot", amount = 300 }, 20)
+    m:Money(100, 20.1, 6)
+    m:Expire(20.1 + GRACE)
+    expect(out[6]).toEqual({ kind = "other", amount = 100, at = 6 })
+    expectNoErrors()
+end
+
+@test("a sum's rest dropped in time: kept for a change that came in its time, never for a later one")
+local function sumExpires()
+    local m, out = matcher()
+    m:Expect(sumOf(400), 0)
+    m:Money(100, 1, 1)
+    m:Expire(1 + GRACE)
+    expect(out).toEqual({ { kind = "loot", amount = 100, at = 1 } })
+    -- a change just before its time is up: still its after the moment
+    m:Money(50, TTL - 0.5, 2)
+    m:Expire(TTL)
+    expect(#m.expects).toBe(1)
+    m:Expire(TTL - 0.5 + GRACE)
+    expect(out[2]).toEqual({ kind = "loot", amount = 50, at = 2 })
+    expect(m:Waiting()).toBe(false)
+    -- kept past its time for a change that came in it, it fits nothing
+    -- new, not even exactly what is left
+    m:Expect(sumOf(400), 20)
+    m:Money(100, 21, 3)
+    m:Expire(21 + GRACE)
+    m:Money(200, 20 + TTL - 1, 4)
+    m:Expire(20 + TTL)
+    expect(#m.expects).toBe(1)
+    m:Money(100, 20 + TTL + 0.1, 5)
+    m:Expire(20 + TTL - 1 + GRACE)
+    expect(out[4]).toEqual({ kind = "loot", amount = 200, at = 4 })
+    expect(#m.expects).toBe(0)
+    m:Expire(20 + TTL + 0.1 + GRACE)
+    expect(out[5]).toEqual({ kind = "other", amount = 100, at = 5 })
+    expect(m:Waiting()).toBe(false)
+    -- nothing came in its time
+    m:Expect(sumOf(250), 40)
+    m:Expire(40 + TTL)
+    expect(m:Waiting()).toBe(false)
+    m:Money(250, 40 + TTL + 1, 6)
+    m:Expire(40 + TTL + 1 + GRACE)
+    expect(out[6]).toEqual({ kind = "other", amount = 250, at = 6 })
     expectNoErrors()
 end
