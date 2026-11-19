@@ -7,6 +7,7 @@
 -- Read only: what is kept between reads (the learned ranks, the classes,
 -- the build trees) stays on the module, which hands it in.
 
+import SuuUI from "/Core/API"
 import type TalentBuildNode as BuildTalent from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -25,22 +26,31 @@ local TREE_GAP = 1500 -- more than this between columns: another tree
 -- The game's data
 --------------------------------------------------------------------------------
 
+-- Whether a condition asks for points spent (a row's gate). The game's
+-- spentAmountRequired is what is still missing by its own count (every
+-- tree's points), 0 once met (Forever's recorded answers: "Spend 29 more
+-- points" with one point spent, 0 and no tooltip text when met), so it says
+-- that a row is gated, not by how much: the gate is the row's.
+local function asksPoints(configID: number, condID: number): boolean
+    local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
+    return c ~= nil and asNumber(c.spentAmountRequired) ~= nil
+end
+
+-- The conditions of `conditions` that don't ask for points (a level, a
+-- quest…): the game's own words for those still go in a talent's tooltip.
+export function otherConditions(configID: number, conditions: number[]): number[]
+    local out: number[] = {}
+    for _, condID in ipairs(conditions) do
+        if not asksPoints(configID, condID) then
+            out[#out + 1] = condID
+        end
+    end
+    return out
+end
+
 -- A talent on your trees (or an inspected player's): where it is, its
 -- ranks learned and planned, what the game says it can do, its talent, its
 -- place in its tree's grid; drawn with what the page sets on it.
--- The most points a node's conditions ask be spent (its row's gate; 0: none).
-local function gateOf(configID: number, conditions: number[]): number
-    local gate = 0
-    for _, condID in ipairs(conditions) do
-        local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
-        local need = c and asNumber(c.spentAmountRequired)
-        if need and need > gate then
-            gate = need
-        end
-    end
-    return gate
-end
-
 export type PageNode = {
     id: number,
     x: number,
@@ -53,7 +63,8 @@ export type PageNode = {
     open: boolean,
     meetsEdges: boolean,
     conditions: number[],
-    -- the points its tree needs before it opens (its row's gate; 0: none)
+    -- the points its tree needs before it opens (its row's gate, row x
+    -- UI.TALENT_ROW_POINTS when a condition asks for points; 0: none)
     gate: number,
     edges: TraitOutEdgeInfo[],
     name: string,
@@ -218,6 +229,8 @@ export function collect(configID: number, baseline: Baseline): Collected?
     local learned = baseline.learned
     -- the nodes, placed
     local nodes: PageNode[], byID: { [number]: PageNode } = {}, {}
+    -- the nodes whose conditions ask for points (gated by their row)
+    local gated: { [number]: boolean } = {}
     local minY: number? = nil
     for _, nodeID in ipairs(errors.tryValue(C_Traits.GetTreeNodes, treeID) or {}) do
         local ni = placedNode(configID, nodeID)
@@ -244,7 +257,7 @@ export function collect(configID: number, baseline: Baseline): Collected?
                 open = ni.isAvailable == true and ni.meetsEdgeRequirements == true,
                 meetsEdges = ni.meetsEdgeRequirements == true,
                 conditions = ni.conditionIDs or {},
-                gate = gateOf(configID, ni.conditionIDs or {}),
+                gate = 0,
                 edges = ni.visibleEdges or {},
                 name = talent.name,
                 icon = talent.icon,
@@ -256,6 +269,12 @@ export function collect(configID: number, baseline: Baseline): Collected?
             }
             nodes[#nodes + 1] = n
             byID[nodeID] = n
+            for _, condID in ipairs(n.conditions) do
+                if asksPoints(configID, condID) then
+                    gated[nodeID] = true
+                    break
+                end
+            end
             minY = math.min(minY or n.y, n.y)
         end
     end
@@ -294,6 +313,9 @@ export function collect(configID: number, baseline: Baseline): Collected?
         local points = 0
         for _, n in ipairs(c.nodes) do
             n.col, n.row = gridCell(n.x, n.y, c.minX, c.maxX, top)
+            if gated[n.id] then
+                n.gate = n.row * SuuUI.UI.TALENT_ROW_POINTS
+            end
             n.tree = t
             t.nodes[#t.nodes + 1] = n
             points = points + n.rank + n.pending
@@ -340,18 +362,22 @@ export function collect(configID: number, baseline: Baseline): Collected?
     }
 end
 
+-- The points a node's row still waits for in its own tree, in words, or
+-- nil (open). Its own tree's: the game counts every tree's points, so its
+-- answer opens a row with points spent elsewhere.
+export function gateNeed(n: PageNode): string?
+    local tree = n.tree
+    if n.gate > 0 and tree and tree.points < n.gate then
+        return ("Requires %d points in %s"):format(n.gate, tree.name)
+    end
+    return nil
+end
+
 -- Why a node can't take a point: the tree's points, or a talent above it.
-export function requirement(configID: number, n: PageNode): string?
-    for _, condID in ipairs(n.conditions) do
-        local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
-        local need = c and asNumber(c.spentAmountRequired)
-        local tree = n.tree
-        -- (in its own tree: the game's isMet counts every tree's points)
-        local short = c ~= nil and need ~= nil and need > 0 and
-            (c.isMet == false or (tree ~= nil and tree.points < need))
-        if c and short then
-            return ("Requires %d points in %s"):format(need, tree and tree.name or "this tree")
-        end
+export function requirement(_configID: number, n: PageNode): string?
+    local gate = gateNeed(n)
+    if gate then
+        return gate
     end
     if not n.meetsEdges then
         for _, from in ipairs(n.requires) do

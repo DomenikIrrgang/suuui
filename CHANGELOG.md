@@ -5,6 +5,8 @@
 ### Fixed
 
 - Raid frames: when a pet disappears or someone leaves the raid during a fight, the raid frames no longer throw a burst of "Blocked in combat" errors with a stutter. They now follow such changes during the fight.
+- Talents: a talent row now really stays closed until its own tree has the points it needs (5 a row), even when you have points in your other trees, and the talent's tooltip says so ("Requires 10 points in Arms"). Before, points in one tree still opened the next rows of the others, and their tooltips said nothing about points.
+- Raid page: Ready check and a member's Promote, Demote, Make leader and Remove from group use the game's current group functions, so they keep working when the game's backward-compatibility functions are turned off.
 
 ## 0.21.0 (2026-11-17)
 

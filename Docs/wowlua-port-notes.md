@@ -887,6 +887,20 @@ From: diag-social.
   (UI/TalentTree `traitTooltip`). Either the declaration lacks it or the
   client's struct does, and the "spend N more points" line never shows: check
   `C_Traits.GetConditionInfo` in the client docs or with a probe. (ui-settings)
+  **Checked (2026-11-19):** the client's struct has `tooltipFormat`, not
+  `tooltipText`; Blizzard_SharedTalentUI (loaded at login) wraps
+  `C_Traits.GetConditionInfo` in Lua and adds `tooltipText`
+  (Blizzard_SharedTalentUtil.lua), and wowlua 0.13.15 declares it, so
+  `traitTooltip` reads it typed (since 2ccd3af2). The recorded answers show
+  the line does come: `spentAmountRequired` is what is still *missing* by the
+  game's count of every tree's points ("Spend 29 more points" with one point
+  spent), and a met condition answers 0 with no `tooltipFormat` or
+  `tooltipText`. What was wrong was Units/Talents' gate: it took
+  `spentAmountRequired` as the row's points, so a row the game called met
+  had gate 0 and opened with points in another tree. The gate is the row's
+  now (row × `UI.TALENT_ROW_POINTS` when a condition asks for points) and the
+  talent's tooltip says it ("Requires 10 points in Arms"), leaving out the
+  game's points line, which counts every tree.
 
 <a id="c34"></a>
 
@@ -933,6 +947,7 @@ From: units-chat.
 | `InviteUnit` (fallback behind `C_PartyInfo.InviteUnit`) | Units/Chat, RaidPlanner, Notifications, Social, GroupFinder, Guild | units-chat, units-group, units-notices, units-social |
 | `ChatFrame_SendBNetTell` (fallback behind `ChatFrameUtil.SendBNetTell`) | Units/Notifications, Social | units-notices, units-social |
 | `BNSetAFK`, `BNSetDND`, `ConvertToRaid` | Units/Social | units-social |
+| `DoReadyCheck`, `PromoteToLeader`, `PromoteToAssistant`, `DemoteAssistant`, `UninviteUnit` | Units/Social | (source) |
 | `LE_PARTY_CATEGORY_INSTANCE` | Units/Marks, Convergences | units-group, units-talents |
 | `ItemLocation` (FrameXML's `ItemLocationMixin` global) | Units/AuctionHouse `sellable()` | units-trade |
 | `AbandonSkill` (behind `C_SkillInfo.AbandonSkill`) | Units/Professions | (source) |
@@ -942,6 +957,20 @@ From: units-chat.
 | `DBM`, `BigWigsLoader` (third-party, load after SuuUI) | Units/Timeline | units-hud |
 
 `TOTEM_MULTI_CAST_SUMMON_SPELLS` is cast to `any` (UI/ClassBars, ui-units).
+
+**Checked (2026-11-19)** against Forever's own UI and the recorded client:
+`InviteUnit` and `ChatFrame_SendBNetTell` are no longer read (the stdlib's
+`invite`, `ChatFrameUtil`). `BNSetAFK`, `BNSetDND`, `ConvertToRaid` and
+`AbandonSkill` don't exist as globals on Forever, while `C_BattleNet.SetAFK` /
+`SetDND`, `C_PartyInfo.ConvertToRaid` and `C_SkillInfo.AbandonSkill` do (the
+fallbacks were dead: removed). `DoReadyCheck`, `PromoteToLeader`,
+`PromoteToAssistant`, `DemoteAssistant` and `UninviteUnit` exist only as
+Blizzard_DeprecatedPartyInfo's wrappers, loaded while the
+`loadDeprecationFallbacks` CVar is on: Social calls `C_PartyInfo`'s now.
+`GetNumTalentGroups`, `GetTalentResetCost`, `GetTalentWipeCost`,
+`GetLootMethod` and `GetQuestGreenRange` are read only by probes, which record
+whether they exist (the talent costs don't: the reset's cost is
+`CONFIRM_TALENT_WIPE`'s first argument, as Blizzard's popup has it).
 
 ### Checked and fine
 
@@ -1468,7 +1497,8 @@ From: ui-units.
 - **Fixed (361539f): Sections `moduleRow`** walks `{ m.description, … }` with
   `ipairs`, so a module without a description shows an empty row (no "Built
   in", no state, no error). Fix: drop nils first. (ui-settings)
-- **Check: TalentTree `traitTooltip`** (C33). (ui-settings)
+- **Checked: TalentTree `traitTooltip`** (C33): it shows the game's line; the
+  gate it lacked was Units/Talents'. (ui-settings)
 - **Hooks on Blizzard's group finder, guild control and windows** go through
   wowlua:hooks; the SetPoint hooks on tab buttons and windows now allocate per
   call (S2). WindowSkin's per-window `PLAYER_REGEN_ENABLED` frames are
@@ -1663,6 +1693,5 @@ Taint-sensitive paths and open questions to try on Forever (with
 - The action bars' event dispatcher on Core/Events (UI/ActionBar).
 - Nameplates (`SetAlpha` hook, per-plate unit events).
 - Whether comparing a secret with nil errors (D-X4).
-- `C_Traits.GetConditionInfo`'s `tooltipText` (C33); whether
-  `GetSpellCooldown`'s table itself can be secret (C34); the quest functions'
-  index argument (C30); `JoinChannelByName`'s `hasVoice` (C31).
+- Whether `GetSpellCooldown`'s table itself can be secret (C34); the quest
+  functions' index argument (C30); `JoinChannelByName`'s `hasVoice` (C31).
