@@ -1,7 +1,7 @@
 -- Units/Ledger/GoldPage: the chosen characters' gold day by day (7, 30,
 -- 90 days, All; never before the first day kept; the crosshair's tooltip;
 -- too little kept yet), the characters by ruleset (the class colour,
--- "you", their gold, the change over the range signed, when last seen; a
+-- "you", their gold, the change since yesterday signed, when last seen; a
 -- click chooses one), what it's worth (the gold, for now).
 
 import test, expect, afterEach from "wowlua:test"
@@ -37,11 +37,12 @@ local function line()
     mock.click(p.range.buttons[1])
     expect(p.days).toBe(7)
     expect(p.chart.count).toBe(7)
-    expect(p.headChange:GetText()).toBe("7 days")
+    -- the characters' change stays since yesterday
+    expect(p.headChange:GetText()).toBe("Since yesterday")
     mock.click(p.range.buttons[4])
     expect(p.days).toBe(0)
     expect(p.chart.count).toBe(today - assert(M:GoldFirstDay(nil)) + 1)
-    expect(p.headChange:GetText()).toBe("All")
+    expect(p.headChange:GetText()).toBe("Since yesterday")
     p.chart:SetHover(1)
     expect(assert(assert(p.chart.tip.content).lines)[1][1]).toBe("Gold")
 end
@@ -57,6 +58,12 @@ end
 @test("the characters by ruleset: headings, the class colour, you, the change signed; a click chooses one")
 local function characters()
     seed()
+    -- Kaelith played today too: 500 more than at yesterday's end
+    local today = M:Today()
+    local kd = assert(M:GoldMap()["Kaelith - " .. SuuUI.Ruleset()]).days
+    kd[today] = assert(kd[today - 1]) + 500
+    -- a character first kept today: no change yet
+    M:GoldMap()["Newplayer - " .. SuuUI.Ruleset()] = { name = "Newplayer", ruleset = SuuUI.Ruleset(), seen = time(), days = { [today] = 7000 } }
     local p = page()
     local headings: string[], names: string[] = {}, {}
     for _, r in ipairs(p.rows) do
@@ -78,9 +85,11 @@ local function characters()
             expect(tokenOf(r.diamond)).toBe("class-mage")
             expect(r.you).never.toBeShown()
             expect(r.seen:GetText()).toBe("yesterday")
-            -- 20 days of a thousand more each day
+            -- since yesterday's end
             expect(r.change.sign).toBe(1)
-            expect(r.change.copper).toBe(19000)
+            expect(r.change.copper).toBe(500)
+        elseif r.key == "Newplayer - " .. SuuUI.Ruleset() then
+            expect(r.change.copper).toBe(0)
         elseif r.key == M:CharKey() then
             me = r
             expect(r.you).toBeShown()
@@ -101,7 +110,7 @@ local function characters()
         end
     end
     expect(p.section.title:GetText()).toBe("Gold, Kaelith")
-    expect(p.w.money.copper).toBe(639000)
+    expect(p.w.money.copper).toBe(639500)
     -- a heading isn't a choice
     for _, r in ipairs(p.rows) do
         if not r.key and r:IsShown() then
