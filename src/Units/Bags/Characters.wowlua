@@ -2,10 +2,14 @@
 -- The Bags module's saved characters (see "Every character's bags and bank"
 -- in Units/Bags.wowlua) as data: the picker's order and labels, item counts
 -- for tooltips, the "All characters" search, the banner over a saved copy,
--- the foot's note, and the texts they use. Pure logic over the saved
--- entries; the module reads the bags and draws.
+-- the foot's note, and the texts they use; each character's bags and bank
+-- as holdings (Core/Holdings, for the Ledger's "What it's worth"); the
+-- items in each one's mail (the mail module's holdings) in the counts and
+-- the search. Pure logic over the saved entries; the module reads the bags
+-- and draws.
 
 import SuuUI from "/Core/API"
+import type Holding from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as tbl from "wowlua:table"
 
@@ -23,8 +27,9 @@ export const QUALITY: { [number]: string } = {
 }
 local DIAMOND = "Interface\\AddOns\\SuuUI\\Media\\Textures\\ChatDiamond.tga"
 
--- A saved slot ({ icon, count, quality, link }) and a saved bags or bank.
-export type SavedItem = { t: number | string, c?: number, q: number, l?: string }
+-- A saved slot ({ icon, count, quality, link, soulbound }) and a saved bags
+-- or bank. (`b` since 0.48: a slot saved before says nothing of it)
+export type SavedItem = { t: number | string, c?: number, q: number, l?: string, b?: boolean }
 export type Snapshot = { slots: (SavedItem | false)[], size: number, free: number, seen?: number }
 -- A character's saved entry (the Bags module's data per character): who,
 -- their money and when, their bags and bank, what they wear (item links).
@@ -42,7 +47,13 @@ export type CharEntry = {
 -- A saved character: its key, its entry, and whether it is you.
 export type Character = { key: string, d: CharEntry, me: boolean }
 -- How many of an item a character has, and where.
-export type Counts = { c: Character, total: number, bags: number, bank: number, equipped: number }
+export type Counts = { c: Character, total: number, bags: number, bank: number, mail: number, equipped: number }
+-- A character's mail as the mail module keeps it (nil: never read, or
+-- that module is off): SuuUI.Holdings' "mail".
+export type MailOf = (key: string) -> Holding?
+-- An item known only by its ID (in the mail): its name, quality and icon
+-- (nil: not known yet).
+export type ItemOf = (id: number) -> { name: string, quality: number, icon: number | string }?
 -- One found item of "All characters": where it is ({ c, where, count }).
 export type Place = { c: Character, where: string, count: number }
 export type Result = {
@@ -176,12 +187,61 @@ export function charLabel(c: Character, myRealm: string): string
     return level and (name .. " · " .. level) or name
 end
 
--- How many of item `id` each character has, in their order (those with any).
-export function countsFor(chars: Character[], id: number): Counts[]
+-- A saved bags or bank as a holding (Core/Holdings): item ID -> how many,
+-- the soulbound ones, when it was saved (`live`: this character's bags,
+-- saved as they change). Nil: none saved.
+export function holdingOf(box: Snapshot?, seen: number?, live: boolean?): Holding?
+    if not box then
+        return nil
+    end
+    local items: { [number]: number } = {}
+    local bound: { [number]: number }? = nil
+    for _, e in ipairs(box.slots) do
+        local link = e and e.l
+        local id = link and tonumber(link:match("item:(%d+)"))
+        if e and id then
+            local n = e.c or 1
+            items[id] = (items[id] or 0) + n
+            if e.b then
+                local b = bound or {}
+                bound = b
+                b[id] = (b[id] or 0) + n
+            end
+        end
+    end
+    return { items = items, bound = bound, seen = box.seen or seen or 0, live = live }
+end
+
+-- Whether two saved bags hold the same items (each slot's item, count and
+-- soulbound state; icons and quality follow the item).
+export function sameItems(a: Snapshot?, b: Snapshot?): boolean
+    if not a or not b then
+        return a == b
+    end
+    local sa, sb = a.slots, b.slots
+    if #sa ~= #sb then
+        return false
+    end
+    for i = 1, #sa do
+        local x, y = sa[i], sb[i]
+        if x and y then
+            if x.l ~= y.l or x.c ~= y.c or x.b ~= y.b then
+                return false
+            end
+        elseif x or y then
+            return false
+        end
+    end
+    return true
+end
+
+-- How many of item `id` each character has, in their order (those with
+-- any): in the bags, the bank, the mail (`mailOf`) and worn.
+export function countsFor(chars: Character[], id: number, mailOf: MailOf?): Counts[]
     local out: Counts[] = {}
     local key = tostring(id)
     for _, c in ipairs(chars) do
-        local n: Counts = { c = c, total = 0, bags = 0, bank = 0, equipped = 0 }
+        local n: Counts = { c = c, total = 0, bags = 0, bank = 0, mail = 0, equipped = 0 }
         local function count(box: Snapshot?): number
             local total = 0
             for _, e in ipairs(box and box.slots or {}) do
@@ -198,7 +258,9 @@ export function countsFor(chars: Character[], id: number): Counts[]
                 n.equipped = n.equipped + 1
             end
         end
-        n.total = n.bags + n.bank + n.equipped
+        local mail = mailOf and mailOf(c.key)
+        n.mail = mail and mail.items[id] or 0
+        n.total = n.bags + n.bank + n.mail + n.equipped
         if n.total > 0 then
             out[#out + 1] = n
         end
@@ -207,10 +269,26 @@ export function countsFor(chars: Character[], id: number): Counts[]
 end
 
 -- "All characters": every item whose name holds `query` (lower case) on the
--- characters' bags and bank, most first; each with its places as a line
--- (`places`, with class diamonds) and as tooltip lines (`lines`).
-export function searchResults(chars: Character[], query: string): Result[]
+-- characters' bags, bank and mail (`mailOf`; its items named by `itemOf`),
+-- most first; each with its places as a line (`places`, with class
+-- diamonds) and as tooltip lines (`lines`).
+export function searchResults(chars: Character[], query: string, mailOf: MailOf?, itemOf: ItemOf?): Result[]
     local found: { [string]: Result }, order: Result[] = {}, {}
+    local function add(c: Character, where: string, id: string, count: number, make: () -> Result)
+        local r = found[id]
+        if not r then
+            r = make()
+            found[id] = r
+            order[#order + 1] = r
+        end
+        r.count = r.count + count
+        local at = r.at[#r.at]
+        if not (at and at.c == c and at.where == where) then
+            at = { c = c, where = where, count = 0 }
+            r.at[#r.at + 1] = at
+        end
+        at.count = at.count + count
+    end
     for _, c in ipairs(chars) do
         for _, where in ipairs({ "bags", "bank" }) do
             local box: Snapshot? = c.d.bags
@@ -221,10 +299,8 @@ export function searchResults(chars: Character[], query: string): Result[]
                 local link = e and e.l
                 local name = link and nameOf(link)
                 if e and link and name and name:lower():find(query, 1, true) then
-                    local id = link:match("item:(%d+)") or name
-                    local r = found[id]
-                    if not r then
-                        r = {
+                    add(c, where, link:match("item:(%d+)") or name, e.c or 1, function(): Result
+                        return {
                             icon = e.t,
                             quality = QUALITY[e.q] or "common",
                             label = name,
@@ -232,16 +308,31 @@ export function searchResults(chars: Character[], query: string): Result[]
                             count = 0,
                             at = {},
                         }
-                        found[id] = r
-                        order[#order + 1] = r
-                    end
-                    r.count = r.count + (e.c or 1)
-                    local at = r.at[#r.at]
-                    if not (at and at.c == c and at.where == where) then
-                        at = { c = c, where = where, count = 0 }
-                        r.at[#r.at + 1] = at
-                    end
-                    at.count = at.count + (e.c or 1)
+                    end)
+                end
+            end
+        end
+        -- the mail: items by ID, named by the client or the price store
+        local mail = mailOf and itemOf and mailOf(c.key)
+        if mail and itemOf then
+            local ids: number[] = {}
+            for id in pairs(mail.items) do
+                ids[#ids + 1] = id
+            end
+            table.sort(ids)
+            for _, id in ipairs(ids) do
+                local it = itemOf(id)
+                if it and it.name:lower():find(query, 1, true) then
+                    add(c, "mail", tostring(id), mail.items[id] or 0, function(): Result
+                        return {
+                            icon = it.icon,
+                            quality = QUALITY[it.quality] or "common",
+                            label = it.name,
+                            link = "item:" .. id,
+                            count = 0,
+                            at = {},
+                        }
+                    end)
                 end
             end
         end
@@ -257,7 +348,7 @@ export function searchResults(chars: Character[], query: string): Result[]
         for _, at in ipairs(r.at) do
             local text = ("%s · %s ×%d"):format(
                 at.c.d.name or at.c.key,
-                at.where == "bank" and "Bank" or "Bags",
+                at.where == "bank" and "Bank" or at.where == "mail" and "Mail" or "Bags",
                 at.count
             )
             parts[#parts + 1] = classDiamond(at.c.d.class) .. text
