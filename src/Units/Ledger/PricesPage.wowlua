@@ -10,9 +10,12 @@
 -- first; Deals: the furthest under their usual or vendor price first). It
 -- is a VirtualList: only the rows in sight are drawn. A row opens the
 -- item's page.
--- Names come from the client's item cache. One it hasn't got is asked for
--- when its row comes into sight, and while a search is typed a few at a
--- time (never thousands at once); each is filled in as it arrives.
+-- Names come from the Ledger's own (Ledger/Names: kept from the auction
+-- house and the client), else the client's item cache. The items of the
+-- ruleset without one are asked for in the background (a few at a time,
+-- never thousands at once), a row's as it comes into sight before the
+-- rest; each is filled in as it arrives, and a search notes how many it
+-- is still looking up.
 
 import SuuUI from "/Core/API"
 import type DealMark, Text, TextField, FilterMenu, FilterValues, FilterValue, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline from "/Core/API"
@@ -27,8 +30,6 @@ local S = T.space
 export const ROW_H = 32
 export const TOOL_H = 26
 local HEAD_H = 20
--- names asked for while a search is typed: this many each step
-local ASK_STEP, ASK_EVERY = 20, 0.25
 
 -- A row: the item and what the table shows of it.
 export type PriceEntry = {
@@ -305,11 +306,10 @@ export class PricesPage extends Frame
     extras: { [number]: Extra } = {}
     places: Place[] = {}
     today: number = 0
-    -- the names asked for, and those still to ask for a search
-    asked: { [number]: boolean } = {}
-    askTicker: TickerHandle? = nil
     -- names arrived: the list drawn again shortly
     namesPending: boolean = false
+    -- the search's matches still possible: names being looked up
+    lookingUp: number = 0
 
     constructor(parent: Frame, w: LedgerWindow)
         super(nil, parent)
@@ -453,9 +453,6 @@ export class PricesPage extends Frame
         self.empty = UI.Text(self, "body", "ink-muted")
         self.empty:SetPoint("TOP", self.list, "TOP", 0, -60)
         self.empty:Hide()
-        self:HookScript("OnHide", function()
-            self:StopAsking()
-        end)
     end
 
     ----------------------------------------------------------------------------
@@ -496,11 +493,6 @@ export class PricesPage extends Frame
             return
         end
         self.query = q
-        if q ~= "" then
-            self:AskMissing()
-        else
-            self:StopAsking()
-        end
         if self:IsVisible() then
             self:DrawList()
         end
@@ -541,11 +533,15 @@ export class PricesPage extends Frame
         local watches = m:Watches(ruleset)
         local out: PriceEntry[] = {}
         local byID: { [number]: PriceEntry } = {}
+        local missing: number[] = {}
         for _, itemID in ipairs(m:Items(ruleset)) do
             local sm = m:Summary(itemID, ruleset)
             if sm then
                 local look = sm.look
-                local name, quality = parts.cachedInfo(itemID)
+                local name, quality = m:ItemName(itemID)
+                if not name then
+                    missing[#missing + 1] = itemID
+                end
                 local icon, classID = parts.instantInfo(itemID)
                 local under, uv = m:Deal(itemID, look.low, ruleset)
                 local e: PriceEntry = {
@@ -570,6 +566,8 @@ export class PricesPage extends Frame
             end
         end
         self.entries, self.byID, self.builtFor = out, byID, ruleset
+        -- (in the background: the search finds them as they come)
+        m:AskNames(missing)
         return out
     end
 
@@ -620,6 +618,8 @@ export class PricesPage extends Frame
             end
         end
         local today = self.today
+        local names = self.w.m:Names()
+        local lookingUp = 0
         local out: PriceEntry[] = {}
         for _, e in ipairs(all) do
             local keep = true
@@ -648,11 +648,15 @@ export class PricesPage extends Frame
             if keep and q ~= "" then
                 local name = e.name
                 keep = name ~= nil and name:lower():find(q, 1, true) ~= nil
+                if not name and names:Pending(e.itemID) then
+                    lookingUp += 1
+                end
             end
             if keep then
                 out[#out + 1] = e
             end
         end
+        self.lookingUp = lookingUp
         self:Sort(out)
         return out
     end
@@ -702,59 +706,46 @@ export class PricesPage extends Frame
     -- Names from the client
     ----------------------------------------------------------------------------
 
-    -- An item's name asked for (once).
+    -- An item's name asked for, before the rest (its row is in sight).
     function Ask(itemID: number)
-        if self.asked[itemID] then
-            return
-        end
-        self.asked[itemID] = true
-        C_Item.RequestLoadItemDataByID(itemID)
+        self.w.m:Names():Ask(itemID, true)
     end
 
-    -- While a search is typed: the names still missing asked for, a few at
-    -- a time.
-    function AskMissing()
-        if self.askTicker then
-            return
+    -- Whether the list shows differently for a name come (`named`) or given
+    -- up: a search or the Quality filter waits for it, the names' order, or
+    -- its row is in sight (thousands come in the background after a scan:
+    -- the list isn't sorted again for each).
+    function Waits(itemID: number, named: boolean): boolean
+        if self.query ~= "" then
+            return true
         end
-        local list = self:Build()
-        local i = 0
-        self.askTicker = self.w.m:Every(ASK_EVERY, function()
-            local asked = 0
-            while asked < ASK_STEP and i < #list do
-                i += 1
-                local e = list[i]
-                if not e.name and not self.asked[e.itemID] then
-                    self:Ask(e.itemID)
-                    asked += 1
-                end
+        if not named then
+            return false
+        end
+        if self.sortKey == "name" or #UI.FilterList(self.filters.q) > 0 then
+            return true
+        end
+        for _, r in ipairs(self.list:Rows()) do
+            local e = r:IsShown() and (r :: PriceRow).entry or nil
+            if e and e.itemID == itemID then
+                return true
             end
-            if i >= #list then
-                self:StopAsking()
-            end
-        end)
-    end
-
-    function StopAsking()
-        local t = self.askTicker
-        if t then
-            t:Cancel()
         end
-        self.askTicker = nil
+        return false
     end
 
-    -- A name arrived: kept, and the list drawn again shortly (once for many).
+    -- A name arrived (or was given up): the list drawn again shortly (once
+    -- for many) when it shows it or a search waits for it.
     function ItemInfo(itemID: number)
         local e = self.byID[itemID]
         if not (e and self.entries) or e.name then
             return
         end
-        local name, quality = parts.cachedInfo(itemID)
-        if not name then
-            return
+        local name, quality = self.w.m:ItemName(itemID)
+        if name then
+            e.name, e.quality = name, quality
         end
-        e.name, e.quality = name, quality
-        if self.namesPending or not self:IsVisible() then
+        if self.namesPending or not self:IsVisible() or not self:Waits(itemID, name ~= nil) then
             return
         end
         self.namesPending = true
@@ -836,6 +827,11 @@ export class PricesPage extends Frame
         else
             text = n == 1 and "1 item" or (parts.count(n) .. " items")
         end
+        local more = self.query ~= "" and self.lookingUp or 0
+        if more > 0 then
+            local words = more == 1 and "1 more name" or (parts.count(more) .. " more names")
+            text = text .. " \194\183 Looking up " .. words .. "\226\128\166"
+        end
         self.countText:SetValue(text)
         local empty: string? = nil
         if n == 0 then
@@ -851,6 +847,8 @@ export class PricesPage extends Frame
                 empty = "You watch nothing on this ruleset: open an item and choose Watch."
             elseif show == "bags" then
                 empty = "Nothing in your bags has a price on this ruleset."
+            elseif more > 0 then
+                empty = "Nothing matches yet: looking up the names of " .. parts.count(more) .. " more items."
             else
                 empty = "Nothing matches."
             end

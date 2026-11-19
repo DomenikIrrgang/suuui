@@ -240,6 +240,32 @@ local function deals()
     expect(p.w.prices.show).toBe("deals")
 end
 
+@test("a deal and a latest row: the names the Ledger kept, though the client hasn't got them")
+local function keptNames()
+    seed()
+    seedBooks()
+    -- a deal whose item the client hasn't got, its name from the scan
+    mock.defineItem(990631, { name = "Test Hidden Moss", quality = 2, sellPrice = 900 }, { cached = false, delay = 600 })
+    M:KeepName(990631, "Test Hidden Moss", 2)
+    for k = 3, 1, -1 do
+        M:RecordLook(990631, 1000, 0, 1, 1, time() - k * 86400)
+    end
+    M:RecordLook(990631, 10, 0, 1, 1)
+    M:BookTx({ at = time() - 10, kind = "vendor", amount = 900, item = 990631, qty = 1 })
+    mock.advanceTime(0.05)
+    local p = page()
+    local found = false
+    for _, r in ipairs(p.dealRows) do
+        if r:IsShown() and r.itemID == 990631 then
+            expect(r.name:GetText()).toBe("Test Hidden Moss")
+            found = true
+        end
+    end
+    expect(found).toBe(true)
+    -- the latest: its sale at a vendor, by the kept name
+    expect(p.latestRows[1].name:GetText()).toBe("Test Hidden Moss")
+end
+
 @test("no scan yet: how to find deals; All prices")
 local function noScan()
     local p = page()

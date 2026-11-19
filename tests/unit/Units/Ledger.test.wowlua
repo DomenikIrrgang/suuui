@@ -34,7 +34,12 @@ const DAY_SECONDS = 86400
 local function cleanup()
     events.offAll(LISTENER)
     local d = M:Data()
-    d.prices, d.scans, d.watches, d.pruned = nil, nil, nil, nil
+    d.prices, d.scans, d.watches, d.pruned, d.names = nil, nil, nil, nil, nil
+    local names = M.itemNames
+    if names then
+        names:Stop()
+        names.tries, names.gaveUp = {}, {}
+    end
     M.cache, M.vendor = {}, {}
     M:Reset("dealPercent")
     M:Reset("dealVendor")
@@ -351,6 +356,12 @@ local function prune()
         M:RecordLook(1000000 + i, 100, 0, 1, 1, time() - 61 * DAY_SECONDS)
     end
     expect(M:NeedsPrune()).toBe(true)
+    -- the names kept: the gone items' dropped with them, a watched one's not
+    M:KeepName(DUST, "Test Dust", 1)
+    M:KeepName(SHARD, "Test Shard", 2)
+    M:KeepName(HIDE, "Test Hide", 1)
+    M:KeepName(BAR, "Test Bar", 1)
+    M:WatchItem(HIDE, 400)
     -- (the money changes of the tests before booked by now, and told)
     mock.advanceTime(3)
     mock.advanceTime(0.01)
@@ -365,9 +376,51 @@ local function prune()
     expect(#M:Looks(SHARD, 60)).toBe(1)
     expect(M:Latest(1000000 + 900)).toBeNil()
     expect(M:NeedsPrune()).toBe(false)
+    local names = assert(M:Data().names)
+    expect(names[DUST]).toBeNil()
+    expect(names[BAR]).toBeNil()
+    expect(names[SHARD]).toBe("2Test Shard")
+    expect(names[HIDE]).toBe("1Test Hide")
     -- once a day
     M:Prune()
     expect(M.pruneTicker).toBeNil()
+end
+
+@test("item names: told with a search's look and a scan's, kept for every ruleset; the client's answers kept for the Ledger's items")
+local function itemNames()
+    -- a search's look, with the name and quality the house told
+    AH:Emit("SUUUI_AUCTION_SEEN", DUST, 120, 0, 40, 2, "search", "Test Dust", 1)
+    expect(assert(M:Data().names)[DUST]).toBe("1Test Dust")
+    -- a scan's: the names it had (none for the bar: the client hadn't it)
+    AH:Emit("SUUUI_AUCTION_SCANNED", { SHARD, 90, 0, 1, 1, BAR, 50, 0, 4, 1 }, 2, { [SHARD] = "Test Shard" }, { [SHARD] = 2 })
+    mock.advanceTime(0.05)
+    local names = assert(M:Data().names)
+    expect(names[SHARD]).toBe("2Test Shard")
+    -- the rest asked for after the scan: the bar is in the client's cache
+    mock.advanceTime(0.3)
+    expect(names[BAR]).toBe("1Test Bar")
+    -- one lookup for every ruleset (no per-ruleset copy)
+    expect({ M:ItemName(SHARD) }).toEqual({ "Test Shard", 2 })
+    -- the client's answers: either event, for an item the Ledger knows
+    const SLOW = 990405
+    mock.defineItem(SLOW, { name = "Test Slow Hide", quality = 3 })
+    M:RecordLook(SLOW, 300, 0, 1, 1)
+    mock.fireEvent("GET_ITEM_INFO_RECEIVED", SLOW, true)
+    expect(names[SLOW]).toBe("3Test Slow Hide")
+    const STRANGER = 990406
+    mock.defineItem(STRANGER, { name = "Test Stranger", quality = 1 })
+    mock.fireEvent("ITEM_DATA_LOAD_RESULT", STRANGER, true)
+    expect(names[STRANGER]).toBeNil()
+    -- one asked for: ITEM_DATA_LOAD_RESULT, as the game answers a request
+    const ASKED = 990407
+    mock.defineItem(ASKED, { name = "Test Asked Hide", quality = 1 }, { cached = false, delay = 600 })
+    M:Names():Ask(ASKED)
+    mock.advanceTime(0.25)
+    expect(M:Names().flying[ASKED] ~= nil).toBe(true)
+    mock.defineItem(ASKED, { name = "Test Asked Hide", quality = 1 })
+    mock.fireEvent("ITEM_DATA_LOAD_RESULT", ASKED, true)
+    expect(names[ASKED]).toBe("1Test Asked Hide")
+    expect(M:Names():Pending(ASKED)).toBe(false)
 end
 
 @test("an account's data from before the transactions: the first books prune keeps today's prices and the rest")

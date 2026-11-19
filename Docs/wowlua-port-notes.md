@@ -1285,6 +1285,20 @@ those calls.
 
 From: ui-units.
 
+<a id="s24"></a>
+
+### S24. wowlua:item: asking the client again
+
+`wowlua:item`'s `load` asks the client for an item once and waits for its
+answer (`ITEM_DATA_LOAD_RESULT` or `GET_ITEM_INFO_RECEIVED`); until one comes
+the item stays requested, so a later `load` after a timeout never asks again.
+The Ledger loads thousands of names after a Scan all and asks again for those
+without an answer after a while (Ledger/Names), so it calls
+`C_Item.RequestLoadItemDataByID` itself and hears both events. Needs a
+re-request after the timeout (or a `retry` option).
+
+From: the Ledger (2026-11-19).
+
 ## 4. Port decisions to review
 
 ### Found by the VM tests and fixed during integration

@@ -122,7 +122,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V56](#v56) | VM | low | open (unverified) | `SetText`'s `OnTextChanged` arrives a frame later |
 | [V57](#v57) | VM | low | open | `SetFontObject` keeps a font string's colour; the game's sets the font object's |
 | [V58](#v58) | VM | low | open | `wowlua screenshot` draws no `Line` regions |
-| [V59](#v59) | VM | low | open | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
+| [V59](#v59) | VM | low | not a gap (as the game) | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
 | [V60](#v60) | VM | low | open | `/use <bag> <slot>` at a vendor sells nothing |
 | [V61](#v61) | VM | medium | open | A trade has no money and never completes |
 | [V62](#v62) | VM | low | open | `GetSendMailPrice` leaves out the money attached; a send can't fail |
@@ -1066,9 +1066,9 @@ A `Line` (`frame:CreateLine`, `SetStartPoint`/`SetEndPoint`, `SetThickness`, a c
 
 ### V59. A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes
 
-*Status: open (0.13.15).*
+*Status: not a gap: the engine does as the game (0.13.15).*
 
-An item defined with `{ cached = false, delay = d }` is cached `d` seconds after `C_Item.RequestLoadItemDataByID`, but the engine sends no `GET_ITEM_INFO_RECEIVED` (the game does). Code that fills names in as they arrive (the Ledger's Prices and item page) is tested by firing the event after the delay (`tests/unit/Units/Ledger/PricesPage.test.wowlua`, `ItemPage.test.wowlua`). (the Ledger window 2026-11-18)
+An item defined with `{ cached = false, delay = d }` is cached `d` seconds after `C_Item.RequestLoadItemDataByID`, and the engine answers with `ITEM_DATA_LOAD_RESULT(itemID, true)`, not `GET_ITEM_INFO_RECEIVED`. So does the game: the ledger probe (`/suu probe ledger`, 2026-11-18) saw only `ITEM_DATA_LOAD_RESULT` for requested items, and `GET_ITEM_INFO_RECEIVED` only for a load `GetItemInfo` started (and an item that doesn't exist, with `success` false). The Ledger listened for `GET_ITEM_INFO_RECEIVED` alone, so in game its names never filled in, and its tests hid that by firing the event by hand. It hears both now (Ledger/Names), and the tests wait for the engine's answer (`tests/unit/Units/Ledger/PricesPage.test.wowlua`, `ItemPage.test.wowlua`, `TransactionsPage.test.wowlua`). (the Ledger window 2026-11-18; corrected 2026-11-19)
 
 <a id="v60"></a>
 

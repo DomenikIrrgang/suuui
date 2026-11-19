@@ -234,10 +234,7 @@ export class TxRow extends Button
         local id = t.item
         local room = page.places[3].w - 24 - S["space-3"]
         if id then
-            local name, quality = parts.cachedInfo(id)
-            if not name then
-                page:Ask(id)
-            end
+            local name, quality = page.w.m:ItemName(id, true)
             local icon = parts.instantInfo(id)
             self.slot.skin:SetItem({ icon = icon, quality = parts.QUALITY[quality or 1] or "common" })
             self.slot:Show()
@@ -307,8 +304,7 @@ export class TransactionsPage extends Frame
     -- the lines drawn, and the characters by key
     lines: Line[] = {}
     chars: { [string]: { name: string, class?: string } } = {}
-    -- the names asked for; names arrived (drawn again shortly)
-    asked: { [number]: boolean } = {}
+    -- names arrived (drawn again shortly)
     namesPending: boolean = false
 
     constructor(parent: Frame, w: LedgerWindow)
@@ -468,18 +464,21 @@ export class TransactionsPage extends Frame
         return key and self.chars[key] or nil
     end
 
-    -- An item's name asked for (once).
-    function Ask(itemID: number)
-        if self.asked[itemID] then
-            return
+    -- Whether a row in sight is of the item.
+    function Showing(itemID: number): boolean
+        for _, r in ipairs(self.list:Rows()) do
+            local t = r:IsShown() and (r :: any).tx :: Tx? or nil
+            if t and t.item == itemID then
+                return true
+            end
         end
-        self.asked[itemID] = true
-        C_Item.RequestLoadItemDataByID(itemID)
+        return false
     end
 
-    -- A name arrived: the rows in sight drawn again shortly (once for many).
+    -- A name arrived: the rows in sight drawn again shortly (once for
+    -- many) when one of them waits for it.
     function ItemInfo(itemID: number)
-        if not self.asked[itemID] or self.namesPending or not self:IsVisible() then
+        if self.namesPending or not self:IsVisible() or not self:Showing(itemID) then
             return
         end
         self.namesPending = true
@@ -504,7 +503,7 @@ export class TransactionsPage extends Frame
         end
         local id = t.item
         if id then
-            local name = parts.cachedInfo(id)
+            local name = self.w.m:ItemName(id)
             if name and name:lower():find(q, 1, true) then
                 return true
             end

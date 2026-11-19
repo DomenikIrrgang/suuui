@@ -253,6 +253,12 @@ export function readScan(self: AuctionHouseModule)
     -- auctions with a buyout: a writ's requested item found by its name
     local byName: { [string]: number } = {}
     local writNames: { [number]: string } = {}
+    -- (0.48) the names and qualities the house told, by item, told along
+    -- (none for an item the client hadn't cached, nor for one whose
+    -- auctions have different names: a random suffix's, "… of the Bear")
+    local names: { [number]: string } = {}
+    local qualities: { [number]: number } = {}
+    local mixed: { [number]: boolean } = {}
     local i = 0
     -- (kept: a scan ended meanwhile stops it, and so does the module
     -- turning off)
@@ -263,7 +269,7 @@ export function readScan(self: AuctionHouseModule)
         end
         local stop = math.min(n, i + 2500)
         for k = i, stop - 1 do
-            local ok, name, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
+            local ok, name, _, count, quality, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
                 AH.GetReplicateItemInfo,
                 k
             )
@@ -272,6 +278,13 @@ export function readScan(self: AuctionHouseModule)
                 if named then
                     if byName[named] == nil then
                         byName[named] = itemID
+                    end
+                    local was = names[itemID]
+                    if was == nil and not mixed[itemID] then
+                        names[itemID] = named
+                        qualities[itemID] = secret.asNumber(quality)
+                    elseif was and was ~= named then
+                        names[itemID], qualities[itemID], mixed[itemID] = nil, nil, true
                     end
                     if writTarget(named) then
                         writNames[itemID] = named
@@ -312,7 +325,7 @@ export function readScan(self: AuctionHouseModule)
             d.writs = fromScan(writNames, byName, d.writs)
             local seconds = GetTime() - sc.started
             d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
-            self:Emit("SUUUI_AUCTION_SCANNED", looks, items)
+            self:Emit("SUUUI_AUCTION_SCANNED", looks, items, names, qualities)
             self:EndScan()
             self:Note(
                 ("Scan done: %s auctions, %s items, in %d s."):format(
