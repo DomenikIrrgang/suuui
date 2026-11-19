@@ -121,7 +121,8 @@ local function has(list: FilterValue[], v: FilterValue): boolean
     return false
 end
 
--- A "many" option: a chip that's on or off.
+-- A "many" option: a chip that's on or off (a "one" option too, where its
+-- segmented control wouldn't fit the panel: the chip chooses it).
 class FilterChip extends Button
     readonly bg: Texture
     readonly edgeOn: Frame
@@ -149,6 +150,11 @@ class FilterChip extends Button
         self.label:SetValue(option.label)
         self:SetSize(math.ceil(left + self.label:GetUnboundedStringWidth() + S["space-4"]), CHIP_H)
         self:SetScript("OnClick", function()
+            if group.kind == "one" then
+                menu.value[group.key] = option.value
+                menu:Changed()
+                return
+            end
             local list = filterList(menu.value[group.key])
             if has(list, option.value) then
                 local kept: FilterValue[] = {}
@@ -399,7 +405,12 @@ export class FilterMenu extends Button
                 end
             end
             for _, chip in ipairs(row.chips or {}) do
-                local on = has(filterList(v), chip.option.value)
+                local on: boolean
+                if row.group.kind == "one" then
+                    on = type(v) ~= "table" and v == chip.option.value
+                else
+                    on = has(filterList(v), chip.option.value)
+                end
                 chip.bg:SetShown(on)
                 chip.edgeOn:SetShown(on)
                 chip.label:SetColor(on and "ink" or "ink-muted")
@@ -474,20 +485,8 @@ export class FilterMenu extends Button
             label:SetPoint("TOPLEFT", col.frame, "TOPLEFT", 0, -y)
             label:SetValue(g.label)
             y = y + T.type.caption.lineHeight + S["space-2"]
-            if g.kind == "one" then
-                local control = segmented(p, {
-                    options = g.options or {},
-                    onChange = function(v: FilterValue)
-                        menu.value[g.key] = v
-                        menu:Changed()
-                    end,
-                })
-                row.control = control
-                control:SetPoint("TOPLEFT", col.frame, "TOPLEFT", 0, -y)
-                col.width = math.max(col.width, control:GetWidth())
-                y = y + control:GetHeight()
-            elseif g.kind == "many" then
-                -- chips, wrapping onto the next line
+            -- chips, wrapping onto the next line
+            local function chipRows()
                 local chips: FilterChip[] = {}
                 row.chips = chips
                 local x = 0
@@ -502,6 +501,27 @@ export class FilterMenu extends Button
                     chips[#chips + 1] = chip
                 end
                 y = y + CHIP_H
+            end
+            if g.kind == "one" then
+                local control = segmented(p, {
+                    options = g.options or {},
+                    onChange = function(v: FilterValue)
+                        menu.value[g.key] = v
+                        menu:Changed()
+                    end,
+                })
+                if not multi and control:GetWidth() > inner then
+                    -- too many to fit side by side: chips that wrap
+                    control:Hide()
+                    chipRows()
+                else
+                    row.control = control
+                    control:SetPoint("TOPLEFT", col.frame, "TOPLEFT", 0, -y)
+                    col.width = math.max(col.width, control:GetWidth())
+                    y = y + control:GetHeight()
+                end
+            elseif g.kind == "many" then
+                chipRows()
             elseif g.kind == "range" then
                 -- two number boxes, a dash between them
                 local fields: { TextField } = {}
