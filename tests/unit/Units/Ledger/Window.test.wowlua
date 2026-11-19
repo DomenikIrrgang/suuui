@@ -12,6 +12,8 @@ import * as events from "/Core/Events"
 import * as settings from "/Core/Settings"
 import expectNoErrors from "../../../helpers"
 import seed, openLedger, wipe, LOTUS from "./LedgerHelpers"
+import * as gold from "/Units/Ledger/Gold"
+import * as days from "/Units/Ledger/Days"
 
 @afterEach
 local function cleanup()
@@ -168,6 +170,36 @@ local function characters()
     w.scope = "c:Nobody"
     w:Refresh()
     expect(w.scope).toBe("all")
+end
+
+@test("the characters' select: as wide as its label at the window's own scale; a long one cut only past 260")
+local function charsWidth()
+    seed()
+    gold.record(M:GoldMap(), "Placeholdername - PvP Roleplay", "Placeholdername", "ROGUE", "PvP Roleplay", days.dayOf(), 100, time())
+    local w = openLedger("gold")
+    -- (a font is drawn at whole pixels of its frame's scale: SuuUI's root
+    -- has its own, so the window's label measured on UIParent was cut short)
+    local frame = w.frame
+    local old = frame:GetScale()
+    frame:SetScale(old * 0.53 / frame:GetEffectiveScale())
+    local function fits(scope: string): boolean
+        w.scope = scope
+        w:Refresh()
+        local t = w.chars.text
+        return t:GetWidth() >= t:GetUnboundedStringWidth()
+    end
+    expect(fits("all")).toBe(true)
+    expect(w.chars.text:GetText()).toBe("All characters")
+    expect(fits("rs:PvP Roleplay")).toBe(true)
+    expect(w.chars.text:GetText()).toBe("All on " .. SuuUI.RulesetName("PvP Roleplay"))
+    expect(fits("c:Placeholdername - PvP Roleplay")).toBe(true)
+    expect(w.chars.text:GetText()).toBe("Placeholdername")
+    expect(w.chars:GetWidth() <= 260).toBe(true)
+    -- (one longer than 260: cut, the select no wider)
+    w.chars:SetOptions({ { value = "x", label = string.rep("Placeholder ", 6) } })
+    w.chars:SetValue("x")
+    expect(w.chars:GetWidth()).toBeCloseTo(260, 3)
+    frame:SetScale(old)
 end
 
 @test("drawn again on a change only while it shows; when it opens after one")
