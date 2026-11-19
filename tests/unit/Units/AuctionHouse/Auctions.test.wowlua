@@ -1,5 +1,6 @@
 -- Units/AuctionHouse/Auctions: the Auctions page: yours (Cancel) and your
--- bids (Bid, Buy out). The engine's house has no bids: stubbed in the
+-- bids (Bid, Buy out); your auctions kept per character (SuuUI.Holdings'
+-- "auctions": sold ones out, ended ones gone). The engine's house has no bids: stubbed in the
 -- tests that need them.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
@@ -11,6 +12,8 @@ import type AuctionRow from "/Units/AuctionHouse/Auctions"
 import * as secret from "wowlua:secret"
 import ORE, BLADE, RING, BAUBLE, GEM, key, state, asked, confirm, auctions, setUp, tearDown, open, win, note, money, shown, tipText, plain, at from "./AuctionHouseHelpers"
 import AuctionsPage from "/Units/AuctionHouse/Auctions"
+import * as ahAuctions from "/Units/AuctionHouse/Auctions"
+import SuuUI from "/Core/API"
 import type AuctionHouseModule from "/Units/AuctionHouse"
 import newParent, expectNoErrors from "../../../helpers"
 
@@ -490,4 +493,74 @@ local function givenModule()
     mock.click(page.tabs[2])
     expect(tab).toHaveBeenCalledWith(fake, "bids")
     parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- Your auctions, kept per character (SuuUI.Holdings' "auctions")
+--------------------------------------------------------------------------------
+
+@test("your auctions kept as the house tells them: on opening, after a post and a cancel; SuuUI.Holdings' auctions; any tab")
+local function ownedKept()
+    local me = assert(M:CharKey())
+    M:Saved().owned = nil
+    M.ownedHeld = {}
+    expect(SuuUI.Holdings.Of(me, "auctions")).toBeNil()
+    -- opening asks for your auctions once the house has been idle a moment
+    open()
+    mock.advanceTime(1)
+    expect(SuuUI.Holdings.Of(me, "auctions")).toBeNil()
+    mock.advanceTime(ahAuctions.OWNED_IDLE + 1)
+    local none = assert(SuuUI.Holdings.Of(me, "auctions"))
+    expect(none.items).toEqual({})
+    -- a post on the Sell tab: kept without opening Auctions
+    AH.PostItem(at(2), 2, 1, nil, 47000)
+    mock.advanceTime(ahAuctions.OWNED_IDLE + 3)
+    local h = assert(SuuUI.Holdings.Of(me, "auctions"))
+    expect(h.items).toEqual({ [BLADE] = 1 })
+    expect(h.seen).toBe(assert(M:Saved().owned).at)
+    -- cancelled: gone
+    win():SetTab("auctions")
+    mock.advanceTime(1)
+    local a = auctions()
+    mock.click(auctionRows(a.mineT)[1])
+    mock.click(a.cancel)
+    mock.advanceTime(2)
+    expect(assert(SuuUI.Holdings.Of(me, "auctions")).items).toEqual({})
+    M:Saved().owned = nil
+end
+
+@test("kept auctions: sold ones left out; each one's end by its seconds, else its band's longest; ended ones gone; never kept")
+local function ownedHolding()
+    openAuctions()
+    local me = assert(M:CharKey())
+    local S, Band = Enum.AuctionStatus, Enum.AuctionHouseTimeLeftBand
+    local owned: OwnedAuctionInfo[] = {
+        { auctionID = 41, itemKey = key(RING), status = S.Sold, quantity = 1, buyoutAmount = 3000 },
+        { auctionID = 42, itemKey = key(ORE), status = S.Active, quantity = 20, timeLeftSeconds = 600 },
+        { auctionID = 43, itemKey = key(ORE), status = S.Active, quantity = 5, timeLeftSeconds = 60 },
+        { auctionID = 44, itemKey = key(BAUBLE), status = S.Active, quantity = 1, timeLeft = Band.Medium },
+    }
+    mock.stub(AH, "GetNumOwnedAuctions", function()
+        return #owned
+    end)
+    mock.stub(AH, "GetOwnedAuctionInfo", function(i: number)
+        return owned[i]
+    end)
+    local now = time()
+    mock.fireEvent("OWNED_AUCTIONS_UPDATED")
+    local kept = assert(M:Saved().owned)
+    expect(kept.a).toEqual({ ORE, 20, now + 600, ORE, 5, now + 60, BAUBLE, 1, now + 7200 })
+    expect(assert(SuuUI.Holdings.Of(me, "auctions")).items).toEqual({ [ORE] = 25, [BAUBLE] = 1 })
+    -- a minute on: the short one ended (sold or back by mail)
+    mock.advanceTime(61)
+    expect(assert(SuuUI.Holdings.Of(me, "auctions")).items).toEqual({ [ORE] = 20, [BAUBLE] = 1 })
+    -- (the reading itself, at any time)
+    local h, nextEnd = ahAuctions.ownedHolding(kept, now + 601)
+    expect(assert(h).items).toEqual({ [BAUBLE] = 1 })
+    expect(nextEnd).toBe(now + 7200)
+    local gone, last = ahAuctions.ownedHolding(kept, now + 7200)
+    expect(assert(gone).items).toEqual({})
+    expect(last).toBeNil()
+    expect(ahAuctions.ownedHolding(nil, now)).toBeNil()
+    M:Saved().owned = nil
 end

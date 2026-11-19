@@ -27,6 +27,9 @@
 -- vendor", with the Ledger's "Mark deals at the auction house"); after Scan
 -- all the foot says how many deals it found; Alt-click on a row's item
 -- opens its price page.
+-- Your auctions kept per character (0.48, AuctionHouse/Auctions keepOwned):
+-- SuuUI.Holdings' "auctions" while this module is on (the Ledger's "What
+-- it's worth"), as the house tells them; ended ones read as gone.
 -- Your searches (asked 2026-11-12): clicking into the search box shows the
 -- last five you ran (Enter or Search) that found something, newest first,
 -- each with the icon of the first item it found; kept per character. A
@@ -48,7 +51,7 @@
 -- Auctions (their pages).
 
 import SuuUI, Module from "/Core/API"
-import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues, SuuButton, LedgerOpenOptions from "/Core/API"
+import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues, SuuButton, LedgerOpenOptions, Holding from "/Core/API"
 import hook from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -78,7 +81,7 @@ import SellPage from "./AuctionHouse/Sell"
 import type Posting from "./AuctionHouse/Sell"
 import * as ahAuctions from "./AuctionHouse/Auctions"
 import AuctionsPage from "./AuctionHouse/Auctions"
-import type AuctionRow, Listed from "./AuctionHouse/Auctions"
+import type AuctionRow, Listed, KeptOwned from "./AuctionHouse/Auctions"
 
 local AUCTION_HOUSE = SuuUI.Services.AUCTION_HOUSE
 local LEDGER = SuuUI.Services.LEDGER
@@ -218,6 +221,9 @@ export type CharStore = {
     history?: HistoryEntry[],
     -- the writs the last Scan all found, by itemID (AuctionHouse/Writs)
     writs?: { [number]: WritEntry },
+    -- your auctions as the house last told them (0.48, AuctionHouse/
+    -- Auctions keepOwned: SuuUI.Holdings' "auctions")
+    owned?: KeptOwned,
 }
 
 --------------------------------------------------------------------------------
@@ -304,6 +310,13 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     historyPending: string? = nil
     historyOpen: boolean = false
     historyQuery: string = ""
+    -- each character's auctions as a holding (OwnedHolding), until kept
+    -- again or one of them ends
+    ownedHeld: { [string]: { at: number, next?: number, h: Holding } } = {}
+    -- your auctions to be asked for once the house is ready (a query sent
+    -- while it answers another is dropped: AuctionHouse/Auctions askOwned)
+    ownedWanted: boolean = false
+    ownedTimer: boolean = false
 
     constructor()
         super({
@@ -342,6 +355,28 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
         end
         return out
+    end
+
+    -- A character's auctions as a holding (nil: never kept): made once
+    -- until kept again or one of them ends.
+    function OwnedHolding(key: string): Holding?
+        local d = self:AllCharData()[key] :: unknown :: CharStore?
+        local kept = d and d.owned
+        if not kept then
+            self.ownedHeld[key] = nil
+            return nil
+        end
+        local now = time()
+        local c = self.ownedHeld[key]
+        if c and c.at == kept.at and (not c.next or now < c.next) then
+            return c.h
+        end
+        local h, nextEnd = ahAuctions.ownedHolding(kept, now)
+        if not h then
+            return nil
+        end
+        self.ownedHeld[key] = { at = kept.at, next = nextEnd, h = h }
+        return h
     end
 
     -- `waiting`: a note for what the house is asked (Searching…), cleared when
@@ -1021,6 +1056,10 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 end
             end)
             self:DrawLedgerButton()
+            -- your auctions: kept for SuuUI.Holdings as the house tells them
+            -- (a wait from before cancelled with the module's timers)
+            self.ownedTimer = false
+            ahAuctions.askOwned(self)
             window:Show()
             window:SetTab("buy")
             self:Note("")
@@ -1031,6 +1070,7 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("AUCTION_HOUSE_CLOSED", function()
             self.open = false
+            self.ownedWanted = false
             self:StopScan()
             -- (no answer comes for a bid or a purchase once the house is closed)
             self:DropBid()
@@ -1116,6 +1156,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function()
             self:Posted()
+            -- (your auctions kept again: the house tells the new list)
+            ahAuctions.askOwned(self)
         end)
         -- prices and "Yours" carry colour codes: drawn again
         self:On("SUUUI_THEME_CHANGED", function()
@@ -1123,9 +1165,13 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         -- Auctions: the lists as the house sends them; after a change, asked again
         self:OnGameEvent("OWNED_AUCTIONS_UPDATED", function()
+            ahAuctions.keepOwned(self)
             if self.tab == "auctions" then
                 self:QueueRefresh()
             end
+        end)
+        SuuUI.Holdings.Provide(self, "auctions", function(key: string): Holding?
+            return self:OwnedHolding(key)
         end)
         self:OnGameEvent("BIDS_UPDATED", function()
             if self.tab == "auctions" then
@@ -1220,6 +1266,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function()
+            if self.ownedWanted then
+                ahAuctions.askOwned(self)
+            end
             local sell = self.sell
             if sell and sell.resend then
                 sell.resend = false

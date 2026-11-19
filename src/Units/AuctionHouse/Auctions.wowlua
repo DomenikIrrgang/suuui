@@ -4,9 +4,19 @@
 -- bids (highest or outbid, your bid remembered; Bid, Buy out). The
 -- module's methods for it (SetAuctionsTab, DrawAuctions, CancelChosen,
 -- RememberBid, BidAgain, BuyOutBid, …) call the functions here.
+--
+-- Your auctions kept per character (0.48, keepOwned: SuuUI.Holdings'
+-- "auctions", the Ledger's "What it's worth"): each one still on the house
+-- when the house last told them (OWNED_AUCTIONS_UPDATED, asked for as the
+-- house opens and after a post, once it has been idle a moment: askOwned;
+-- and whenever the Auctions tab asks), as item, count and when it
+-- ends; sold ones left out (their money comes by mail). Read back
+-- (ownedHolding) without those that ended since: an auction past its end
+-- expired (back by mail) or sold. One sold before its end isn't known until
+-- the house is visited again: the holding says when it was read.
 
 import SuuUI from "/Core/API"
-import type SuuButton, Text, MoneyInput, ItemSlot, Money, TabMarker from "/Core/API"
+import type SuuButton, Text, MoneyInput, ItemSlot, Money, TabMarker, Holding from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import keyInfo, keyTooltip, QUALITY, qualityToken, BAND, coins from "./Common"
@@ -671,4 +681,96 @@ export function buyOutBid(self: AuctionHouseModule)
             self:PlaceBid(id, buyout, name, true)
         end,
     })
+end
+
+--------------------------------------------------------------------------------
+-- Your auctions, kept per character
+--------------------------------------------------------------------------------
+
+-- The longest each band of time left can be (the game tells only the band
+-- when it doesn't tell the seconds): 30 min, 2 h, 12 h, 48 h.
+local BAND_MAX: { [number]: number } = { [0] = 1800, 7200, 43200, 172800 }
+
+-- Your auctions as the house last told them: when, and three numbers each
+-- (item ID, count, when it ends by time()).
+export type KeptOwned = { at: number, a: number[] }
+
+-- The house's list of your auctions now, as kept (sold ones left out).
+export function readOwned(now: number): KeptOwned
+    local list: number[] = {}
+    local sold = Enum.AuctionStatus.Sold
+    for i = 1, tryValue(AH.GetNumOwnedAuctions) or 0 do
+        local o = tryValue(AH.GetOwnedAuctionInfo, i)
+        local id = o and asNumber(o.itemKey and o.itemKey.itemID)
+        if o and id and o.status ~= sold then
+            local secs = asNumber(o.timeLeftSeconds)
+            local ends = now + (secs or BAND_MAX[asNumber(o.timeLeft) or 3] or 172800)
+            list[#list + 1] = id
+            list[#list + 1] = asNumber(o.quantity) or 1
+            list[#list + 1] = math.floor(ends)
+        end
+    end
+    return { at = now, a = list }
+end
+
+-- Your auctions asked for, for keeping, without getting in the player's
+-- way: once the house has been ready for OWNED_IDLE seconds (a query sent
+-- while it answers another gets no answer, the emulator's record of the
+-- client; one sent just before the player's search would hold it up), else
+-- again after its next AUCTION_HOUSE_THROTTLED_SYSTEM_READY.
+export const OWNED_IDLE = 2
+export function askOwned(self: AuctionHouseModule)
+    if not self.open then
+        self.ownedWanted = false
+        return
+    end
+    self.ownedWanted = true
+    if self.ownedTimer then
+        return
+    end
+    self.ownedTimer = true
+    self:After(OWNED_IDLE, function()
+        self.ownedTimer = false
+        if not (self.open and self.ownedWanted) then
+            return
+        end
+        -- (busy: asked again once it is ready, SYSTEM_READY)
+        if tryValue(AH.IsThrottledMessageSystemReady) == false then
+            return
+        end
+        self.ownedWanted = false
+        try(AH.QueryOwnedAuctions, {})
+    end)
+end
+
+-- OWNED_AUCTIONS_UPDATED: this character's auctions kept, and told.
+export function keepOwned(self: AuctionHouseModule)
+    local key = self:CharKey()
+    if not key then
+        return
+    end
+    self:Saved().owned = readOwned(time())
+    self.ownedHeld[key] = nil
+    SuuUI.Holdings.Changed(self, "auctions", key)
+end
+
+-- Kept auctions as a holding at `now`, those ended since left out (nil:
+-- never kept); and when the next of them ends (nil: none left).
+export function ownedHolding(kept: KeptOwned?, now: number): (Holding?, number?)
+    if not kept then
+        return nil, nil
+    end
+    local items: { [number]: number } = {}
+    local nextEnd: number? = nil
+    local a = kept.a
+    for k = 1, #a - 2, 3 do
+        local id, count, ends = a[k], a[k + 1], a[k + 2]
+        if ends > now then
+            items[id] = (items[id] or 0) + count
+            if not nextEnd or ends < nextEnd then
+                nextEnd = ends
+            end
+        end
+    end
+    return { items = items, seen = kept.at }, nextEnd
 end
