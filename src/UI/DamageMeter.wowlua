@@ -22,7 +22,7 @@
 -- GUID. Shares need a division, so they arrive when combat ends. Deaths open
 -- their recap (C_DeathRecap).
 
-import isSecret, isNumber from "wowlua:secret"
+import isSecret, isNumber, amount as orZero from "wowlua:secret"
 import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
@@ -104,6 +104,22 @@ export type MeterApi = {
     GetSessionDurationSeconds: typeof(C_DamageMeter.GetSessionDurationSeconds),
 }
 
+-- A source of the meter's list: what the window reads of it. The game's
+-- documentation gives every source all of these (and more), but the game
+-- has handed the window sources without some of them (around fights,
+-- 2026-11-19), so each may be missing: a row then shows what is there.
+export interface MeterSource
+    name?: string | Secret<string>
+    classFilename?: string
+    isLocalPlayer?: boolean
+    totalAmount?: number | Secret<number>
+    amountPerSecond?: number | Secret<number>
+    deathRecapID?: number
+    deathTimeSeconds?: number | Secret<number>
+    sourceGUID?: string | Secret<string>
+    sourceCreatureID?: number | Secret<number>
+end
+
 -- A death recap's event: what the window reads of it (the game's
 -- declarations leave the structure empty).
 export interface RecapEvent
@@ -153,7 +169,7 @@ export type MeterDrill = {
     row: MeterRowData,
     guid?: string | Secret<string>,
     creature?: number,
-    src?: DamageMeterCombatSourceSecret,
+    src?: MeterSource,
 }
 
 -- The window's options (SetOptions).
@@ -1033,7 +1049,7 @@ export class DamageMeter extends Frame
 
     -- The row data of one source in the list.
     function SourceRow(
-        src: DamageMeterCombatSourceSecret,
+        src: MeterSource,
         i: number,
         top: number | Secret<number>,
         total: (number | Secret<number>)?,
@@ -1132,20 +1148,20 @@ export class DamageMeter extends Frame
         end
         self.empty:SetVisible(false)
         self.note:SetVisible(false)
-        local list: DamageMeterCombatSourceSecret[] = {}
+        local list: MeterSource[] = {}
         for i = 1, #sources do
             list[i] = sources[i]
         end
         -- deaths come newest first: in the order they happened instead
         if deaths then
-            local rev: DamageMeterCombatSourceSecret[] = {}
+            local rev: MeterSource[] = {}
             for i = #list, 1, -1 do
                 rev[#rev + 1] = list[i]
             end
             list = rev
         end
         local ps = PER_SECOND[typeValue]
-        local top: number | Secret<number> = deaths and 1 or (ps and list[1].amountPerSecond or list[1].totalAmount)
+        local top: number | Secret<number> = deaths and 1 or orZero(ps and list[1].amountPerSecond or list[1].totalAmount)
         if isNumber(top) and top <= 0 then
             top = 1
         end
@@ -1251,7 +1267,7 @@ export class DamageMeter extends Frame
 
     -- A death's last moments: oldest first, health after each hit as the bar.
     function RefreshRecap()
-        local src = (self.drill :: MeterDrill).src :: DamageMeterCombatSourceSecret -- (only drilled in)
+        local src = (self.drill :: MeterDrill).src :: MeterSource -- (only drilled in)
         local recapApi = self.recapApi :: RecapApi
         local id = src.deathRecapID
         local ok, given = pcall(recapApi.GetRecapEvents, id)
