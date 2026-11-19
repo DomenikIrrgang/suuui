@@ -121,3 +121,52 @@ local function finding()
     expect(mails.find(id)).toBe(nil)
     expect(mails.find(id, nil, mails.follows)).toBe(1)
 end
+
+--------------------------------------------------------------------------------
+-- The inbox as last read, kept per character
+--------------------------------------------------------------------------------
+
+@test("the inbox kept: each mail's money, COD, when it expires, its items as pairs; how many more than shown")
+local function keep()
+    mailbox({ hello(), bits(), { sender = "Tester", subject = "Pay up", cod = 20000, items = { { id = TOME, count = 1 } }, daysLeft = 0.5 } })
+    local now = time()
+    local kept = mails.keep(now)
+    expect(kept.at).toBe(now)
+    expect(#kept.mails).toBe(3)
+    expect(kept.mails[1]).toEqual({ m = 5000, e = now + 9 * 86400 })
+    expect(kept.mails[2]).toEqual({ m = 300, e = now + 10 * 86400, i = { WATER, 5, TOME, 1 } })
+    expect(kept.mails[3]).toEqual({ c = 20000, e = now + 43200, i = { TOME, 1 } })
+    expect(kept.more).toBeNil()
+    -- the game shows only so many: the rest counted
+    mock.stub(_G, "GetInboxNumItems", function(): (number, number)
+        return 3, 57
+    end)
+    expect(mails.keep(now).more).toBe(54)
+end
+
+@test("the kept inbox as a holding: items added up, money and COD; expired mails left out; when the next expires; never read")
+local function holding()
+    local now = 1700000000
+    local kept: mails.KeptInbox = {
+        at = now - 100,
+        mails = {
+            { m = 5000, e = now + 3600 },
+            { m = 300, e = now + 7200, i = { WATER, 5, TOME, 1 } },
+            { c = 20000, e = now + 600, i = { TOME, 1 } },
+            -- expired: back to its sender
+            { m = 900, e = now - 1, i = { WATER, 20 } },
+            -- no expiry known: kept
+            { i = { WATER, 2 } },
+        },
+    }
+    local h, nextEnd = mails.holdingOf(kept, now)
+    local held = assert(h)
+    expect(held.items).toEqual({ [WATER] = 7, [TOME] = 2 })
+    expect({ held.money, held.cod, held.seen }).toEqual({ 5300, 20000, now - 100 })
+    expect(nextEnd).toBe(now + 600)
+    -- later: the COD mail expired too
+    local later = assert((mails.holdingOf(kept, now + 601)))
+    expect(later.items).toEqual({ [WATER] = 7, [TOME] = 1 })
+    expect(later.cod).toBe(0)
+    expect(mails.holdingOf(nil, now)).toBeNil()
+end

@@ -68,9 +68,14 @@ local function headH(): number
     return S["space-5"] + T.type.header.lineHeight
 end
 
+-- a title's glyph (0.48), px
+local GLYPH_PX = 14
+
 export type PanelOptions = {
     name?: string,
     title?: string,
+    -- 0.48: a glyph's name left of the title (the Ledger's coin)
+    glyph?: string,
     meta?: string,
     keybind?: string,
     closable?: boolean,
@@ -90,6 +95,13 @@ local function buildHead(f: Panel, opts: PanelOptions)
     local title = text(f, "header", "gilt-text")
     f.title = title
     title:SetValue(opts.title)
+    if opts.glyph then
+        local g = f:CreateTexture(nil, "ARTWORK")
+        g:SetSize(GLYPH_PX, GLYPH_PX)
+        draw.glyph(g, opts.glyph)
+        draw.paint(g, "gilt-text")
+        f.titleGlyph = g
+    end
 
     -- Right of the title, right to left: close, key chip, meta, all centred
     -- on the title's line (the first placed by PlaceHead, the rest each
@@ -170,6 +182,8 @@ export class Panel extends Frame
     ornBR?: Texture
     -- the header (titled panels only)
     title?: Text
+    -- 0.48: the glyph left of the title
+    titleGlyph?: Texture
     meta?: Text
     close?: Button
     key?: KeyChip
@@ -270,11 +284,18 @@ export class Panel extends Frame
     -- The head and the body from the title's line height: at build, and
     -- again when a theme changes it.
     function PlaceHead()
-        if not self.title then
+        local title = self.title
+        if not title then
             return
         end
         local headRight, divider = self.headRight :: Region, self.divider :: Frame
-        self.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        local glyph = self.titleGlyph
+        if glyph then
+            glyph:SetPoint("LEFT", self, "TOPLEFT", S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
+            title:SetPoint("TOPLEFT", S["space-5"] + GLYPH_PX + S["space-3"], -S["space-5"])
+        else
+            title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+        end
         headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
         local chained = self.headChain :: { region: Region, gap: string? }[]
         for i = 2, #chained do
@@ -540,6 +561,8 @@ export type WindowTab = { key: string, label: string, disabled?: boolean | (() -
 export type WindowOptions = {
     name?: string,
     title?: string,
+    -- 0.48: a glyph's name left of the title
+    glyph?: string,
     meta?: string,
     keybind?: string,
     onClose?: (panel: Panel) -> (),
@@ -636,6 +659,7 @@ export class WindowFrame extends Panel
         super(parent, {
             name = opts.name,
             title = opts.title,
+            glyph = opts.glyph,
             meta = opts.meta,
             keybind = opts.keybind,
             closable = true,

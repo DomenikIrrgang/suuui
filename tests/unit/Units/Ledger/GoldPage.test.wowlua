@@ -1,0 +1,279 @@
+-- Units/Ledger/GoldPage: the chosen characters' gold day by day (7, 30,
+-- 90 days, All; never before the first day kept; the crosshair's tooltip;
+-- too little kept yet), the characters by ruleset (the class colour,
+-- "you", their gold, the change since yesterday signed, when last seen; a
+-- click chooses one), what it's worth (the gold, the bags, bank, auctions
+-- and mail at each ruleset's usual prices from the modules' holdings, all
+-- of it, the note of what was left out; "—" and how to count a place never
+-- read, "as of" one read earlier, a module off; following changes; the
+-- loading mark at size; the note not cut off).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type GoldPage, WorthRow from "/Units/Ledger/GoldPage"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import seed, openLedger, wipe, see, LOTUS, KINGSBLOOD, ESSENCE, ORE, holdings, cleanHoldings, saved, forget, usual from "./LedgerHelpers"
+import * as parts from "/Units/Ledger/Parts"
+import worthNote from "/Units/Ledger/GoldPage"
+import PASS_ITEMS from "/Units/Ledger/Worth"
+import internal M as Mail from "/Units/Mail"
+import internal ownOf from "/Core/Modules"
+import * as settings from "/Core/Settings"
+
+@afterEach
+local function cleanup()
+    wipe()
+    expectNoErrors()
+end
+
+local function page(): GoldPage
+    return openLedger("gold").gold
+end
+
+@test("the line: the chosen characters' gold at each day's end, never before the first day kept; the ranges")
+local function line()
+    seed()
+    local p = page()
+    local today = M:Today()
+    -- 20 days kept: 30 days shows those 21 (20 back and today)
+    expect(p.chart.count).toBe(21)
+    local d = assert(p.chart.data)
+    expect(d.series[1].label).toBe("Gold")
+    expect(d.series[1].values[21]).toBe(M:GoldTotal(nil))
+    expect(d.tipLabels and d.tipLabels[21]).toBe("Today")
+    mock.click(p.range.buttons[1])
+    expect(p.days).toBe(7)
+    expect(p.chart.count).toBe(7)
+    -- the characters' change stays since yesterday
+    expect(p.headChange:GetText()).toBe("Since yesterday")
+    mock.click(p.range.buttons[4])
+    expect(p.days).toBe(0)
+    expect(p.chart.count).toBe(today - assert(M:GoldFirstDay(nil)) + 1)
+    expect(p.headChange:GetText()).toBe("Since yesterday")
+    p.chart:SetHover(1)
+    expect(assert(assert(p.chart.tip.content).lines)[1][1]).toBe("Gold")
+end
+
+@test("only today kept: the line waits for tomorrow")
+local function first()
+    M:RecordMoney(true)
+    local p = page()
+    expect(p.chart.empty).toBeShown()
+    expect(p.chart.emptyText:GetText()).toContain("tomorrow")
+end
+
+@test("the characters by ruleset: headings, the class colour, you, the change signed; a click chooses one")
+local function characters()
+    seed()
+    -- Kaelith played today too: 500 more than at yesterday's end
+    local today = M:Today()
+    local kd = assert(M:GoldMap()["Kaelith - " .. SuuUI.Ruleset()]).days
+    kd[today] = assert(kd[today - 1]) + 500
+    -- a character first kept today: no change yet
+    M:GoldMap()["Newplayer - " .. SuuUI.Ruleset()] = { name = "Newplayer", ruleset = SuuUI.Ruleset(), seen = time(), days = { [today] = 7000 } }
+    local p = page()
+    local headings: string[], names: string[] = {}, {}
+    for _, r in ipairs(p.rows) do
+        if r:IsShown() then
+            if r.key then
+                names[#names + 1] = r.name:GetText() or ""
+            else
+                headings[#headings + 1] = r.heading:GetText() or ""
+            end
+        end
+    end
+    expect(headings).toEqual({ SuuUI.RulesetName(), "Roleplay Ruleset" })
+    expect(#names).toBe(#M:Characters())
+    local kaelith: unknown, me: unknown = nil, nil
+    for _, r in ipairs(p.rows) do
+        if r.key == "Kaelith - " .. SuuUI.Ruleset() then
+            kaelith = r
+            expect(tokenOf(r.name)).toBe("class-mage")
+            expect(tokenOf(r.diamond)).toBe("class-mage")
+            expect(r.you).never.toBeShown()
+            expect(r.seen:GetText()).toBe("yesterday")
+            -- since yesterday's end
+            expect(r.change.sign).toBe(1)
+            expect(r.change.copper).toBe(500)
+        elseif r.key == "Newplayer - " .. SuuUI.Ruleset() then
+            expect(r.change.copper).toBe(0)
+        elseif r.key == M:CharKey() then
+            me = r
+            expect(r.you).toBeShown()
+            expect(r.seen:GetText()).toBe("now")
+        end
+    end
+    expect(kaelith).toBeTruthy()
+    expect(me).toBeTruthy()
+    -- a click chooses it: the line and the foot follow, the row lit
+    for _, r in ipairs(p.rows) do
+        if r.key == "Kaelith - " .. SuuUI.Ruleset() then
+            mock.hover(r)
+            expect(r.hover).toBeShown()
+            mock.hover(nil)
+            mock.click(r)
+            expect(p.w.scope).toBe("c:Kaelith - " .. SuuUI.Ruleset())
+            expect(r.sel).toBeShown()
+        end
+    end
+    expect(p.section.title:GetText()).toBe("Gold, Kaelith")
+    expect(p.w.money.copper).toBe(639500)
+    -- a heading isn't a choice
+    for _, r in ipairs(p.rows) do
+        if not r.key and r:IsShown() then
+            mock.click(r)
+        end
+    end
+    expect(p.w.scope).toBe("c:Kaelith - " .. SuuUI.Ruleset())
+end
+
+const DAY = 86400
+
+local function row(p: GoldPage, place: string): WorthRow
+    return assert(p.worthRows[place])
+end
+
+local function shownMoney(r: WorthRow): number?
+    if r.none:IsShown() then
+        return nil
+    end
+    return r.money.copper
+end
+
+@test("what it's worth: the gold, bags, bank, auctions and mail at each ruleset's usual prices; all of it; the note counts what was left out")
+local function worth()
+    seed()
+    local kaelith, lum = holdings()
+    local p = page()
+    local gold = M:GoldTotal(nil)
+    expect(p.worthGold.money.copper).toBe(gold)
+    local here = SuuUI.Ruleset()
+    -- bags: yours, Kaelith's (her unseen item left out), Lum's lotus at Roleplay's
+    local bags = 2 * usual(LOTUS) + 20 * usual(KINGSBLOOD) + 10 * usual(KINGSBLOOD) + usual(LOTUS, "Roleplay")
+    expect(shownMoney(row(p, "bags"))).toBe(bags)
+    expect(usual(LOTUS, "Roleplay")).toBe(500000)
+    expect(row(p, "bags").label:GetText()).toBe("In bags")
+    -- (yours live; the oldest of the others; Brannoc's not counted)
+    expect(row(p, "bags").meta:GetText()).toBe("as of " .. parts.when(time() - 2 * DAY) .. " \194\183 1 not counted yet")
+    expect(shownMoney(row(p, "bank"))).toBe(usual(LOTUS))
+    expect(row(p, "bank").meta:GetText()).toBe("as of 3 days ago \194\183 3 not counted yet")
+    -- the mail: the essence and the letter's money, read just now
+    local mail = usual(ESSENCE) + 5000
+    expect(shownMoney(row(p, "mail"))).toBe(mail)
+    expect(row(p, "mail").meta:GetText()).toContain("as of today ")
+    -- your auctions never seen: "—" and how to count them
+    expect(shownMoney(row(p, "auctions"))).toBeNil()
+    expect(row(p, "auctions").none:GetText()).toBe("\226\128\148")
+    expect(row(p, "auctions").meta:GetText()).toBe("Visit the auction house to count them")
+    expect(p.worthAll.money.copper).toBe(gold + bags + usual(LOTUS) + mail)
+    -- left out: the soulbound ore, Kaelith's 3 never seen
+    expect(p.worthNote:GetText()).toBe(
+        "Items at their own ruleset\226\128\153s usual price; soulbound items and ones never seen on an auction house left out (4 of them)."
+    )
+    -- one character: Kaelith's own, dated
+    p.w.scope = "c:" .. kaelith
+    p.w:Refresh()
+    expect(shownMoney(row(p, "bags"))).toBe(10 * usual(KINGSBLOOD))
+    expect(row(p, "bags").meta:GetText()).toBe("as of yesterday")
+    expect(row(p, "bank").meta:GetText()).toBe("as of 3 days ago")
+    expect(shownMoney(row(p, "mail"))).toBeNil()
+    expect(row(p, "mail").meta:GetText()).toBe("Open your mailbox to count it")
+    expect(p.worthNote:GetText()).toContain("(3 of them)")
+    -- Brannoc: nothing counted anywhere; nothing left out
+    p.w.scope = "c:Brannoc - " .. here
+    p.w:Refresh()
+    expect(shownMoney(row(p, "bags"))).toBeNil()
+    expect(row(p, "bags").meta:GetText()).toBe("Log in to count them")
+    expect(row(p, "bank").meta:GetText()).toBe("Visit your bank to count it")
+    expect(p.worthAll.money.copper).toBe(M:GoldTotal({ char = "Brannoc - " .. here }))
+    expect(p.worthNote:GetText()).toContain("are left out.")
+    -- all on Roleplay: Lum at Roleplay's prices
+    p.w.scope = "rs:Roleplay"
+    p.w:Refresh()
+    expect(p.worthGold.money.copper).toBe(41000)
+    expect(shownMoney(row(p, "bags"))).toBe(500000)
+    cleanHoldings(kaelith, lum)
+end
+
+@test("what it's worth follows: your bags changing, a price changing; the mail module off says so")
+local function follows()
+    seed()
+    local kaelith, lum = holdings()
+    local p = page()
+    local before = assert(shownMoney(row(p, "bags")))
+    -- 5 more kingsblood in your bags: drawn again
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = LOTUS, count = 2 },
+            [2] = { id = KINGSBLOOD, count = 25 },
+            [3] = { id = ORE, count = 1, bound = true },
+        },
+    })
+    mock.advanceTime(1.5)
+    mock.advanceFrames(2)
+    expect(shownMoney(row(p, "bags"))).toBe(before + 5 * usual(KINGSBLOOD))
+    -- the lotus seen far dearer today: its usual price moves, the rows follow
+    local was = usual(LOTUS)
+    for k = 1, 12 do
+        see(LOTUS, was * 3, was * 3, 1, 1, time() - k * 60)
+    end
+    mock.advanceFrames(2)
+    local now = assert(shownMoney(row(p, "bags")))
+    expect(now - before - 5 * usual(KINGSBLOOD)).toBe(2 * (usual(LOTUS) - was))
+    -- the mail module off: its row says so
+    local own = ownOf(Mail)
+    own.reloadToToggle = false
+    settings.set("mail", "enabled", false)
+    mock.advanceFrames(2)
+    expect(shownMoney(row(p, "mail"))).toBeNil()
+    expect(row(p, "mail").meta:GetText()).toBe("The Mail module is off")
+    settings.set("mail", "enabled", true)
+    own.reloadToToggle = true
+    mock.advanceFrames(2)
+    expect(shownMoney(row(p, "mail"))).never.toBeNil()
+    cleanHoldings(kaelith, lum)
+end
+
+@test("thousands of items: worked out a slice a frame behind the loading mark, then the rows; the note in its place")
+local function loading()
+    seed()
+    local kaelith = "Kaelith - " .. SuuUI.Ruleset()
+    local many: { { number } } = {}
+    for k = 1, 1200 do
+        many[k] = { 991000 + k, 2 }
+    end
+    saved(kaelith, "bags", many, time() - DAY)
+    local p = page()
+    expect(p.worthLoading).toBeShown()
+    expect(p.worthNote).never.toBeShown()
+    expect(row(p, "bags").money).never.toBeShown()
+    local guard = 0
+    while p.worthLoading:IsShown() and guard < 100 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    expect(guard >= math.floor(1200 / PASS_ITEMS)).toBe(true)
+    expect(p.worthLoading).never.toBeShown()
+    expect(p.worthNote).toBeShown()
+    -- none of them ever seen: all left out
+    expect(p.worthNote:GetText()).toContain("(2,400 of them)")
+    forget(kaelith)
+end
+
+@test("the note isn't cut off: whole lines, inside the page, at the window's size")
+local function noteFits()
+    seed()
+    local p = page()
+    local note = p.worthNote
+    expect(note:IsTruncated()).toBe(false)
+    expect(note:GetBottom() >= p:GetBottom()).toBe(true)
+    expect(note:GetRight() <= p:GetRight() + 0.5).toBe(true)
+    -- the longest note (thousands left out) too
+    note:SetValue(worthNote(123456))
+    expect(note:IsTruncated()).toBe(false)
+    expect(note:GetBottom() >= p:GetBottom()).toBe(true)
+end

@@ -1,7 +1,8 @@
 -- Units/AuctionHouse/Buy: the Buy page: the game's categories, a search,
 -- its filters and level range, favourites, the results, their sort and more
--- results, a result's tooltip; Shift-click on an item searched; a theme's
--- spacing.
+-- results, a result's tooltip; Shift-click on an item searched; the
+-- Ledger's deal marks beside a result's name and Alt-click on a row; a
+-- theme's spacing.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -18,6 +19,12 @@ import ORE, BLADE, GEM, state, buy, setUp, tearDown, open, win, note, search, sh
 import FavButton from "/Units/AuctionHouse/Buy"
 import type AuctionHouseModule from "/Units/AuctionHouse"
 import newParent from "../../../helpers"
+import internal M as Ledger from "/Units/Ledger"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
+import type LedgerOpenOptions from "/Core/API"
+import * as settings from "/Core/Settings"
+import house, key from "./AuctionHouseHelpers"
+import * as events from "/Core/Events"
 
 local AH = C_AuctionHouse
 
@@ -717,4 +724,257 @@ local function givenModule()
     mock.click(FavButton.new(parent, fake))
     expect(favorites).toHaveBeenCalled()
     parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- The Ledger (0.48): deal marks in the results, Alt-click on a row
+--------------------------------------------------------------------------------
+
+local NUGGET = 990291
+mock.defineItem(NUGGET, { name = "Test Nugget", quality = 1, stackCount = 20, classID = 7, icon = 134400, sellPrice = 4000 })
+
+-- An item's looks in the price store on days before today: lows[k] k days
+-- ago.
+local function ledgerHistory(itemID: number, lows: number[])
+    for k = #lows, 1, -1 do
+        priceStore.look(itemID, lows[k], 0, 10, 2, time() - k * 86400)
+    end
+end
+
+local function forgetLedger()
+    local d = Ledger:Data()
+    d.scans, d.watches = nil, nil
+    priceStore.wipe()
+    Ledger:DropIndexes()
+    Ledger.vendor = {}
+    Ledger:Reset("markDeals")
+end
+
+-- The house with the nugget too: 3,500 each, a vendor pays 4,000.
+local function nuggetHouse()
+    local h = house()
+    h.browse[#h.browse + 1] = { itemKey = key(NUGGET), minPrice = 3500, totalQuantity = 7, containsOwnerItem = false }
+    return h
+end
+
+@test("the Ledger's marks: far under the usual price, under vendor price, beside the name; none without a deal")
+local function dealMarks()
+    ledgerHistory(GEM, { 1500, 1500, 1500 })
+    ledgerHistory(NUGGET, { 5000, 5000, 5000 })
+    open(nuggetHouse())
+    search("")
+    -- (0.48: the name and quality told along, kept in the price store)
+    expect({ SuuUI.Prices.KeptName(GEM) }).toEqual({ "Test Gem", 1 })
+    -- the gem: a third under its usual 15s
+    local gem = resultNamed("Test Gem")
+    expect(gem.under).toBeShown()
+    expect(gem.under.label:GetText()).toBe("33% under")
+    expect(gem.vendor).never.toBeShown()
+    -- right after the name
+    local _, rel = gem.under:GetPoint(1)
+    expect(rel).toBe(gem.name)
+    expect(gem.name:GetWidth() <= gem.name:GetUnboundedStringWidth() + 1).toBe(true)
+    -- the nugget: 30 % under and under what a vendor pays, in that order
+    local nugget = resultNamed("Test Nugget")
+    expect(nugget.under.label:GetText()).toBe("30% under")
+    expect(nugget.vendor).toBeShown()
+    expect(nugget.vendor.label:GetText()).toBe("Under vendor")
+    local _, after = nugget.vendor:GetPoint(1)
+    expect(after).toBe(nugget.under)
+    -- the ore (yours): its usual is today's, no deal; the marks after Yours
+    local ore = resultNamed("Test Ore")
+    expect(ore.under).never.toBeShown()
+    expect(ore.vendor).never.toBeShown()
+    -- the look: arcane on arcane-soft, an arcane edge
+    expect(tokenOf(gem.under.label)).toBe("arcane")
+    -- the setting off: none; on again, back
+    Ledger:Set("markDeals", false)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).never.toBeShown()
+    Ledger:Set("markDeals", true)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).toBeShown()
+    -- the Ledger off: none
+    settings.set("ledger", "enabled", false)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).never.toBeShown()
+    expect(resultNamed("Test Nugget").vendor).never.toBeShown()
+    settings.set("ledger", "enabled", true)
+    mock.advanceTime(0.1)
+    forgetLedger()
+end
+
+@test("Alt-click on a result or an item's auction: its price page in the Ledger, beside the window; a plain click as always")
+local function altClickRows()
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local had = svc.Open
+    local asked: { view?: string, opts?: LedgerOpenOptions }[] = {}
+    svc.Open = function(view: string?, opts: LedgerOpenOptions?)
+        asked[#asked + 1] = { view = view, opts = opts }
+    end
+    open()
+    search("")
+    mock.setModifiers({ alt = true })
+    mock.click(resultNamed("Test Gem"))
+    mock.setModifiers({})
+    expect(#asked).toBe(1)
+    expect(asked[1].view).toBe("item")
+    expect(assert(asked[1].opts).itemID).toBe(GEM)
+    expect(assert(asked[1].opts).beside).toBe(M.window)
+    -- not opened here
+    expect(M.view).toBe("browse")
+    -- Shift-Alt: the row's own click
+    mock.setModifiers({ alt = true, shift = true })
+    mock.click(resultNamed("Test Gem"))
+    mock.setModifiers({})
+    expect(#asked).toBe(1)
+    expect(M.view).never.toBe("browse")
+    -- in an item's view: its auctions' rows too
+    search("blade")
+    mock.click(resultNamed("Test Blade"))
+    mock.advanceTime(1)
+    local rows = shown(buy().itemView.table)
+    expect(#rows > 0).toBe(true)
+    mock.setModifiers({ alt = true })
+    mock.click(rows[1])
+    mock.setModifiers({})
+    expect(#asked).toBe(2)
+    expect(assert(asked[2].opts).itemID).toBe(BLADE)
+    -- the Ledger off: the row's own click
+    svc.Open = had
+    settings.set("ledger", "enabled", false)
+    mock.advanceTime(0.1)
+    expect(M:AltClickItem(GEM)).toBe(false)
+    settings.set("ledger", "enabled", true)
+    mock.advanceTime(0.1)
+end
+
+--------------------------------------------------------------------------------
+-- Results shown, nothing happening: nothing drawn again
+--------------------------------------------------------------------------------
+
+-- Refresh counted (it still draws).
+local function countRefreshes(): () -> number
+    local n = 0
+    local refresh = M.Refresh
+    mock.stub(M, "Refresh", function(_: unknown)
+        n += 1
+        refresh(M)
+    end)
+    return function(): number
+        return n
+    end
+end
+
+@test("results shown, then nothing: an item on several rows (its levels) is one look, told once; nothing is drawn again while they show")
+local function idleResults()
+    -- (the blade has a usual price: the Ledger's marks are worked out)
+    ledgerHistory(BLADE, { 60000, 60000, 60000 })
+    local h = house()
+    h.browse[#h.browse + 1] = { itemKey = key(BLADE, 25), minPrice = 70000, totalQuantity = 1, containsOwnerItem = false }
+    open(h)
+    search("")
+    expect(#shown(buy().results)).toBe(5)
+    -- the blade's two rows: one look, the lowest price and every unit
+    local look = assert(SuuUI.Prices.Latest(BLADE))
+    expect(look.low).toBe(50000)
+    expect(look.qty).toBe(3)
+    -- (the Ledger's marks drawn once more: the look changed its prices)
+    mock.advanceTime(0.1)
+    -- idle: no look told again, nothing drawn (each look an item's rows
+    -- told in turn changed the store, which drew the results again through
+    -- the Ledger's marks, four frames apart: reported 2026-11-19)
+    local changes = 0
+    local owner = {}
+    events.on("SUUUI_PRICE_CHANGED", function()
+        changes += 1
+    end, owner)
+    local refreshes = countRefreshes()
+    mock.advanceFrames(120)
+    events.offAll(owner)
+    expect(changes).toBe(0)
+    expect(refreshes()).toBe(0)
+    expect(M.refreshPending).toBe(false)
+    -- drawn again (the money changed): the same looks, not told again
+    local seen = mock.spy()
+    mock.stub(M, "Seen", seen)
+    mock.player:setMoney(2000000)
+    mock.advanceTime(0.1)
+    expect(refreshes()).toBe(1)
+    expect(seen).never.toHaveBeenCalled()
+    -- the house's results again: told again (a look of this time of day)
+    search("")
+    expect(seen).toHaveBeenCalled()
+    forgetLedger()
+    expectNoErrors()
+end
+
+local LATE_KEY = 990292
+mock.defineItem(LATE_KEY, { name = "Test Late Sword", quality = 2, stackCount = 1, classID = 2, icon = 135274 })
+
+@test("an item key's info: drawn again when it comes while a row waits for it, its name kept; a key no row waits for draws nothing")
+local function keyInfoArrives()
+    -- (the engine's house knows every key at once: this one not yet)
+    local known = false
+    local info = AH.GetItemKeyInfo
+    mock.stub(AH, "GetItemKeyInfo", function(k: ItemKey, ...: unknown): ItemKeyInfo?
+        if k.itemID == LATE_KEY and not known then
+            return nil
+        end
+        return info(k)
+    end)
+    local h = house()
+    h.browse[#h.browse + 1] = { itemKey = key(LATE_KEY), minPrice = 900, totalQuantity = 1, containsOwnerItem = false }
+    open(h)
+    search("")
+    expect(resultNamed("…")).toBeShown()
+    expect(M.keysWaiting).toBe(true)
+    -- (its look told without a name)
+    expect(assert(SuuUI.Prices.Latest(LATE_KEY)).low).toBe(900)
+    expect(SuuUI.Prices.KeptName(LATE_KEY)).toBeNil()
+    known = true
+    mock.fireEvent("ITEM_KEY_ITEM_INFO_RECEIVED", LATE_KEY)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Late Sword")).toBeShown()
+    expect(SuuUI.Prices.KeptName(LATE_KEY)).toBe("Test Late Sword")
+    expect(M.keysWaiting).toBe(false)
+    -- nothing waits: nothing drawn
+    local refreshes = countRefreshes()
+    mock.fireEvent("ITEM_KEY_ITEM_INFO_RECEIVED", ORE)
+    mock.advanceTime(0.1)
+    expect(refreshes()).toBe(0)
+    expectNoErrors()
+end
+
+for i = 1, 60 do
+    mock.defineItem(990300 + i, { name = "Test Lot " .. i, quality = 1, stackCount = 20, classID = 7, icon = 134400 })
+end
+
+@test("many results: only the rows in sight are drawn; scrolling draws the others as they come")
+local function manyResults()
+    local h = house()
+    h.browse = {}
+    for i = 1, 60 do
+        h.browse[i] = { itemKey = key(990300 + i), minPrice = 100 * i, totalQuantity = i, containsOwnerItem = false }
+    end
+    open(h)
+    search("")
+    local t = buy().results
+    local rows = shown(t)
+    expect(#rows > 0).toBe(true)
+    expect(#rows < 60).toBe(true)
+    expect(#t.rows).toBe(#rows)
+    expect(t.list.child:GetHeight()).toBe(60 * 32)
+    expect(resultNamed("Test Lot 1")).toBeShown()
+    -- (every look told, the rows out of sight too)
+    expect(assert(SuuUI.Prices.Latest(990360)).low).toBe(6000)
+    -- scrolled to the end: the last ones drawn, in their lines
+    local list = t.list
+    list:SetVerticalScroll(60 * 32 - list:GetHeight())
+    mock.advanceTime(0.01)
+    local last = resultNamed("Test Lot 60")
+    local _, _, _, _, y = last:GetPoint(1)
+    expect(y).toBe(-59 * 32)
+    expect(#t.rows <= #rows + 1).toBe(true)
+    expectNoErrors()
 end

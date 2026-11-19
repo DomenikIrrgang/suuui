@@ -1,0 +1,255 @@
+-- Units/Ledger/Names.wowlua
+-- The item names the Ledger's pages and notes show (Units/Ledger), and the
+-- Prices search finds, although the client's item cache doesn't hold them
+-- (it forgets; a Scan all brings thousands it never had). They are kept in
+-- the price store (SuuUI.Prices, 0.48: SuuUIPrices.names, for every
+-- ruleset; its prune drops the names of items in no prices): the auction
+-- house's scans and searches keep theirs there, and this keeps what the
+-- client tells: its cache whenever a page reads one it has, and its
+-- answers to what the Ledger asks for. The lookup every page and note uses
+-- (Get): the kept name, then the client's cache (kept), then, when asked
+-- to, a request.
+--
+-- Asking: a queue read on a beat, a few requests in flight at once (never
+-- thousands at once), the rows in sight first. The client answers
+-- C_Item.RequestLoadItemDataByID with ITEM_DATA_LOAD_RESULT (the probe:
+-- GET_ITEM_INFO_RECEIVED only for a name GetItemInfo itself asked for, and
+-- for an item that doesn't exist); both are heard. A request with no answer
+-- after a while is asked again, a few times, then given up for the session.
+-- (Not wowlua:item's load: it asks the client once per item until it
+-- answers, so it can't ask again.)
+
+import * as parts from "./Parts"
+
+export type ItemNamesOptions = {
+    -- the kept name and quality (the price store's), and one kept there:
+    -- whether that changed it
+    kept: (itemID: number) -> (string?, number?),
+    keep: (itemID: number, name: string?, quality: number?) -> boolean,
+    every: (seconds: number, fn: (ticker: TickerHandle) -> ()) -> TickerHandle,
+    -- a name kept that a page may wait for, or one given up
+    arrived: (itemID: number) -> (),
+    -- whether an item is the Ledger's (in prices or watched): a name the
+    -- client loaded for someone else is kept only then
+    known: (itemID: number) -> boolean,
+}
+
+-- requests in flight at once; the beat; items checked against the client's
+-- cache a beat; seconds without an answer before asking again; tries
+export const FLYING = 30
+export const STEP = 0.2
+export const CHECKS = 400
+export const RETRY_AFTER = 5
+export const TRIES = 4
+
+export class ItemNames
+    readonly o: ItemNamesOptions
+    -- asked for: the rows in sight (newest first), then the rest in order
+    soon: number[] = {}
+    inSoon: { [number]: boolean } = {}
+    queue: number[] = {}
+    head: number = 1
+    queued: { [number]: boolean } = {}
+    waiting: number = 0
+    -- requested, since when (GetTime); how many times; given up
+    flying: { [number]: number } = {}
+    flyingCount: number = 0
+    tries: { [number]: number } = {}
+    gaveUp: { [number]: boolean } = {}
+    ticker: TickerHandle? = nil
+
+    constructor(o: ItemNamesOptions)
+        self.o = o
+    end
+
+    -- The kept name and quality (nil: none).
+    function Kept(itemID: number): (string?, number?)
+        return self.o.kept(itemID)
+    end
+
+    -- A name learned; whether that changed what is kept (a quality not
+    -- known keeps the one kept).
+    function Keep(itemID: number, name: string?, quality: number?): boolean
+        return self.o.keep(itemID, name, quality)
+    end
+
+    -- An item's name and quality: kept, else the client's (kept), else nil
+    -- (`ask`: asked for, before the rest of the queue).
+    function Get(itemID: number, ask: boolean?): (string?, number?)
+        local name, quality = self:Kept(itemID)
+        if name and quality then
+            return name, quality
+        end
+        local cn, cq = parts.cachedInfo(itemID)
+        if cn then
+            self:Keep(itemID, cn, cq)
+            return cn, cq
+        end
+        if not name and ask then
+            self:Ask(itemID, true)
+        end
+        return name, quality
+    end
+
+    -- Whether a name is still being asked for.
+    function Pending(itemID: number): boolean
+        return self.queued[itemID] == true or self.flying[itemID] ~= nil
+    end
+
+    function PendingCount(): number
+        return self.waiting + self.flyingCount
+    end
+
+    -- An item's name asked for (`soon`: before the rest).
+    function Ask(itemID: number, soon: boolean?)
+        if self.flying[itemID] or self.gaveUp[itemID] then
+            return
+        end
+        if not self.queued[itemID] then
+            self.queued[itemID] = true
+            self.waiting += 1
+            if not soon then
+                self.queue[#self.queue + 1] = itemID
+            end
+        end
+        if soon and not self.inSoon[itemID] then
+            self.inSoon[itemID] = true
+            self.soon[#self.soon + 1] = itemID
+        end
+        self:Start()
+    end
+
+    -- The names not kept of these items asked for.
+    function AskAll(ids: number[])
+        local kept = self.o.kept
+        for _, id in ipairs(ids) do
+            if not kept(id) then
+                self:Ask(id)
+            end
+        end
+    end
+
+    function Start()
+        if not self.ticker then
+            self.ticker = self.o.every(STEP, function()
+                self:Step()
+            end)
+        end
+    end
+
+    -- Nothing asked any more (the module turned off).
+    function Stop()
+        local t = self.ticker
+        if t then
+            t:Cancel()
+        end
+        self.ticker = nil
+        self.soon, self.inSoon, self.queue, self.head, self.queued, self.waiting = {}, {}, {}, 1, {}, 0
+        self.flying, self.flyingCount = {}, 0
+    end
+
+    -- The next item to ask for (nil: none).
+    function Next(): number?
+        while #self.soon > 0 do
+            local id = table.remove(self.soon) :: number
+            self.inSoon[id] = nil
+            if self.queued[id] then
+                return id
+            end
+        end
+        while self.head <= #self.queue do
+            local id = self.queue[self.head]
+            self.head += 1
+            if self.queued[id] then
+                return id
+            end
+        end
+        self.queue, self.head = {}, 1
+        return nil
+    end
+
+    function Land(itemID: number)
+        if self.flying[itemID] then
+            self.flying[itemID] = nil
+            self.flyingCount -= 1
+        end
+    end
+
+    -- No name came (no answer, or a failed one): asked again, or given up.
+    function Missed(itemID: number)
+        if (self.tries[itemID] or 0) >= TRIES then
+            self.gaveUp[itemID] = true
+            self.o.arrived(itemID)
+        else
+            self:Ask(itemID)
+        end
+    end
+
+    -- A beat: the requests not answered in time, then the next ones.
+    function Step()
+        local now = GetTime()
+        local late: number[] = {}
+        for id, at in pairs(self.flying) do
+            if now - at >= RETRY_AFTER then
+                late[#late + 1] = id
+            end
+        end
+        for _, id in ipairs(late) do
+            self:Land(id)
+            local name, quality = parts.cachedInfo(id)
+            if name then
+                self:Keep(id, name, quality)
+                self.o.arrived(id)
+            else
+                self:Missed(id)
+            end
+        end
+        local checks = 0
+        while self.flyingCount < FLYING and checks < CHECKS do
+            local id = self:Next()
+            if not id then
+                break
+            end
+            self.queued[id] = nil
+            self.waiting -= 1
+            checks += 1
+            local name, quality = parts.cachedInfo(id)
+            if name then
+                self:Keep(id, name, quality)
+                self.o.arrived(id)
+            elseif not self:Kept(id) then
+                self.tries[id] = (self.tries[id] or 0) + 1
+                self.flying[id] = now
+                self.flyingCount += 1
+                C_Item.RequestLoadItemDataByID(id)
+            end
+        end
+        if self.waiting <= 0 and self.flyingCount <= 0 then
+            local t = self.ticker
+            if t then
+                t:Cancel()
+            end
+            self.ticker = nil
+            self.waiting = 0
+        end
+    end
+
+    -- The client loaded an item (ITEM_DATA_LOAD_RESULT,
+    -- GET_ITEM_INFO_RECEIVED): its name kept when the Ledger asked for it
+    -- or knows the item.
+    function Loaded(itemID: number, success: unknown)
+        local asked = self.flying[itemID] ~= nil
+        local name, quality = parts.cachedInfo(itemID)
+        if name then
+            self:Land(itemID)
+            if (asked or self.o.known(itemID)) and self:Keep(itemID, name, quality) or asked then
+                self.o.arrived(itemID)
+            end
+            return
+        end
+        if asked and success == false then
+            self:Land(itemID)
+            self:Missed(itemID)
+        end
+    end
+end

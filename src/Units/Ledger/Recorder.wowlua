@@ -1,0 +1,1180 @@
+-- Units/Ledger/Recorder.wowlua
+-- Where the Ledger's transactions come from (Units/Ledger; /suu probe
+-- ledger, 2026-11-18): post-hooks on the calls that move money and the
+-- events that say what came, each telling the Matcher what change of money
+-- to expect; the Matcher pairs them with PLAYER_MONEY's changes and this
+-- books them (Ledger/Books) on the character. The hooks only watch: none
+-- calls a protected function, and every value the game gives is read
+-- through wowlua:secret.
+--
+--   Auction house  C_AuctionHouse.PostItem / PostCommodity (the deposit:
+--                  its amount when the game can tell it, else the next
+--                  money out), PlaceBid (a buyout or a bid: BID_ADDED says
+--                  which; the won notice names the item),
+--                  ConfirmCommoditiesPurchase (COMMODITY_PRICE_UPDATED's
+--                  total), CancelAuction (GetCancelCost; none: booked at
+--                  once without money). Sales from the mail (below).
+--   Vendors        C_Container.UseContainerItem while a vendor is open (the
+--                  item's sell price × count) and the merchant's buyback
+--                  list (each sale's stack, whoever sold it: below),
+--                  BuyMerchantItem (the price per stack), BuybackItem,
+--                  RepairAllItems (not the guild's).
+--   Mail           TakeInboxMoney / AutoLootMailItem: the letter's money
+--                  (an auction sale with its invoice: price, the house's
+--                  cut, the deposit back; a refunded bid; a COD payment;
+--                  else Mail from its sender); TakeInboxItem /
+--                  AutoLootMailItem on a COD letter: its COD paid; an
+--                  expired auction's letter: Expired, no money; SendMail:
+--                  the postage, which on Forever counts the money sent
+--                  too (GetSendMailPrice: 31 with 1 copper attached, 30
+--                  without), or the postage and the money; MAIL_FAILED:
+--                  nothing. MAIL_INBOX_UPDATE: the money waiting in the
+--                  inbox (the Overview's figure).
+--   Trade          the money on both sides while it is open; "Trade
+--                  complete." (UI_INFO_MESSAGE): theirs less yours, the
+--                  partner's name.
+--   Looted coin    alone, the loot window's coin slot as it clears (its
+--                  money comes 0.1 s later, the "You loot" line 0.76 s
+--                  after that: then not counted again); in a group (the
+--                  coin shared, often no window), CHAT_MSG_MONEY's amount
+--                  (readable on Forever, unlike CHAT_MSG_SYSTEM). One row
+--                  per zone and session, with how many corpses.
+--   Quests         QUEST_TURNED_IN's money; training BuyTrainerService
+--                  (its cost); travel TakeTaxiNode (its cost, from and to).
+-- What nothing explains is Other; consecutive ones the same way within a
+-- few minutes merge into one row.
+
+import * as secret from "wowlua:secret"
+import Matcher, GRACE, TTL from "./Matcher"
+import type Expectation from "./Matcher"
+import type Tx from "./Books"
+import type LedgerModule from "../Ledger"
+
+-- consecutive unexplained changes the same way merge within this time
+const OTHER_MERGE = 300
+-- how long after a loot window's coin its "You loot" line may come
+const COIN_LINE = 10
+
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- Where the buyback list's entries that are new begin (#now + 1: none).
+-- Every sale appends its stack (the newest last), a full list (12) drops
+-- its oldest, buying back takes one out: so what was there before is the
+-- part of `now` found in order in `old`, the longest such start of `now`,
+-- and the rest is new. (A full list of the same stack sold once more reads
+-- the same: that sale isn't seen here.)
+export function freshFrom(old: string[], now: string[]): number
+    for k = #now, 1, -1 do
+        local j = 1
+        local found = true
+        for i = 1, k do
+            while j <= #old and old[j] ~= now[i] do
+                j += 1
+            end
+            if j > #old then
+                found = false
+                break
+            end
+            j += 1
+        end
+        if found then
+            return k + 1
+        end
+    end
+    return 1
+end
+
+-- A global format ("Auction successful: %s") as a pattern capturing its
+-- %s and %d.
+export function patternOf(fmt: string?): string?
+    if not fmt or fmt == "" then
+        return nil
+    end
+    local p = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$%%])", "%%%1")
+    p = p:gsub("%%%%s", "(.+)"):gsub("%%%%d", "(%%d+)")
+    return "^" .. p .. "$"
+end
+
+-- What a global string's format captures from `text` (nil: no match).
+local function captureOf(name: string, text: string): string?
+    local p = patternOf(asString(_G[name]))
+    if not p then
+        return nil
+    end
+    return text:match(p)
+end
+
+-- "2 Gold, 5 Silver, 56 Copper" (GOLD_AMOUNT …) as copper (0: none).
+export function coinsOf(text: string): number
+    local total = 0
+    for _, def in ipairs({ { "GOLD_AMOUNT", 10000 }, { "SILVER_AMOUNT", 100 }, { "COPPER_AMOUNT", 1 } }) do
+        local fmt = asString(_G[def[1] :: string]) or ""
+        local p = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1"):gsub("%%d", "(%%d+)")
+        local n = tonumber(text:match(p) or "")
+        if n then
+            total += n * (def[2] :: number)
+        end
+    end
+    return total
+end
+
+-- The money looted that a CHAT_MSG_MONEY line says (nil: not a loot line).
+export function lootOf(text: string): number?
+    for _, name in ipairs({ "YOU_LOOT_MONEY", "LOOT_MONEY_SPLIT", "YOU_LOOT_MONEY_GUILD", "LOOT_MONEY_SPLIT_GUILD" }) do
+        local part = captureOf(name, text)
+        if part then
+            local c = coinsOf(part)
+            if c > 0 then
+                return c
+            end
+        end
+    end
+    return nil
+end
+
+-- A flight's place without its zone: "Marshal's Refuge, Un'Goro Crater"
+-- -> "Marshal's Refuge".
+export function placeOf(name: string?): string?
+    if not name then
+        return nil
+    end
+    return name:match("^(.-),") or name
+end
+
+-- What sending a letter expects: the postage as the game tells it (on
+-- Forever it counts the money attached: 31 for 1 copper, probed), or the
+-- postage and the money (where it doesn't). Nil: nothing to pay.
+export function sendExpectation(money: number, postage: number, to: string?): Expectation?
+    if postage <= 0 and money <= 0 then
+        return nil
+    end
+    local e: Expectation = { kind = "mail", amount = -(postage > 0 and postage or money), text = to, who = to ~= nil }
+    if money > 0 and postage > 0 then
+        e.alts = { -(postage + money) }
+    end
+    return e
+end
+
+-- A letter as the hooks read it.
+export type Letter = {
+    sender?: string,
+    subject?: string,
+    money: number,
+    cod: number,
+    invoice?: string,
+    itemName?: string,
+    bid?: number,
+    cut?: number,
+    deposit?: number,
+    count?: number,
+}
+
+export class Recorder
+    readonly m: LedgerModule
+    readonly matcher: Matcher
+    -- this character's money as last seen
+    money: number? = nil
+    -- a vendor open, and its name
+    merchant: string? = nil
+    -- the buyback list as last read while a vendor is open: each entry's
+    -- link (or name), count and price
+    sold: string[] = {}
+    -- the hook's sales lately, each until its buyback entry comes
+    sales: Expectation[] = {}
+    -- the inbox's letters as last read (the hooks' fallback)
+    letters: { [number]: Letter } = {}
+    -- the money set to send (SetSendMailMoney), the fallback for SendMail
+    sendMoney: number = 0
+    -- the letter being sent: what it expects (dropped when it fails)
+    sending: Expectation? = nil
+    -- the loot window's coin per slot (alone), and the coin taken from it
+    -- lately whose "You loot" line may still come (GetTime)
+    coin: { [number]: number } = {}
+    coinTaken: { amount: number, at: number }[] = {}
+    -- the trade open: its partner and the money on both sides
+    partner: string? = nil
+    mine: number = 0
+    theirs: number = 0
+    -- the flight master's map: per node, its name and cost; where you are
+    nodes: { [number]: { name?: string, cost?: number } } = {}
+    here: string? = nil
+    -- the last commodity price quote's total
+    quote: number? = nil
+    -- the quest whose reward is shown
+    questTitle: string? = nil
+    -- bids and buyouts waiting, by auction
+    bids: { [number]: Expectation } = {}
+    -- booked rows per merge key this session (looted coin per zone): when
+    merged: { [string]: number } = {}
+    -- the last row booked: its kind, sign and time (Other merges)
+    lastKind: string? = nil
+    lastSign: number = 0
+    lastAt: number = 0
+    -- an expiry check waiting; when it started (GetTime)
+    ticking: boolean = false
+    since: number = 0
+
+    constructor(m: LedgerModule)
+        self.m = m
+        self.matcher = Matcher.new(function(e: Expectation?, amount: number, at: number)
+            self:Booked(e, amount, at)
+        end)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Booking
+    ----------------------------------------------------------------------------
+
+    -- A change explained by `e` (nil: Other) booked on this character.
+    function Booked(e: Expectation?, amount: number, at: number)
+        local m = self.m
+        if not e then
+            -- Other: merged into the last row when that was Other too, the
+            -- same way, a few minutes ago
+            local sign = amount > 0 and 1 or -1
+            if self.lastKind == "other" and self.lastSign == sign and at - self.lastAt <= OTHER_MERGE then
+                if m:UpdateTx(self.lastAt, "other", function(t: Tx)
+                    t.amount += amount
+                    t.n = (t.n or 1) + 1
+                end) then
+                    return
+                end
+            end
+            m:BookTx({ at = at, kind = "other", amount = amount })
+            self.lastKind, self.lastSign, self.lastAt = "other", sign, at
+            return
+        end
+        local key = e.merge
+        local first = key and self.merged[key]
+        if key and first then
+            if m:UpdateTx(first, e.kind, function(t: Tx)
+                t.amount += amount
+                t.n = (t.n or 1) + 1
+            end) then
+                self.lastKind = e.kind
+                return
+            end
+        end
+        local t: Tx = {
+            at = at,
+            kind = e.kind,
+            amount = amount,
+            item = e.item,
+            qty = e.qty,
+            text = e.text,
+            who = e.who,
+            gross = e.gross,
+            cut = e.cut,
+            price = e.price,
+            commodity = e.commodity,
+        }
+        if key then
+            t.n = 1
+            self.merged[key] = at
+        end
+        m:BookTx(t)
+        e.booked = at
+        self.lastKind, self.lastSign, self.lastAt = e.kind, amount > 0 and 1 or -1, at
+    end
+
+    -- An expectation handed to the matcher; the check for what waited too
+    -- long set.
+    function Expect(e: Expectation)
+        self.matcher:Expect(e, GetTime())
+        self:Tick()
+    end
+
+    -- A transaction without money (an expired auction), booked now.
+    function BookNow(t: Tx)
+        self.m:BookTx(t)
+        self.lastKind = t.kind
+    end
+
+    function Tick()
+        if self.ticking or not self.matcher:Waiting() then
+            return
+        end
+        self.ticking = true
+        self.m:After(0.5, function()
+            self.ticking = false
+            self.matcher:Expire(GetTime())
+            self:Tick()
+        end)
+    end
+
+    -- PLAYER_MONEY: the change handed to the matcher. (Money that was 0
+    -- when the module started, told within its first half minute, is the
+    -- game telling it late at login: no change.)
+    function OnMoney()
+        local now = asNumber(GetMoney())
+        if not now then
+            return
+        end
+        local before = self.money
+        self.money = now
+        if before == 0 and GetTime() - self.since < 30 then
+            return
+        end
+        if before and now ~= before then
+            self.matcher:Money(now - before, GetTime(), time())
+            self:Tick()
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- Items
+    ----------------------------------------------------------------------------
+
+    -- An item's ID and count in a bag slot.
+    function BagItem(bag: number, slot: number): (number?, number)
+        local ok, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
+        if not ok or type(info) ~= "table" then
+            return nil, 0
+        end
+        local i = info :: { itemID?: unknown, stackCount?: unknown }
+        return asNumber(i.itemID), asNumber(i.stackCount) or 1
+    end
+
+    -- What a vendor pays for one.
+    function SellPrice(itemID: number): number
+        local ok, _n, _l, _q, _il, _ml, _t, _st, _ms, _el, _tx, price = pcall(C_Item.GetItemInfo, itemID)
+        return ok and asNumber(price) or 0
+    end
+
+    -- An item's ID from a link (nil: none).
+    function IDOfLink(link: unknown): number?
+        local l = asString(link)
+        local id = l and l:match("item:(%d+)")
+        return id and tonumber(id) or nil
+    end
+
+    ----------------------------------------------------------------------------
+    -- Vendors
+    ----------------------------------------------------------------------------
+
+    function OnUseContainerItem(bag: unknown, slot: unknown)
+        if not self.merchant then
+            return
+        end
+        local b, s = asNumber(bag), asNumber(slot)
+        if not (b and s) then
+            return
+        end
+        local id, count = self:BagItem(b, s)
+        if not id then
+            return
+        end
+        local price = self:SellPrice(id)
+        if price <= 0 then
+            return
+        end
+        local e: Expectation = { kind = "vendor", amount = price * count, item = id, qty = count }
+        self:Expect(e)
+        self.sales[#self.sales + 1] = e
+    end
+
+    -- Vendor sales from the buyback list: a sale the hook above never saw
+    -- (another addon selling through a reference it took before SuuUI
+    -- hooked the field) still puts its stack there, with what it paid for
+    -- the whole stack. A new entry is the evidence of one sale: when a
+    -- sale the hook expected fits it (the same item and amount, still
+    -- waiting or booked already: the money may come before or after the
+    -- list's update), that expectation is this sale and nothing more is
+    -- expected; else the entry expects its own amount for a moment
+    -- (GRACE: the list and the money come with the server's one answer),
+    -- and the Matcher pairs it with the change waiting or coming. A
+    -- change no amount fits stays Other.
+
+    -- The buyback entry at `i`: its signature, item, count, price.
+    function BuybackEntry(i: number): (string, number?, number, number)
+        local ok, name, _icon, price, quantity = pcall(GetBuybackItemInfo, i)
+        local okL, link = pcall(GetBuybackItemLink, i)
+        local l = okL and asString(link) or nil
+        local p = ok and asNumber(price) or 0
+        local q = ok and asNumber(quantity) or 1
+        local n = ok and asString(name) or ""
+        return (l or n) .. "|" .. q .. "|" .. p, self:IDOfLink(l), q, p
+    end
+
+    function NumBuyback(): number
+        local ok, n = pcall(GetNumBuybackItems)
+        return ok and asNumber(n) or 0
+    end
+
+    -- MERCHANT_SHOW: the list as it is (nothing in it new).
+    function SnapBuyback()
+        local list: string[] = {}
+        for i = 1, self:NumBuyback() do
+            list[i] = (self:BuybackEntry(i))
+        end
+        self.sold, self.sales = list, {}
+    end
+
+    -- MERCHANT_UPDATE (often: a quick look at the count and both ends
+    -- first): the entries the list gained, each a sale.
+    function OnMerchantUpdate()
+        if not self.merchant then
+            return
+        end
+        local old = self.sold
+        local n = self:NumBuyback()
+        if n == #old and (n == 0 or ((self:BuybackEntry(n)) == old[n] and (self:BuybackEntry(1)) == old[1])) then
+            return
+        end
+        local list: string[] = {}
+        local items: { id?: number, qty: number, price: number }[] = {}
+        for i = 1, n do
+            local sig, id, qty, price = self:BuybackEntry(i)
+            list[i] = sig
+            items[i] = { id = id, qty = qty, price = price }
+        end
+        self.sold = list
+        for i = freshFrom(old, list), n do
+            local x = items[i]
+            self:OnSold(x.id, x.qty, x.price)
+        end
+    end
+
+    -- A sale the buyback list shows: the hook's expectation that fits it
+    -- taken as this sale, else this one's own expected.
+    function OnSold(id: number?, qty: number, price: number)
+        if price <= 0 then
+            return
+        end
+        local now = GetTime()
+        local keep: Expectation[] = {}
+        local claimed = false
+        for _, e in ipairs(self.sales) do
+            local age = now - (e.since or now)
+            if age < TTL + GRACE then
+                local live = e.booked ~= nil or age < (e.ttl or TTL)
+                if not claimed and live and e.amount == price and (e.item == nil or id == nil or e.item == id) then
+                    claimed = true
+                else
+                    keep[#keep + 1] = e
+                end
+            end
+        end
+        self.sales = keep
+        if claimed then
+            return
+        end
+        self:Expect({ kind = "vendor", amount = price, item = id, qty = qty, ttl = GRACE })
+    end
+
+    function OnBuyMerchantItem(index: unknown, quantity: unknown)
+        local i = asNumber(index)
+        if not i then
+            return
+        end
+        local price, stack, id = 0, 1, nil :: number?
+        local ok, info = pcall(function(): unknown
+            return C_MerchantFrame.GetItemInfo(i)
+        end)
+        if ok and type(info) == "table" then
+            local t = info :: { price?: unknown, stackCount?: unknown, itemID?: unknown }
+            price = asNumber(t.price) or 0
+            stack = math.max(1, asNumber(t.stackCount) or 1)
+            id = asNumber(t.itemID)
+        end
+        if not id then
+            local okID, raw = pcall(GetMerchantItemID, i)
+            id = okID and asNumber(raw) or nil
+        end
+        if price <= 0 then
+            return
+        end
+        local qty = math.max(1, asNumber(quantity) or stack)
+        local cost = math.floor(price * qty / stack + 0.5)
+        self:Expect({ kind = "vendor", amount = -cost, alts = { -price * qty, -price }, item = id, qty = qty })
+    end
+
+    function OnBuyback(index: unknown)
+        local i = asNumber(index)
+        if not i then
+            return
+        end
+        local ok, _name, _icon, price, quantity = pcall(GetBuybackItemInfo, i)
+        local cost = ok and asNumber(price) or 0
+        if cost <= 0 then
+            return
+        end
+        local okLink, link = pcall(GetBuybackItemLink, i)
+        self:Expect({
+            kind = "buyback",
+            amount = -cost,
+            item = okLink and self:IDOfLink(link) or nil,
+            qty = asNumber(quantity),
+        })
+    end
+
+    -- The cost of repairing everything, kept while a vendor is open (the
+    -- game may tell 0 the moment after the call).
+    repairCost: number = 0
+
+    function ReadRepairCost()
+        local ok, cost = pcall(GetRepairAllCost)
+        self.repairCost = ok and asNumber(cost) or 0
+    end
+
+    function OnRepairAll(guild: unknown)
+        if guild == true then
+            return
+        end
+        local ok, cost = pcall(GetRepairAllCost)
+        local c = ok and asNumber(cost) or 0
+        if c <= 0 then
+            c = self.repairCost
+        end
+        if c <= 0 then
+            return
+        end
+        self:Expect({ kind = "repair", amount = -c, text = self.merchant })
+    end
+
+    ----------------------------------------------------------------------------
+    -- Training, travel, quests
+    ----------------------------------------------------------------------------
+
+    function OnBuyTrainerService(index: unknown)
+        local i = asNumber(index)
+        if not i then
+            return
+        end
+        local ok, cost = pcall(GetTrainerServiceCost, i)
+        local c = ok and asNumber(cost) or 0
+        if c <= 0 then
+            return
+        end
+        -- (Forever: name, type, icon, level, then the rank's text)
+        local okName, name, _type, _icon, _level, rank = pcall(GetTrainerServiceInfo, i)
+        local n = okName and asString(name) or nil
+        local r = okName and asString(rank) or nil
+        if n and r and r ~= "" then
+            n = n .. " (" .. r .. ")"
+        end
+        self:Expect({ kind = "train", amount = -c, text = n })
+    end
+
+    -- The flight master's map as it opens: each node's name and cost,
+    -- where you are.
+    function ReadTaxi()
+        self.nodes, self.here = {}, nil
+        local ok, count = pcall(NumTaxiNodes)
+        for i = 1, (ok and asNumber(count) or 0) do
+            local okN, name = pcall(TaxiNodeName, i)
+            local okC, cost = pcall(TaxiNodeCost, i)
+            local okT, kind = pcall(TaxiNodeGetType, i)
+            local n = okN and asString(name) or nil
+            self.nodes[i] = { name = n, cost = okC and asNumber(cost) or nil }
+            if okT and asString(kind) == "CURRENT" then
+                self.here = n
+            end
+        end
+    end
+
+    function OnTakeTaxiNode(index: unknown)
+        local i = asNumber(index)
+        if not i then
+            return
+        end
+        local known = self.nodes[i] or {}
+        local okC, cost = pcall(TaxiNodeCost, i)
+        local c = okC and asNumber(cost) or nil
+        if not c or c <= 0 then
+            c = known.cost
+        end
+        if not c or c <= 0 then
+            return
+        end
+        local okN, name = pcall(TaxiNodeName, i)
+        local to = placeOf(okN and asString(name) or known.name)
+        local from = placeOf(self.here)
+        local text = to and (from and (from .. " to " .. to) or ("To " .. to)) or nil
+        self:Expect({ kind = "travel", amount = -c, text = text })
+    end
+
+    function OnQuestTurnedIn(questID: unknown, _xp: unknown, money: unknown)
+        local c = asNumber(money) or 0
+        if c == 0 then
+            return
+        end
+        local title = self.questTitle
+        local id = asNumber(questID)
+        if id then
+            local ok, t = pcall(function(): unknown
+                return C_QuestLog.GetTitleForQuestID(id)
+            end)
+            title = (ok and asString(t)) or title
+        end
+        self:Expect({ kind = "quest", amount = c, text = title })
+    end
+
+    ----------------------------------------------------------------------------
+    -- Trade
+    ----------------------------------------------------------------------------
+
+    function ReadTrade()
+        local okM, mine = pcall(GetPlayerTradeMoney)
+        local okT, theirs = pcall(GetTargetTradeMoney)
+        self.mine = okM and asNumber(mine) or self.mine
+        self.theirs = okT and asNumber(theirs) or self.theirs
+    end
+
+    function OnTradeShow()
+        self.mine, self.theirs = 0, 0
+        local ok, name = pcall(UnitName, "NPC")
+        self.partner = ok and asString(name) or nil
+        self:ReadTrade()
+    end
+
+    function OnInfoMessage(_kind: unknown, text: unknown)
+        local t = asString(text)
+        if not t or t ~= asString(_G.ERR_TRADE_COMPLETE) then
+            return
+        end
+        local net = self.theirs - self.mine
+        self.mine, self.theirs = 0, 0
+        if net ~= 0 then
+            self:Expect({ kind = "trade", amount = net, text = self.partner, who = self.partner ~= nil })
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- Looted coin
+    ----------------------------------------------------------------------------
+
+    function ExpectLoot(c: number)
+        local zone = asString(GetRealZoneText()) or asString(GetZoneText()) or ""
+        self:Expect({ kind = "loot", amount = c, text = zone ~= "" and zone or nil, merge = "loot:" .. zone })
+    end
+
+    -- The copper in a loot slot (0: not coin).
+    function SlotCoin(slot: number): number
+        local okT, kind = pcall(GetLootSlotType, slot)
+        if not okT or asNumber(kind) ~= ((Enum.LootSlotType and Enum.LootSlotType.Money) or 2) then
+            return 0
+        end
+        local ok, _icon, text = pcall(GetLootSlotInfo, slot)
+        local t = ok and asString(text) or nil
+        return t and coinsOf(t) or 0
+    end
+
+    -- LOOT_OPENED: the coin in the window, while alone (in a group the
+    -- window shows the whole coin and the line tells your share).
+    function OnLootOpened()
+        self.coin = {}
+        local okG, grouped = pcall(IsInGroup)
+        if not okG or secret.flag(grouped) then
+            return
+        end
+        local ok, n = pcall(GetNumLootItems)
+        for i = 1, (ok and asNumber(n) or 0) do
+            local c = self:SlotCoin(i)
+            if c > 0 then
+                self.coin[i] = c
+            end
+        end
+    end
+
+    -- LOOT_SLOT_CLEARED (twice for a slot, as the game sends it): the
+    -- coin taken, expected now.
+    function OnLootSlotCleared(slot: unknown)
+        local i = asNumber(slot)
+        local c = i and self.coin[i]
+        if not (i and c) then
+            return
+        end
+        self.coin[i] = nil
+        self.coinTaken[#self.coinTaken + 1] = { amount = c, at = GetTime() }
+        self:ExpectLoot(c)
+    end
+
+    -- CHAT_MSG_MONEY: coin a window didn't tell (a group's share), expected.
+    function OnMoneyLine(text: unknown)
+        local t = asString(text)
+        local c = t and lootOf(t)
+        if not c then
+            return
+        end
+        local now = GetTime()
+        local kept: { amount: number, at: number }[] = {}
+        local told = false
+        for _, x in ipairs(self.coinTaken) do
+            if now - x.at <= COIN_LINE then
+                if not told and x.amount == c then
+                    told = true
+                else
+                    kept[#kept + 1] = x
+                end
+            end
+        end
+        self.coinTaken = kept
+        if not told then
+            self:ExpectLoot(c)
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- The auction house
+    ----------------------------------------------------------------------------
+
+    -- A post's deposit: the game's own figure when it tells one, else the
+    -- next money out.
+    function OnPost(loc: unknown, duration: unknown, quantity: unknown, unitPrice: unknown, commodity: boolean, confirm: boolean)
+        local okID, raw = pcall(C_Item.GetItemID, loc :: ItemLocationMixin)
+        local id = okID and asNumber(raw) or nil
+        local qty = asNumber(quantity) or 1
+        local deposit: number? = nil
+        local ok, d = pcall(function(): unknown
+            if commodity then
+                return C_AuctionHouse.CalculateCommodityDeposit(id or 0, duration :: number, qty)
+            end
+            return C_AuctionHouse.CalculateItemDeposit(loc :: ItemLocationMixin, duration :: number, qty)
+        end)
+        deposit = ok and asNumber(d) or nil
+        local price = asNumber(unitPrice)
+        local e: Expectation = {
+            kind = "posted",
+            item = id,
+            qty = qty,
+            price = price and price > 0 and math.floor(price) or nil,
+            commodity = commodity,
+        }
+        if deposit and deposit > 0 then
+            e.amount = -deposit
+        end
+        e.sign = -1
+        -- (a post the game asked to confirm comes again as ConfirmPost…:
+        -- the one the first call left waiting is it)
+        if confirm then
+            for _, x in ipairs(self.matcher.expects) do
+                if x.kind == "posted" and x.item == id and x.qty == qty and GetTime() - (x.since or 0) < 5 then
+                    return
+                end
+            end
+        end
+        self:Expect(e)
+    end
+
+    function OnPlaceBid(auctionID: unknown, amount: unknown)
+        local id, c = asNumber(auctionID), asNumber(amount)
+        if not (id and c and c > 0) then
+            return
+        end
+        -- (bids whose item no notice named within ten minutes forgotten)
+        local now = GetTime()
+        for k, x in pairs(self.bids) do
+            if now - (x.since or now) > 600 then
+                self.bids[k] = nil
+            end
+        end
+        local e: Expectation = { kind = "bought", amount = -c, key = id }
+        self.bids[id] = e
+        self:Expect(e)
+    end
+
+    -- BID_ADDED: the bids just placed were bids, not buyouts.
+    function OnBidAdded()
+        local now = GetTime()
+        for _, e in pairs(self.bids) do
+            if e.kind == "bought" and now - (e.since or 0) < 10 then
+                e.kind = "bid"
+                local at = e.booked
+                if at then
+                    self.m:UpdateTx(at, "bought", function(t: Tx)
+                        t.kind = "bid"
+                    end)
+                end
+            end
+        end
+    end
+
+    -- The won notice names the item of an auction bought.
+    function OnWon(name: string?, auctionID: number?)
+        if not (name and auctionID) then
+            return
+        end
+        local e = self.bids[auctionID]
+        if not e then
+            return
+        end
+        self.bids[auctionID] = nil
+        local id = self.m:ItemByName(name)
+        local at = e.booked
+        if at then
+            self.m:UpdateTx(at, e.kind, function(t: Tx)
+                t.item = id
+                t.text = not id and name or nil
+                t.qty = t.qty or 1
+            end)
+        else
+            e.item = id
+            e.text = not id and name or nil
+            e.qty = 1
+        end
+    end
+
+    function OnCommodityPrice(_unit: unknown, total: unknown)
+        self.quote = asNumber(total)
+    end
+
+    function OnConfirmCommodities(itemID: unknown, quantity: unknown)
+        local e: Expectation = { kind = "bought", item = asNumber(itemID), qty = asNumber(quantity), sign = -1 }
+        local q = self.quote
+        if q and q > 0 then
+            e.amount = -q
+        end
+        self.quote = nil
+        self:Expect(e)
+    end
+
+    function OnCancel(auctionID: unknown)
+        local id = asNumber(auctionID)
+        if not id then
+            return
+        end
+        local ok, cost = pcall(function(): unknown
+            return C_AuctionHouse.GetCancelCost(id)
+        end)
+        local c = ok and asNumber(cost) or 0
+        local item, qty = nil :: number?, nil :: number?
+        local okN, n = pcall(C_AuctionHouse.GetNumOwnedAuctions)
+        for i = 1, (okN and asNumber(n) or 0) do
+            local okI, info = pcall(C_AuctionHouse.GetOwnedAuctionInfo, i)
+            if okI and type(info) == "table" then
+                local a = info :: { auctionID?: unknown, quantity?: unknown, itemKey?: { itemID?: unknown } }
+                if asNumber(a.auctionID) == id then
+                    item = a.itemKey and asNumber(a.itemKey.itemID) or nil
+                    qty = asNumber(a.quantity)
+                end
+            end
+        end
+        if c > 0 then
+            self:Expect({ kind = "cancelled", amount = -c, item = item, qty = qty })
+        else
+            self:BookNow({ at = time(), kind = "cancelled", amount = 0, item = item, qty = qty })
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- The mail
+    ----------------------------------------------------------------------------
+
+    -- A letter read from the inbox (nil: none at that index).
+    function ReadLetter(i: number): Letter?
+        local ok, _p, _s, sender, subject, money, cod = pcall(GetInboxHeaderInfo, i)
+        if not ok then
+            return nil
+        end
+        local s = asString(subject)
+        if s == nil and asNumber(money) == nil then
+            return nil
+        end
+        local l: Letter = { sender = asString(sender), subject = s, money = asNumber(money) or 0, cod = asNumber(cod) or 0 }
+        local okI, kind, itemName, _player, bid, _buyout, deposit, cut, _delay, _h, _m, count = pcall(GetInboxInvoiceInfo, i)
+        if okI and asString(kind) then
+            l.invoice = asString(kind)
+            l.itemName = asString(itemName)
+            l.bid, l.deposit, l.cut, l.count = asNumber(bid), asNumber(deposit), asNumber(cut), asNumber(count)
+        end
+        return l
+    end
+
+    -- MAIL_INBOX_UPDATE: the letters kept (the hooks' fallback), the money
+    -- waiting and how many sales, kept for the Overview.
+    function ReadInbox()
+        local ok, n = pcall(GetInboxNumItems)
+        local count = ok and asNumber(n) or 0
+        local letters: { [number]: Letter } = {}
+        local money, sales = 0, 0
+        for i = 1, count do
+            local l = self:ReadLetter(i)
+            if l then
+                letters[i] = l
+                money += l.money
+                if l.money > 0 and (l.invoice == "seller" or self:SubjectIs("AUCTION_SOLD_MAIL_SUBJECT", l.subject)) then
+                    sales += 1
+                end
+            end
+        end
+        self.letters = letters
+        self.m:SetMailWaiting(money, sales)
+    end
+
+    -- Whether a subject is a global string's format (the item's name
+    -- captured).
+    function SubjectIs(name: string, subject: string?): string?
+        if not subject then
+            return nil
+        end
+        return captureOf(name, subject)
+    end
+
+    -- The letter at `i` now, else as last read.
+    function Letter(i: number): Letter?
+        return self:ReadLetter(i) or self.letters[i]
+    end
+
+    -- The money of a letter taken (TakeInboxMoney, AutoLootMailItem).
+    function OnTakeMoney(index: unknown)
+        local i = asNumber(index)
+        local l = i and self:Letter(i)
+        if not (l and l.money > 0) then
+            return
+        end
+        local sold = (l.invoice == "seller" and l.itemName) or self:SubjectIs("AUCTION_SOLD_MAIL_SUBJECT", l.subject)
+        if sold then
+            local id = self.m:ItemByName(sold)
+            self:Expect({
+                kind = "sold",
+                amount = l.money,
+                item = id,
+                text = not id and sold or nil,
+                qty = l.count,
+                gross = l.invoice == "seller" and l.bid or nil,
+                cut = l.invoice == "seller" and l.cut or nil,
+            })
+            return
+        end
+        local refund = self:SubjectIs("AUCTION_OUTBID_MAIL_SUBJECT", l.subject) or
+            self:SubjectIs("AUCTION_REMOVED_MAIL_SUBJECT", l.subject)
+        if refund then
+            local id = self.m:ItemByName(refund)
+            self:Expect({ kind = "bid", amount = l.money, item = id, text = not id and refund or nil })
+            return
+        end
+        if self:SubjectIs("COD_PAYMENT", l.subject) then
+            self:Expect({ kind = "cod", amount = l.money, text = l.sender, who = l.sender ~= nil })
+            return
+        end
+        self:Expect({ kind = "mail", amount = l.money, text = l.sender, who = l.sender ~= nil })
+    end
+
+    -- An item taken from a letter (TakeInboxItem, AutoLootMailItem): its
+    -- COD paid; an expired auction's item back.
+    function OnTakeItem(index: unknown, attachment: unknown)
+        local i = asNumber(index)
+        local l = i and self:Letter(i)
+        if not (i and l) then
+            return
+        end
+        local a = asNumber(attachment) or 1
+        local okL, link = pcall(GetInboxItemLink, i, a)
+        local id = okL and self:IDOfLink(link) or nil
+        local okI, _name, _id, _tex, count = pcall(GetInboxItem, i, a)
+        local qty = okI and asNumber(count) or nil
+        if l.cod > 0 then
+            self:Expect({ kind = "cod", amount = -l.cod, item = id, qty = qty, text = not id and l.sender or nil, who = not id and l.sender ~= nil or nil })
+            return
+        end
+        if self:SubjectIs("AUCTION_EXPIRED_MAIL_SUBJECT", l.subject) then
+            self:BookNow({ at = time(), kind = "expired", amount = 0, item = id, qty = qty })
+        end
+    end
+
+    function OnAutoLoot(index: unknown)
+        self:OnTakeMoney(index)
+        local i = asNumber(index)
+        local l = i and self:Letter(i)
+        if l and (l.cod > 0 or self:SubjectIs("AUCTION_EXPIRED_MAIL_SUBJECT", l.subject)) then
+            self:OnTakeItem(index, 1)
+        end
+    end
+
+    function OnSendMail(recipient: unknown)
+        local okM, m = pcall(GetSendMailMoney)
+        local money = okM and asNumber(m) or 0
+        if money <= 0 then
+            money = self.sendMoney
+        end
+        local okP, p = pcall(GetSendMailPrice)
+        local postage = okP and asNumber(p) or 0
+        self.sendMoney = 0
+        local e = sendExpectation(money, postage, asString(recipient))
+        self.sending = e
+        if e then
+            self:Expect(e)
+        end
+    end
+
+    -- MAIL_FAILED: the letter wasn't sent, nothing charged.
+    function OnMailFailed()
+        local e = self.sending
+        self.sending = nil
+        if e and not e.booked then
+            self.matcher:Drop(e)
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- On
+    ----------------------------------------------------------------------------
+
+    -- A global function hooked when the game has it.
+    function Hook(name: string, fn: function)
+        if type(_G[name]) == "function" then
+            self.m:SecureHook(name, fn)
+        end
+    end
+
+    -- A namespace's function hooked when the game has it.
+    function HookIn(space: string, name: string, fn: function)
+        local t = _G[space]
+        if type(t) == "table" and type((t :: { [string]: unknown })[name]) == "function" then
+            self.m:SecureHook(t, name, fn)
+        end
+    end
+
+    function Enable()
+        local m = self.m
+        self.money = asNumber(GetMoney())
+        self.since = GetTime()
+        self.merged, self.lastKind = {}, nil
+        m:OnGameEvent("PLAYER_MONEY", function()
+            self:OnMoney()
+        end)
+        -- vendors
+        m:OnGameEvent("MERCHANT_SHOW", function()
+            local ok, name = pcall(UnitName, "npc")
+            self.merchant = ok and asString(name) or "Vendor"
+            self:ReadRepairCost()
+            self:SnapBuyback()
+        end)
+        m:OnGameEvent("MERCHANT_UPDATE", function()
+            self:OnMerchantUpdate()
+        end)
+        m:OnGameEvent("MERCHANT_CLOSED", function()
+            self.merchant = nil
+        end)
+        m:OnGameEvent("UPDATE_INVENTORY_DURABILITY", function()
+            if self.merchant then
+                self:ReadRepairCost()
+            end
+        end)
+        self:HookIn("C_Container", "UseContainerItem", function(bag: unknown, slot: unknown)
+            self:OnUseContainerItem(bag, slot)
+        end)
+        self:Hook("BuyMerchantItem", function(i: unknown, q: unknown)
+            self:OnBuyMerchantItem(i, q)
+        end)
+        self:Hook("BuybackItem", function(i: unknown)
+            self:OnBuyback(i)
+        end)
+        self:Hook("RepairAllItems", function(guild: unknown)
+            self:OnRepairAll(guild)
+        end)
+        -- training, travel, quests
+        self:Hook("BuyTrainerService", function(i: unknown)
+            self:OnBuyTrainerService(i)
+        end)
+        m:OnGameEvent("TAXIMAP_OPENED", function()
+            self:ReadTaxi()
+        end)
+        self:Hook("TakeTaxiNode", function(i: unknown)
+            self:OnTakeTaxiNode(i)
+        end)
+        m:OnGameEvent("QUEST_COMPLETE", function()
+            local ok, t = pcall(GetTitleText)
+            self.questTitle = ok and asString(t) or nil
+        end)
+        m:OnGameEvent("QUEST_TURNED_IN", function(_, questID, xp, money)
+            self:OnQuestTurnedIn(questID, xp, money)
+        end)
+        -- trade
+        m:OnGameEvent("TRADE_SHOW", function()
+            self:OnTradeShow()
+        end)
+        for _, e in ipairs({ "TRADE_MONEY_CHANGED", "PLAYER_TRADE_MONEY", "TRADE_ACCEPT_UPDATE" }) do
+            m:OnGameEvent(e, function()
+                self:ReadTrade()
+            end)
+        end
+        m:OnGameEvent("UI_INFO_MESSAGE", function(_, kind, text)
+            self:OnInfoMessage(kind, text)
+        end)
+        -- looted coin
+        m:OnGameEvent("CHAT_MSG_MONEY", function(_, text)
+            self:OnMoneyLine(text)
+        end)
+        m:OnGameEvent("LOOT_OPENED", function()
+            self:OnLootOpened()
+        end)
+        m:OnGameEvent("LOOT_SLOT_CLEARED", function(_, slot)
+            self:OnLootSlotCleared(slot)
+        end)
+        m:OnGameEvent("LOOT_CLOSED", function()
+            self.coin = {}
+        end)
+        -- the auction house
+        self:HookIn("C_AuctionHouse", "PostItem", function(loc: unknown, d: unknown, q: unknown, _bid: unknown, buyout: unknown)
+            local qty = asNumber(q) or 1
+            local b = asNumber(buyout)
+            self:OnPost(loc, d, q, b and qty > 0 and b / qty or nil, false, false)
+        end)
+        self:HookIn("C_AuctionHouse", "ConfirmPostItem", function(loc: unknown, d: unknown, q: unknown, _bid: unknown, buyout: unknown)
+            local qty = asNumber(q) or 1
+            local b = asNumber(buyout)
+            self:OnPost(loc, d, q, b and qty > 0 and b / qty or nil, false, true)
+        end)
+        self:HookIn("C_AuctionHouse", "PostCommodity", function(loc: unknown, d: unknown, q: unknown, unit: unknown)
+            self:OnPost(loc, d, q, unit, true, false)
+        end)
+        self:HookIn("C_AuctionHouse", "ConfirmPostCommodity", function(loc: unknown, d: unknown, q: unknown, unit: unknown)
+            self:OnPost(loc, d, q, unit, true, true)
+        end)
+        self:HookIn("C_AuctionHouse", "PlaceBid", function(id: unknown, amount: unknown)
+            self:OnPlaceBid(id, amount)
+        end)
+        m:OnGameEvent("BID_ADDED", function()
+            self:OnBidAdded()
+        end)
+        m:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total)
+            self:OnCommodityPrice(unit, total)
+        end)
+        self:HookIn("C_AuctionHouse", "ConfirmCommoditiesPurchase", function(id: unknown, q: unknown)
+            self:OnConfirmCommodities(id, q)
+        end)
+        self:HookIn("C_AuctionHouse", "CancelAuction", function(id: unknown)
+            self:OnCancel(id)
+        end)
+        m:OnGameEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", function(_, kind, text, auctionID)
+            if asNumber(kind) == 2 then
+                self:OnWon(asString(text), asNumber(auctionID))
+            end
+        end)
+        -- the mail
+        m:OnGameEvent("MAIL_INBOX_UPDATE", function()
+            self:ReadInbox()
+        end)
+        self:Hook("TakeInboxMoney", function(i: unknown)
+            self:OnTakeMoney(i)
+        end)
+        self:Hook("AutoLootMailItem", function(i: unknown)
+            self:OnAutoLoot(i)
+        end)
+        self:Hook("TakeInboxItem", function(i: unknown, a: unknown)
+            self:OnTakeItem(i, a)
+        end)
+        self:Hook("SetSendMailMoney", function(amount: unknown)
+            self.sendMoney = asNumber(amount) or 0
+        end)
+        self:Hook("SendMail", function(to: unknown)
+            self:OnSendMail(to)
+        end)
+        m:OnGameEvent("MAIL_FAILED", function()
+            self:OnMailFailed()
+        end)
+        m:OnGameEvent("MAIL_SEND_SUCCESS", function()
+            self.sending = nil
+        end)
+    end
+
+    function Disable()
+        self.matcher:Clear()
+        self.bids, self.merged = {}, {}
+        self.merchant, self.partner, self.ticking = nil, nil, false
+        self.sending, self.coin, self.coinTaken = nil, {}, {}
+        self.sold, self.sales = {}, {}
+    end
+end

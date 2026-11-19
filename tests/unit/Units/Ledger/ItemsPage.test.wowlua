@@ -1,0 +1,630 @@
+-- Units/Ledger/ItemsPage: what the chosen characters hold, a row per item
+-- per character per place (or per item, its places summed), Value first;
+-- a row's cells (the quality's colour, Where, Count, Each, Value; the
+-- mail's money; left-out ones muted with why); the count and total equal
+-- to what it's worth; sorting by each column; Show, Rows, Category,
+-- Quality, the place (one, or in more than one place); the search; the
+-- foot; the empty states (a place never read, its module off, nothing
+-- counted); the Gold tab's rows opening it at their place; a row's item
+-- page and back; the cost (made a slice a frame at size, kept, made again
+-- only for what changed, nothing running while it only shows); the module
+-- off.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type ItemsPage, ItemRow, ItemEntry from "/Units/Ledger/ItemsPage"
+import NOW_ITEMS, BUILD_ITEMS, MONEY_ICON from "/Units/Ledger/ItemsPage"
+import PLACES from "/Units/Ledger/GoldPage"
+import type LedgerWindow from "/Units/Ledger/Window"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import seed, openLedger, wipe, see, LOTUS, KINGSBLOOD, ESSENCE, ORE, NOBODY, holdings, cleanHoldings, saved, forget, usual from "./LedgerHelpers"
+import internal M as Mail from "/Units/Mail"
+import internal M as Bags from "/Units/Bags"
+import internal ownOf from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import * as parts from "/Units/Ledger/Parts"
+
+const DAY = 86400
+
+-- the characters holdings() made (cleaned after each test)
+local held: string[]? = nil
+
+@afterEach
+local function cleanup()
+    local h = held
+    if h then
+        cleanHoldings(h[1], h[2])
+        held = nil
+    end
+    wipe()
+    expectNoErrors()
+end
+
+-- The test's characters' things (LedgerHelpers.holdings): you: 2 lotus, 20
+-- kingsblood and a soulbound ore in your bags, an essence and 5,000 copper
+-- in the mail; Kaelith: 10 kingsblood and 3 of an item never seen in her
+-- bags (yesterday), a lotus in her bank (3 days ago); Lum (Roleplay): a
+-- lotus at Roleplay's 500,000.
+local function setup(): (string, string)
+    seed()
+    local kaelith, lum = holdings()
+    held = { kaelith, lum }
+    return kaelith, lum
+end
+
+local function page(): ItemsPage
+    return openLedger("items").items
+end
+
+-- Your name (the character you play).
+local function me(): string
+    for _, c in ipairs(M:Characters()) do
+        if c.you then
+            return c.name
+        end
+    end
+    error("no you")
+end
+
+local function entries(p: ItemsPage): ItemEntry[]
+    local out: ItemEntry[] = {}
+    for i, e in ipairs(p.list.items) do
+        out[i] = e :: ItemEntry
+    end
+    return out
+end
+
+-- The rows in sight, in order.
+local function rows(p: ItemsPage): ItemRow[]
+    local out: { i: number, row: ItemRow }[] = {}
+    for _, r in ipairs(p.list:Rows()) do
+        local i = p.list:IndexOf(r)
+        if i and r:IsShown() then
+            out[#out + 1] = { i = i, row = r :: ItemRow }
+        end
+    end
+    table.sort(out, function(a: { i: number }, b: { i: number }): boolean
+        return a.i < b.i
+    end)
+    local list: ItemRow[] = {}
+    for k, e in ipairs(out) do
+        list[k] = e.row
+    end
+    return list
+end
+
+local function rowOf(p: ItemsPage, itemID: number, where: string?): ItemRow
+    for _, r in ipairs(rows(p)) do
+        local e = r.entry
+        if e and e.itemID == itemID and (where == nil or e.where == where) then
+            return r
+        end
+    end
+    error("no row for " .. itemID .. " " .. (where or ""))
+end
+
+-- Filters chosen as the menu does.
+local function choose(p: ItemsPage, key: string, value: unknown)
+    local v = p.filter:GetValue() :: { [string]: unknown }
+    v[key] = value
+    p.filter:SetValue(v :: any)
+    p.filter:Changed()
+end
+
+-- A place chosen as the select does.
+local function pick(p: ItemsPage, place: string)
+    p.placeSelect:Choose({ value = place, label = place })
+end
+
+-- What the Gold tab's places are worth together for the chosen characters.
+local function worthOf(w: LedgerWindow): number
+    local sums = M:Worth():Sum(w:Chosen(), PLACES)
+    local total = 0
+    for _, place in ipairs(PLACES) do
+        local pw = sums[place]
+        if pw and pw.kept then
+            total += pw.value
+        end
+    end
+    return total
+end
+
+local function ids(p: ItemsPage): number[]
+    local out: number[] = {}
+    for i, e in ipairs(entries(p)) do
+        out[i] = e.itemID
+    end
+    return out
+end
+
+@test("the tab after Gold: every item the chosen characters hold, a row per place, Value first; the count and total are what it's worth")
+local function list()
+    local kaelith = setup()
+    local p = page()
+    local w = p.w
+    expect(w.frame.tab).toBe("items")
+    local tabs = assert(w.frame.tabButtons)
+    expect(tabs[5].key).toBe("items")
+    expect(tabs[4].key).toBe("gold")
+    local list = entries(p)
+    -- 2 lotus, 20 + 10 kingsblood, an essence, the mail's money, Kaelith's
+    -- and Lum's lotus (the soulbound ore and the unseen item left out)
+    expect(#list).toBe(7)
+    for i = 2, #list do
+        expect(list[i - 1].value >= list[i].value).toBe(true)
+    end
+    expect(list[1].itemID).toBe(LOTUS)
+    expect(list[1].count).toBe(2)
+    -- the count and the total: what it's worth's places, the same characters
+    local worth = worthOf(w)
+    expect(worth > 0).toBe(true)
+    expect(p.shownValue).toBe(worth)
+    expect(p.countText:GetText()).toBe("35 items \194\183 " .. SuuUI.UI.MoneyText(worth))
+    -- what the Gold tab shows, less the gold
+    w:Go("gold")
+    expect(w.gold.worthAll.money.copper).toBe(worth + M:GoldTotal(nil))
+    -- one character: hers
+    w:Go("items")
+    w.scope = "c:" .. kaelith
+    w:Refresh()
+    expect(#entries(p)).toBe(2)
+    expect(p.shownValue).toBe(worthOf(w))
+    expect(p.shownValue).toBe(10 * usual(KINGSBLOOD) + usual(LOTUS))
+    -- a ruleset: Lum's at Roleplay's price
+    w.scope = "rs:Roleplay"
+    w:Refresh()
+    expect(ids(p)).toEqual({ LOTUS })
+    expect(p.shownValue).toBe(500000)
+    -- only the rows in sight were made
+    expect(#p.list:Rows() <= 20).toBe(true)
+end
+
+@test("a row: the name in its quality's colour, Where (the place and the character), Count, Each at its ruleset's usual price, Value; the mail's money")
+local function cells()
+    local kaelith = setup()
+    local p = page()
+    local mine = "Bags \194\183 " .. me()
+    local lotus = rowOf(p, LOTUS, mine)
+    expect(lotus.name:GetText()).toBe("Test Lotus")
+    expect(tokenOf(lotus.name)).toBe("quality-uncommon")
+    expect(lotus.where:GetText()).toBe(mine)
+    expect(lotus.count:GetText()).toBe("2")
+    expect(lotus.each.copper).toBe(usual(LOTUS))
+    expect(lotus.value.copper).toBe(2 * usual(LOTUS))
+    expect(lotus.why:GetText()).toBe("")
+    expect(lotus.noEach).never.toBeShown()
+    -- Kaelith's bank, Lum's bags at Roleplay's price
+    local bank = rowOf(p, LOTUS, "Bank \194\183 Kaelith")
+    expect(bank.value.copper).toBe(usual(LOTUS))
+    expect(assert(bank.entry).key).toBe(kaelith)
+    expect(rowOf(p, LOTUS, "Bags \194\183 Lum").each.copper).toBe(500000)
+    -- the mail's money: a row of its own, the coin, no count or price each
+    local money = rowOf(p, 0)
+    expect(money.name:GetText()).toBe("Money")
+    expect(money.where:GetText()).toBe("Mail \194\183 " .. me())
+    expect(money.count:GetText()).toBe("")
+    expect(money.each).never.toBeShown()
+    expect(money.noEach).never.toBeShown()
+    expect(money.value.copper).toBe(5000)
+    expect(assert(money.entry).info.icon).toBe(MONEY_ICON)
+    -- the tooltip: the item, then where it is, as of when (yours live)
+    mock.hover(bank)
+    expect(GameTooltip:IsShown()).toBe(true)
+    local lefts, rights = mock.tooltipLines(GameTooltip), mock.tooltipLines(GameTooltip, true)
+    expect(lefts[1]).toBe("Test Lotus")
+    expect(lefts[#lefts]).toBe("Bank \194\183 Kaelith")
+    expect(rights[#rights]).toBe("1 \194\183 as of 3 days ago")
+    mock.hover(lotus)
+    rights = mock.tooltipLines(GameTooltip, true)
+    expect(rights[#rights]).toBe("2")
+    mock.hover(money)
+    lefts = mock.tooltipLines(GameTooltip)
+    expect(lefts[1]).toBe("Money in the mail")
+    mock.hover(nil)
+end
+
+@test("left out: the foot counts them (Show); shown muted, why, a dash for Each and Value; All shows both")
+local function leftOut()
+    setup()
+    local p = page()
+    expect(p.footText:GetText()).toBe("Left out (soulbound, never seen): 4 items")
+    expect(p.footLink).toBeShown()
+    mock.click(p.footLink)
+    expect(p.show).toBe("left")
+    expect((p.filter:GetValue() :: { show: string }).show).toBe("left")
+    expect(#entries(p)).toBe(2)
+    expect(p.countText:GetText()).toBe("4 items left out")
+    local ore = rowOf(p, ORE)
+    expect(ore.why:GetText()).toBe("Soulbound")
+    expect(tokenOf(ore.name)).toBe("ink-muted")
+    expect(ore.noEach).toBeShown()
+    expect(ore.noValue).toBeShown()
+    expect(ore.value).never.toBeShown()
+    expect(ore.noValue:GetText()).toBe("\226\128\148")
+    local nobody = rowOf(p, NOBODY)
+    expect(nobody.why:GetText()).toBe("Never seen")
+    expect(nobody.count:GetText()).toBe("3")
+    expect(nobody.where:GetText()).toBe("Bags \194\183 Kaelith")
+    expect(p.footLink.label:GetText()).toBe("Show valued")
+    -- All: both; the total the valued ones'
+    choose(p, "show", "all")
+    expect(#entries(p)).toBe(9)
+    expect(p.shownValue).toBe(worthOf(p.w))
+    expect(p.countText:GetText()).toBe("39 items \194\183 " .. SuuUI.UI.MoneyText(worthOf(p.w)))
+    expect(p.footText).never.toBeShown()
+    -- back to the valued ones by the foot
+    choose(p, "show", "left")
+    mock.click(p.footLink)
+    expect(p.show).toBe("valued")
+end
+
+@test("per item: each item's places summed (\"3 places\", listed in its tooltip); the count and total unchanged")
+local function perItem()
+    setup()
+    local p = page()
+    local before = p.countText:GetText()
+    choose(p, "rows", "item")
+    expect(p.rows).toBe("item")
+    -- the lotus (3 places), the kingsblood (2), the essence, the money
+    expect(#entries(p)).toBe(4)
+    expect(p.countText:GetText()).toBe(before)
+    local king = rowOf(p, KINGSBLOOD)
+    expect(king.where:GetText()).toBe("2 places")
+    expect(king.count:GetText()).toBe("30")
+    expect(king.each.copper).toBe(usual(KINGSBLOOD))
+    expect(king.value.copper).toBe(30 * usual(KINGSBLOOD))
+    local lotus = rowOf(p, LOTUS)
+    expect(lotus.where:GetText()).toBe("3 places")
+    local value = 3 * usual(LOTUS) + 500000
+    expect(lotus.value.copper).toBe(value)
+    -- (two rulesets: what one is worth on average)
+    expect(lotus.each.copper).toBe(math.floor(value / 4 + 0.5))
+    expect(assert(lotus.entry).ruleset).toBe("")
+    -- one place: its own Where
+    expect(rowOf(p, ESSENCE).where:GetText()).toBe("Mail \194\183 " .. me())
+    mock.hover(lotus)
+    local lefts, rights = mock.tooltipLines(GameTooltip), mock.tooltipLines(GameTooltip, true)
+    local said: { [string]: string } = {}
+    for i = #lefts - 2, #lefts do
+        said[lefts[i]] = rights[i]
+    end
+    expect(said).toEqual({
+        ["Bags \194\183 " .. me()] = "2",
+        ["Bank \194\183 Kaelith"] = "1 \194\183 as of 3 days ago",
+        ["Bags \194\183 Lum"] = "1 \194\183 as of " .. parts.when(time() - 2 * DAY),
+    })
+    mock.hover(nil)
+    -- left out per item too: the soulbound ore and the unseen item
+    choose(p, "show", "left")
+    expect(#entries(p)).toBe(2)
+end
+
+@test("sorting: Item, Where, Count, Each, Value; again reversed; the caption lit, the arrow by it")
+local function sorting()
+    setup()
+    local p = page()
+    expect(p.sortKey).toBe("value")
+    expect(p.heads[5].arrow).toBeShown()
+    expect(tokenOf(p.heads[5].label)).toBe("ink")
+    -- Item: by name (the money among them), then reversed
+    mock.click(p.heads[1])
+    expect(p.heads[1].arrow).toBeShown()
+    expect(p.heads[5].arrow).never.toBeShown()
+    local names: string[] = {}
+    for i, e in ipairs(entries(p)) do
+        names[i] = assert(e.info.lname)
+    end
+    for i = 2, #names do
+        expect(names[i - 1] <= names[i]).toBe(true)
+    end
+    expect(names[1]).toBe("money")
+    mock.click(p.heads[1])
+    expect(entries(p)[1].info.lname).toBe("test lotus")
+    -- Where
+    mock.click(p.heads[2])
+    local list = entries(p)
+    for i = 2, #list do
+        expect(list[i - 1].lwhere <= list[i].lwhere).toBe(true)
+    end
+    expect(list[1].where).toBe("Bags \194\183 Kaelith")
+    -- Count: the most first, the money last
+    mock.click(p.heads[3])
+    list = entries(p)
+    expect(list[1].count).toBe(20)
+    expect(list[#list].itemID).toBe(0)
+    mock.click(p.heads[3])
+    expect(entries(p)[1].count).toBe(1)
+    -- Each: the dearest first
+    mock.click(p.heads[4])
+    list = entries(p)
+    expect(list[1].each).toBe(500000)
+    expect(list[#list].itemID).toBe(0)
+    -- Value: the highest first, reversed the lowest
+    mock.click(p.heads[5])
+    expect(entries(p)[1].count).toBe(2)
+    mock.click(p.heads[5])
+    expect(entries(p)[1].itemID).toBe(0)
+    -- the orders kept until the rows change
+    local kept = p.orders["value-"]
+    p:DrawList()
+    expect(p.orders["value-"]).toBe(kept)
+end
+
+@test("the place: one of them, or the items in more than one place; Category and Quality; the search")
+local function filters()
+    setup()
+    local p = page()
+    -- the bank: Kaelith's lotus
+    pick(p, "bank")
+    expect(p.place).toBe("bank")
+    expect(ids(p)).toEqual({ LOTUS })
+    expect(p.shownValue).toBe(usual(LOTUS))
+    -- the mail: the essence and the money, what the Gold tab's mail is
+    pick(p, "mail")
+    expect(#entries(p)).toBe(2)
+    local sums = M:Worth():Sum(p.w:Chosen(), PLACES)
+    expect(p.shownValue).toBe(assert(sums.mail).value)
+    -- more than one place: the lotus (3) and the kingsblood (2)
+    pick(p, "multi")
+    expect(#entries(p)).toBe(5)
+    for _, e in ipairs(entries(p)) do
+        expect(e.itemID == LOTUS or e.itemID == KINGSBLOOD).toBe(true)
+    end
+    pick(p, "all")
+    -- Quality: uncommon (the lotus)
+    choose(p, "q", { "uncommon" })
+    expect(#entries(p)).toBe(3)
+    choose(p, "q", {})
+    -- Category: weapons none; trade goods every item, not the money
+    choose(p, "cat", { "w" })
+    expect(#entries(p)).toBe(0)
+    expect(p.empty:GetText()).toBe("Nothing matches.")
+    choose(p, "cat", { "t" })
+    expect(#entries(p)).toBe(6)
+    choose(p, "cat", {})
+    -- the search, any case
+    p.search:SetValue("KINGS")
+    p:SetQuery("KINGS")
+    expect(ids(p)).toEqual({ KINGSBLOOD, KINGSBLOOD })
+    expect(p.countText:GetText()).toBe("30 items \194\183 " .. SuuUI.UI.MoneyText(30 * usual(KINGSBLOOD)))
+    p:SetQuery("money")
+    expect(ids(p)).toEqual({ 0 })
+    p:SetQuery("nothing like it")
+    expect(p.empty).toBeShown()
+    expect(p.empty:GetText()).toBe("Nothing matches.")
+end
+
+@test("empty: a place never read says how to count it; its module off says so; nothing counted at all")
+local function empties()
+    setup()
+    local p = page()
+    local w = p.w
+    -- your auctions: never seen
+    p:SetPlace("auctions")
+    expect(#entries(p)).toBe(0)
+    expect(p.empty:GetText()).toBe("Visit the auction house to count them.")
+    -- Brannoc: nothing counted anywhere
+    w.scope = "c:Brannoc - " .. SuuUI.Ruleset()
+    w:Refresh()
+    p:SetPlace("bank")
+    expect(p.empty:GetText()).toBe("Visit your bank to count it.")
+    p:SetPlace("all")
+    expect(p.empty:GetText()).toContain("Nothing counted yet")
+    expect(p.countText:GetText()).toBe("0 items \194\183 " .. SuuUI.UI.MoneyText(0))
+    -- the mail module off: its place says so, its rows go
+    w.scope = "all"
+    w:Refresh()
+    local own = ownOf(Mail)
+    own.reloadToToggle = false
+    settings.set("mail", "enabled", false)
+    mock.advanceFrames(2)
+    expect(#entries(p)).toBe(5)
+    p:SetPlace("mail")
+    expect(p.empty:GetText()).toBe("The Mail module is off.")
+    settings.set("mail", "enabled", true)
+    own.reloadToToggle = true
+    mock.advanceFrames(2)
+    expect(#entries(p)).toBe(2)
+    -- the bags module off: bags and bank gone
+    p:SetPlace("all")
+    local bagsOwn = ownOf(Bags)
+    local was = bagsOwn.reloadToToggle
+    bagsOwn.reloadToToggle = false
+    settings.set("bags", "enabled", false)
+    mock.advanceFrames(2)
+    expect(ids(p)).toEqual({ ESSENCE, 0 })
+    p:SetPlace("bank")
+    expect(p.empty:GetText()).toBe("The Bags module is off.")
+    settings.set("bags", "enabled", true)
+    bagsOwn.reloadToToggle = was
+    mock.advanceFrames(2)
+    p:SetPlace("all")
+    expect(#entries(p)).toBe(7)
+end
+
+@test("the Gold tab's rows open Items at their place; lit on hover")
+local function fromGold()
+    setup()
+    local w = openLedger("gold")
+    local bank = assert(w.gold.worthRows.bank)
+    mock.hover(bank)
+    expect(bank.hover).toBeShown()
+    mock.hover(nil)
+    expect(bank.hover).never.toBeShown()
+    mock.click(bank)
+    expect(w.view).toBe("items")
+    expect(w.frame.tab).toBe("items")
+    expect(w.items.place).toBe("bank")
+    expect(w.items.placeSelect.value).toBe("bank")
+    expect(ids(w.items)).toEqual({ LOTUS })
+    w:Go("gold")
+    mock.click(assert(w.gold.worthRows.mail))
+    expect(w.items.place).toBe("mail")
+    expect(#entries(w.items)).toBe(2)
+end
+
+@test("a row opens its item's page at its character's ruleset; under the Items tab; Back returns with the filters kept")
+local function openItem()
+    setup()
+    local p = page()
+    local w = p.w
+    p:SetPlace("multi")
+    mock.click(rowOf(p, LOTUS, "Bags \194\183 Lum"))
+    expect(w.view).toBe("item")
+    expect(w.item.itemID).toBe(LOTUS)
+    expect(w.frame.tab).toBe("items")
+    expect(w.ruleset).toBe("Roleplay")
+    expect(w.item.back.tip).toBe("Back to items")
+    mock.click(w.item.back)
+    expect(w.view).toBe("items")
+    expect(p.place).toBe("multi")
+    expect(#entries(p)).toBe(5)
+    -- the money opens nothing
+    p:SetPlace("mail")
+    mock.click(rowOf(p, 0))
+    expect(w.view).toBe("items")
+    -- from Prices: back to Prices as before
+    w.ruleset = nil
+    w:Go("prices")
+    local pr = w.prices
+    for _, r in ipairs(pr.list:Rows()) do
+        local e = r:IsShown() and (r :: any).entry or nil
+        if e and e.itemID == LOTUS then
+            mock.click(r)
+            break
+        end
+    end
+    expect(w.view).toBe("item")
+    expect(w.frame.tab).toBe("prices")
+    expect(w.item.back.tip).toBe("Back to prices")
+    mock.click(w.item.back)
+    expect(w.view).toBe("prices")
+end
+
+@test("thousands of rows: worked out and made a slice a frame behind the loading mark; kept; only a changed place made again; nothing runs while it shows")
+local function cost()
+    setup()
+    local kaelith = assert(held)[1]
+    local many: { { number } } = {}
+    for k = 1, 1500 do
+        many[k] = { 991000 + k, 2 }
+    end
+    -- (her bank now: 1,500 kinds never seen, two of each)
+    saved(kaelith, "bank", many, time() - DAY)
+    local w = openLedger("items")
+    local p = w.items
+    p:SetPlace("all")
+    choose(p, "show", "all")
+    expect(p.loadingView).toBeShown()
+    expect(p.countText:GetText()).toBe("Counting\226\128\166")
+    local frames = 0
+    local sawRows = false
+    local last = 0
+    while p.loadingView:IsShown() and frames < 200 do
+        mock.advanceFrames(1)
+        frames += 1
+        local job = p.job
+        if job and job.done > 0 then
+            -- (never more than a slice of rows a frame)
+            expect(job.done - last <= BUILD_ITEMS).toBe(true)
+            last = job.done
+            sawRows = true
+        end
+    end
+    expect(p.loadingView).never.toBeShown()
+    -- Worth's slices (200 items) then the rows' (made after: 1,500 > 300 at once)
+    expect(frames >= 1500 // 200).toBe(true)
+    expect(sawRows).toBe(true)
+    expect(#entries(p)).toBe(1508)
+    expect(p.leftCount).toBe(3004)
+    -- nothing runs now: no tickers, the same rows frames later
+    expect(p.ticker).toBeNil()
+    expect(M.worth and M.worth.ticker).toBeNil()
+    local shown = p.list.items
+    mock.advanceFrames(30)
+    expect(p.list.items).toBe(shown)
+    -- drawn again: kept, nothing made again
+    local bank = assert(p.lists[kaelith .. "\0bank"])
+    local base = p.base
+    w:Refresh()
+    expect(p.lists[kaelith .. "\0bank"]).toBe(bank)
+    expect(p.base).toBe(base)
+    -- your bags changed: only yours made again
+    local myKey = M:CharKey() or ""
+    local mine = p.lists[myKey .. "\0bags"]
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = LOTUS, count = 3 },
+            [2] = { id = KINGSBLOOD, count = 20 },
+            [3] = { id = ORE, count = 1, bound = true },
+        },
+    })
+    mock.advanceTime(1.5)
+    mock.advanceFrames(2)
+    expect(p.lists[myKey .. "\0bags"] ~= mine).toBe(true)
+    expect(p.lists[kaelith .. "\0bank"]).toBe(bank)
+    expect(rowOf(p, LOTUS, "Bags \194\183 " .. me()).count:GetText()).toBe("3")
+    -- a price of an item held changed: that ruleset's places again, Lum's kept
+    local lum = p.lists["Lum - Roleplay\0bags"]
+    local was = usual(LOTUS)
+    for k = 1, 12 do
+        see(LOTUS, was * 3, was * 3, 1, 1, time() - k * 60)
+    end
+    mock.advanceFrames(3)
+    expect(p.loadingView).toBeShown()
+    local guard = 0
+    while p.loadingView:IsShown() and guard < 200 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    expect(p.lists["Lum - Roleplay\0bags"]).toBe(lum)
+    expect(p.lists[kaelith .. "\0bank"] ~= bank).toBe(true)
+    expect(p.shownValue).toBe(worthOf(w))
+    forget(kaelith)
+end
+
+@test("a few places: worked out and made at once, no loading mark")
+local function atOnce()
+    setup()
+    local p = page()
+    expect(p.loadingView).never.toBeShown()
+    expect(p.ticker).toBeNil()
+    expect(#entries(p) > 0).toBe(true)
+    expect(NOW_ITEMS >= 10).toBe(true)
+end
+
+@test("the module off while the rows are made: stopped; on again, they're made again and shown")
+local function offOn()
+    setup()
+    local kaelith = assert(held)[1]
+    local many: { { number } } = {}
+    for k = 1, 900 do
+        many[k] = { 991000 + k, 1 }
+    end
+    saved(kaelith, "bank", many, time() - DAY)
+    local w = openLedger("items")
+    expect(w.items.loadingView).toBeShown()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    settings.set("ledger", "enabled", false)
+    mock.advanceFrames(2)
+    expect(w.frame:IsShown()).toBe(false)
+    expect(w.items.ticker).toBeNil()
+    settings.set("ledger", "enabled", true)
+    own.reloadToToggle = true
+    mock.advanceFrames(2)
+    w = openLedger("items")
+    local guard = 0
+    while w.items.loadingView:IsShown() and guard < 200 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    expect(w.view).toBe("items")
+    choose(w.items, "show", "all")
+    expect(#entries(w.items)).toBe(908)
+    forget(kaelith)
+end

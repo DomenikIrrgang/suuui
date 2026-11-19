@@ -1,0 +1,128 @@
+-- Units/Ledger/Gold.wowlua
+-- Your characters' gold day by day (Units/Ledger): per character (its key,
+-- Core/Settings' "Name - Realm") its name, class, ruleset and when it was
+-- last seen, and its money at the end of each day it played (the last
+-- money seen that day; kept for good: one number a day). What the Gold
+-- tab draws: the balance of the characters chosen (all of them, all on a
+-- ruleset, or one) at each day's end, a day without play keeping the day
+-- before's.
+
+-- One character. `days`: { [day number] = copper }.
+export type GoldChar = { name: string, class?: string, ruleset: string, seen: number, days: { [number]: number } }
+-- Every character by key.
+export type GoldMap = { [string]: GoldChar }
+-- Which characters: all (neither), all on a ruleset, or one by key.
+export type GoldScope = { ruleset?: string, char?: string }
+
+-- A character's money on `day` (Days), seen at `at` (time()).
+export function record(
+    map: GoldMap,
+    key: string,
+    name: string,
+    class: string?,
+    ruleset: string,
+    day: number,
+    money: number,
+    at: number
+)
+    local c = map[key]
+    if not c then
+        c = { name = name, class = class, ruleset = ruleset, seen = at, days = {} }
+        map[key] = c
+    end
+    c.name, c.class, c.ruleset, c.seen = name, class or c.class, ruleset, at
+    c.days[day] = math.floor(money)
+end
+
+-- The keys of the characters a scope chooses, sorted.
+export function chosen(map: GoldMap, scope: GoldScope?): string[]
+    local out: string[] = {}
+    for key, c in pairs(map) do
+        if not scope or (scope.char == nil and scope.ruleset == nil) or (scope.char ~= nil and scope.char == key) or
+            (scope.char == nil and scope.ruleset ~= nil and scope.ruleset == c.ruleset) then
+            out[#out + 1] = key
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- A character's days, sorted.
+local function sortedDays(c: GoldChar): number[]
+    local days: number[] = {}
+    for d in pairs(c.days) do
+        days[#days + 1] = d
+    end
+    table.sort(days)
+    return days
+end
+
+-- A character's money at the end of `day`: its last day on or before it
+-- (0 before its first).
+export function balanceOn(c: GoldChar, day: number): number
+    local best: number? = nil
+    for d in pairs(c.days) do
+        if d <= day and (not best or d > best) then
+            best = d
+        end
+    end
+    return best and c.days[best] or 0
+end
+
+-- The first day any chosen character has (nil: none).
+export function firstDay(map: GoldMap, scope: GoldScope?): number?
+    local first: number? = nil
+    for _, key in ipairs(chosen(map, scope)) do
+        local c = map[key]
+        for d in pairs(c and c.days or {}) do
+            if not first or d < first then
+                first = d
+            end
+        end
+    end
+    return first
+end
+
+-- The chosen characters' money together at the end of each day from
+-- `fromDay` to `toDay` (values[1] is fromDay's): a day a character didn't
+-- play keeps its day before; before its first day it adds nothing.
+export function series(map: GoldMap, scope: GoldScope?, fromDay: number, toDay: number): number[]
+    local values: number[] = {}
+    for i = 1, math.max(0, toDay - fromDay + 1) do
+        values[i] = 0
+    end
+    for _, key in ipairs(chosen(map, scope)) do
+        local c = map[key]
+        if c then
+            local days = sortedDays(c)
+            local money = balanceOn(c, fromDay - 1)
+            local k = 1
+            while k <= #days and days[k] < fromDay do
+                k += 1
+            end
+            for i = 1, #values do
+                local day = fromDay + i - 1
+                if days[k] == day then
+                    money = c.days[day] or money
+                    k += 1
+                end
+                values[i] += money
+            end
+        end
+    end
+    return values
+end
+
+-- The chosen characters' money now (each one's last day).
+export function total(map: GoldMap, scope: GoldScope?): number
+    local sum = 0
+    for _, key in ipairs(chosen(map, scope)) do
+        local c = map[key]
+        if c then
+            local days = sortedDays(c)
+            local last = days[#days]
+            sum += last and c.days[last] or 0
+        end
+    end
+    return sum
+end

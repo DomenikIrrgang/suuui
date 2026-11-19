@@ -18,7 +18,16 @@
 -- from the same sender); the expiry (days left read against the clock) only
 -- picks between such twins, never decides a match, since how exactly the
 -- game rounds the days left is not known.
+--
+-- What the inbox held when it was last read is kept per character (keep;
+-- 0.48, for the Ledger's "What it's worth" and the bags' item counts): each
+-- mail's money, cash on delivery, when it expires and its items. Read back
+-- as a holding (holdingOf, Core/Holdings) without the mails that expired
+-- since: what an expired mail held went back to its sender or is gone.
+-- Nothing else that goes stale is guessed at (a mail taken on another
+-- computer, a sale's money on its way): the holding says when it was read.
 
+import type Holding from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 
@@ -198,4 +207,80 @@ export function find(id: MailId, prefer: number?, match: ((MailId, MailId) -> bo
         end
     end
     return best
+end
+
+--------------------------------------------------------------------------------
+-- The inbox as last read, kept per character
+--------------------------------------------------------------------------------
+
+-- A mail kept: its money, cash on delivery, when it expires (time()) and
+-- its items as pairs of item ID and count (each nil when none).
+export type KeptMail = { m?: number, c?: number, e?: number, i?: number[] }
+-- The inbox kept: when it was read, its mails, how many more the game
+-- didn't show (it shows 50 at most: the rest come as these are taken).
+export type KeptInbox = { at: number, mails: KeptMail[], more?: number }
+
+-- The inbox now, as kept.
+export function keep(now: number): KeptInbox
+    local n, total = inboxCount()
+    local list: KeptMail[] = {}
+    for i = 1, n do
+        local h = header(i)
+        if h then
+            local km: KeptMail = {}
+            if h.money > 0 then
+                km.m = h.money
+            end
+            if h.cod > 0 then
+                km.c = h.cod
+            end
+            if h.days then
+                km.e = now + math.floor(h.days * 86400)
+            end
+            if h.items > 0 then
+                local held: number[] = {}
+                for _, a in ipairs(attachments(i)) do
+                    held[#held + 1] = a.item
+                    held[#held + 1] = a.count
+                end
+                if #held > 0 then
+                    km.i = held
+                end
+            end
+            list[#list + 1] = km
+        end
+    end
+    local out: KeptInbox = { at = now, mails = list }
+    if total > n then
+        out.more = total - n
+    end
+    return out
+end
+
+-- The inbox kept, as a holding at `now`: its items, money and cash on
+-- delivery, the mails expired since left out (nil: never read). And when
+-- the next of its mails expires (nil: none will).
+export function holdingOf(kept: KeptInbox?, now: number): (Holding?, number?)
+    if not kept then
+        return nil, nil
+    end
+    local items: { [number]: number } = {}
+    local money, cod = 0, 0
+    local nextEnd: number? = nil
+    for _, km in ipairs(kept.mails) do
+        local e = km.e
+        if not e or e > now then
+            if e and (not nextEnd or e < nextEnd) then
+                nextEnd = e
+            end
+            money += km.m or 0
+            cod += km.c or 0
+            local list = km.i or {}
+            for k = 1, #list - 1, 2 do
+                local id, count = list[k], list[k + 1]
+                items[id] = (items[id] or 0) + count
+            end
+        end
+    end
+    return { items = items, money = money, cod = cod, seen = kept.at }, nextEnd
 end

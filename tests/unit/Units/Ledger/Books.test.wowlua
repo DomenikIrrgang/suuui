@@ -1,0 +1,208 @@
+-- Units/Ledger/Books: a transaction kept and read back (every field, the
+-- newest first, a player's name, texts with any characters), a row changed
+-- in place, a year kept and the rest pruned, several characters merged,
+-- the totals, where money came from and went (an auction sale after the
+-- cut, the deposits it gave back against those paid), an item's sales;
+-- and the size of a busy character's year.
+
+import test, expect from "wowlua:test"
+import * as books from "/Units/Ledger/Books"
+import type Tx, Book from "/Units/Ledger/Books"
+import * as days from "/Units/Ledger/Days"
+import expectNoErrors from "../../../helpers"
+
+-- 18 November 2026, 12:00 (the computer's clock)
+const NOON = time({ year = 2026, month = 11, day = 18, hour = 12 })
+
+@test("a transaction kept and read back with all it says; the newest first")
+local function roundTrip()
+    local b: Book = {}
+    books.add(b, { at = NOON, kind = "sold", amount = 29640, item = 990602, qty = 20, gross = 31200, cut = 1560 })
+    books.add(b, { at = NOON + 60, kind = "mail", amount = 500000, text = "Brannoc", who = true })
+    books.add(b, { at = NOON - 3600, kind = "posted", amount = -2400, item = 990602, qty = 200, price = 1520, commodity = true })
+    books.add(b, { at = NOON + 30, kind = "travel", amount = -3900, text = "Ironforge to Light\226\128\153s Hope" })
+    books.add(b, { at = NOON + 45, kind = "loot", amount = 81900, text = "Eastern \"Plague\\lands\"", n = 118 })
+    local day = days.dayOf(NOON)
+    local rows = books.decodeDay(b[day], nil, "Veyra - Test")
+    expect(#rows).toBe(5)
+    expect(rows[1]).toEqual({ at = NOON + 60, kind = "mail", amount = 500000, text = "Brannoc", who = true, char = "Veyra - Test" })
+    expect(rows[2].text).toBe("Eastern \"Plague\\lands\"")
+    expect(rows[2].n).toBe(118)
+    expect(rows[3].text).toBe("Ironforge to Light\226\128\153s Hope")
+    expect(rows[3].who).toBeNil()
+    expect(rows[4]).toEqual({
+        at = NOON,
+        kind = "sold",
+        amount = 29640,
+        item = 990602,
+        qty = 20,
+        gross = 31200,
+        cut = 1560,
+        char = "Veyra - Test",
+    })
+    expect(rows[5]).toEqual({
+        at = NOON - 3600,
+        kind = "posted",
+        amount = -2400,
+        item = 990602,
+        qty = 200,
+        price = 1520,
+        commodity = true,
+        char = "Veyra - Test",
+    })
+    -- every kind keeps its own
+    for i, k in ipairs(books.KINDS) do
+        local one: Book = {}
+        books.add(one, { at = NOON + i, kind = k.key, amount = -i })
+        expect(books.decodeDay(one[day])[1].kind).toBe(k.key)
+    end
+    expectNoErrors()
+end
+
+@test("a row changed in place (looted coin, Other merged into); the newest row")
+local function updating()
+    local b: Book = {}
+    books.add(b, { at = NOON, kind = "loot", amount = 120, text = "Elwynn Forest", n = 1 })
+    books.add(b, { at = NOON + 10, kind = "vendor", amount = 300, item = 990601, qty = 3 })
+    expect(books.update(b, NOON, "loot", function(t: Tx)
+        t.amount += 80
+        t.n = (t.n or 1) + 1
+    end)).toBe(true)
+    expect(books.update(b, NOON, "quest", function(_: Tx) end)).toBe(false)
+    local rows = books.decodeDay(b[days.dayOf(NOON)])
+    expect(rows[2].amount).toBe(200)
+    expect(rows[2].n).toBe(2)
+    expect(assert(books.newest(b, days.dayOf(NOON))).kind).toBe("vendor")
+    expect(books.newest({}, days.dayOf(NOON))).toBeNil()
+    expectNoErrors()
+end
+
+@test("a year kept, older days pruned; the days newest first; several characters merged")
+local function pruning()
+    local b: Book = {}
+    local today = days.dayOf(NOON)
+    for k = 0, 400, 50 do
+        books.add(b, { at = NOON - k * 86400, kind = "quest", amount = 100 + k })
+    end
+    expect(#books.daysOf(b, nil)).toBe(9)
+    expect(books.prune(b, today - books.KEEP_DAYS + 1)).toBe(1)
+    local list = books.daysOf(b, nil)
+    expect(#list).toBe(8)
+    expect(list[1]).toBe(today)
+    expect(#books.daysOf(b, today - 100)).toBe(3)
+    local other: Book = {}
+    books.add(other, { at = NOON - 25 * 86400, kind = "trade", amount = -5 })
+    local merged = books.merge({ books.decodeDay(b[today], nil, "A"), books.decodeDay(other[today - 25], nil, "B"), books.decodeDay(b[today - 50], nil, "A") })
+    expect(#merged).toBe(3)
+    expect(merged[1].char).toBe("A")
+    expect(merged[2].char).toBe("B")
+    expect(merged[3].amount).toBe(150)
+    expectNoErrors()
+end
+
+@test("the totals; where it came from and went: the sale after the cut, the deposits it gave back")
+local function sourcesOf()
+    local list: Tx[] = {
+        -- a sale: 1432 less a cut of 71, the deposit of 5 back
+        { at = NOON, kind = "sold", amount = 1366, gross = 1432, cut = 71, qty = 1, item = 1 },
+        { at = NOON, kind = "posted", amount = -5, qty = 1, item = 1 },
+        { at = NOON, kind = "posted", amount = -150, qty = 20, item = 2 },
+        { at = NOON, kind = "vendor", amount = 8500, qty = 34, item = 3 },
+        { at = NOON, kind = "vendor", amount = -122, qty = 1, item = 4 },
+        { at = NOON, kind = "loot", amount = 81900, n = 118 },
+        { at = NOON, kind = "expired", amount = 0, item = 2, qty = 20 },
+        { at = NOON, kind = "train", amount = -200000 },
+    }
+    local i, o, net = books.totals(list)
+    expect(i).toBe(1366 + 8500 + 81900)
+    expect(o).toBe(5 + 150 + 122 + 200000)
+    expect(net).toBe(i - o)
+    local income, spending = books.sources(list)
+    expect(income[1]).toEqual({ key = "Looted coin", label = "Looted coin", amount = 81900, count = 118 })
+    expect(income[2].label).toBe("Vendors")
+    expect(income[3]).toEqual({ key = "Auction sales", label = "Auction sales", amount = 1361, count = 1 })
+    expect(spending[1].label).toBe("Training")
+    -- deposits paid 155, 5 of them back with the sale
+    local lost: books.SourceRow? = nil
+    for _, r in ipairs(spending) do
+        if r.label == "Deposits lost" then
+            lost = r
+        end
+    end
+    expect(assert(lost).amount).toBe(150)
+    expect(assert(lost).count).toBe(2)
+    expectNoErrors()
+end
+
+@test("an item's sales: sold of posted, the price after the cut on average, deposits lost, earned")
+local function sales()
+    local s = books.itemSales({
+        { at = NOON, kind = "posted", amount = -60, qty = 20 },
+        { at = NOON, kind = "posted", amount = -60, qty = 20 },
+        { at = NOON, kind = "sold", amount = 29700, gross = 31200, cut = 1560, qty = 20 },
+        { at = NOON, kind = "expired", amount = 0, qty = 20 },
+    })
+    expect(s.posted).toBe(40)
+    expect(s.sold).toBe(20)
+    expect(s.sales).toBe(1)
+    expect(s.avg).toBe(1560)
+    expect(s.expired).toBe(1)
+    expect(s.deposits).toBe(60)
+    expect(s.earned).toBe(29640)
+    expect(books.itemSales({}).avg).toBeNil()
+    expectNoErrors()
+end
+
+-- A small fixed random sequence (the same every run).
+local seed = 4242
+local function random(): number
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+end
+
+@test("a busy character's year (about 20,000 rows): the size in SuuUILedger")
+local function size()
+    local b: Book = {}
+    local start = NOON - 364 * 86400
+    local rows = 0
+    local KINDS = { "vendor", "vendor", "vendor", "loot", "sold", "posted", "bought", "repair", "travel", "quest", "mail", "other" }
+    for d = 0, 364 do
+        local list: Tx[] = {}
+        local n = math.floor(30 + random() * 50)
+        for k = 1, n do
+            local kind = KINDS[math.floor(random() * #KINDS) + 1]
+            local t: Tx = { at = start + d * 86400 + k * 97, kind = kind, amount = math.floor(random() * 200000) - 50000 }
+            if kind == "vendor" or kind == "sold" or kind == "posted" or kind == "bought" then
+                t.item = 2000 + math.floor(random() * 40000)
+                t.qty = math.floor(1 + random() * 20)
+            end
+            if kind == "sold" then
+                t.gross, t.cut = t.amount + 500, 400
+            elseif kind == "posted" then
+                t.price = math.floor(random() * 50000)
+            elseif kind == "loot" then
+                t.text, t.n = "Eastern Plaguelands", math.floor(1 + random() * 120)
+            elseif kind == "travel" then
+                t.text = "Ironforge to Light's Hope"
+            elseif kind == "repair" then
+                t.text = "Gearcutter Cogspinner"
+            elseif kind == "mail" then
+                t.text, t.who = "Brannoc", true
+            end
+            list[#list + 1] = t
+        end
+        b[days.dayOf(start + d * 86400)] = books.encodeDay(list) :: string
+        rows += n
+    end
+    -- WoW writes each day as: four tabs, [day] = "…",
+    local bytes = 0
+    for day, s in pairs(b) do
+        bytes += 4 + #("[" .. day .. "] = \"") + #s + #("\",\n")
+        expect(s:find("\n") == nil).toBe(true)
+    end
+    print(("Ledger books: %d rows in a year, %.1f bytes a row, %.0f KB in SuuUILedger"):format(rows, bytes / rows, bytes / 1024))
+    -- (measured 2026-11-18: 19,089 rows, 17.0 bytes a row, 317 KB)
+    expect(bytes / rows < 20).toBe(true)
+    expect(#books.decodeDay(b[days.dayOf(NOON)])).toBeGreaterThan(29)
+    expectNoErrors()
+end

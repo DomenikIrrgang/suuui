@@ -1,12 +1,23 @@
 -- Units/Bags/Saved: other characters' saved bags and bank in the picker
--- (read only, dated, linked), item counts in tooltips, and the Forget row.
+-- (read only, dated, linked), item counts in tooltips (with each
+-- character's mail, the mail module's; none while it is off), the "All
+-- characters" search with the mail, each character's bags and bank as
+-- holdings (soulbound slots, yours live, told when they change), and the
+-- Forget row.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/Bags"
+import SuuUI from "/Core/API"
+import * as DB from "/Core/DB"
+import * as events from "/Core/Events"
+import * as settings from "/Core/Settings"
+import internal ownOf from "/Core/Modules"
 import expectNoErrors, newParent from "../../../helpers"
 import hasLine from "../../SettingsUI/UiSettingsHelpers"
-import start as startBags, cleanup as cleanupBags, CLOTH, open, metaText, run, OTHER, others, who, view, savedSlot from "./BagsHelpers"
+import start as startBags, cleanup as cleanupBags, CLOTH, POTION, open, metaText, run, OTHER, others, who, view, savedSlot, inv, atBank from "./BagsHelpers"
+
+const LISTENER = { name = "SavedBagsTest" }
 
 @beforeEach
 local function start()
@@ -72,6 +83,124 @@ local function counts()
     M:Set("itemCounts", false)
     M:AddCounts(tip, { id = CLOTH })
     expect(#lines).toBe(0)
+end
+
+-- The other character's mail as the mail module keeps it (written as a
+-- saved inbox, as a visit on that character would have).
+local function otherMail(items: number[], expires: number?)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    local entry = all[OTHER] or {}
+    all[OTHER] = entry
+    entry.mail = { inbox = { at = time() - 600, mails = { { i = items, e = expires } } } }
+end
+
+local function tipLines(id: number): string[]
+    local lines: string[] = {}
+    local tip: GameTooltip = mock.partial({
+        AddLine = function(_: unknown, t: string)
+            lines[#lines + 1] = t
+        end,
+        AddDoubleLine = function(_: unknown, l: string, r: string)
+            lines[#lines + 1] = l .. " | " .. r
+        end,
+        Show = function(_: unknown) end,
+    })
+    M:AddCounts(tip, { id = id })
+    return lines
+end
+
+@test("item counts with the mail: each character's mail (the mail module's) beside Bags and Bank, in the total; an expired mail's gone; none with the mail module off")
+local function countsMail()
+    others()
+    M:SaveMe()
+    -- your mailbox: 2 of the cloth in a letter (kept as the inbox is read)
+    local box = mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    mock.defineMailbox(box, { letters = { { sender = "Tamsin", subject = "Cloth", items = { { id = CLOTH, count = 2 } }, daysLeft = 5 } } })
+    mock.player:interact(box)
+    mock.advanceTime(2)
+    CloseMail()
+    mock.advanceTime(0.1)
+    otherMail({ CLOTH, 6, POTION, 1 }, time() + 30)
+    local lines = tipLines(CLOTH)
+    expect(hasLine(lines, "Bags 3 \194\183 Mail 2")).toBe(true)
+    expect(hasLine(lines, "Bags 4 \194\183 Mail 6")).toBe(true)
+    expect(hasLine(lines, "Total | 15")).toBe(true)
+    -- only in the mail: Otherplayer's potion beside the bank's
+    expect(hasLine(tipLines(POTION), "Bank 1 \194\183 Mail 1")).toBe(true)
+    -- All characters finds the mail's too
+    open()
+    M.query = "cloth"
+    M.savedBags:ShowResults()
+    local found = assert(assert(inv().resultRows)[1]).item
+    expect(found.count).toBe(15)
+    expect(found.lines).toEqual({ "Player · Bags ×3", "Player · Mail ×2", "Otherplayer · Bags ×4", "Otherplayer · Mail ×6" })
+    M:SetOpen(false)
+    -- its letter expired: gone from the counts
+    mock.advanceTime(31)
+    expect(hasLine(tipLines(CLOTH), "Mail 6")).toBe(false)
+    -- the mail module off: no mail anywhere; on again, back
+    local mail = assert(SuuUI.GetModule("mail"))
+    local own = ownOf(mail)
+    own.reloadToToggle = false
+    settings.set("mail", "enabled", false)
+    expect(SuuUI.Holdings.Kept("mail")).toBe(false)
+    local off = tipLines(CLOTH)
+    expect(hasLine(off, "Mail")).toBe(false)
+    expect(hasLine(off, "Total | 7")).toBe(true)
+    settings.set("mail", "enabled", true)
+    own.reloadToToggle = true
+    expect(hasLine(tipLines(CLOTH), "Bags 3 \194\183 Mail 2")).toBe(true)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    all[OTHER] = nil
+    expectNoErrors()
+end
+
+@test("each character's bags and bank as holdings: items, soulbound ones, when; yours live; told only when they change")
+local function holdingsOf()
+    others()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = CLOTH, count = 3 }, [2] = { id = POTION, count = 2, bound = true } } })
+    M:SaveMe()
+    local me = assert(M:CharKey())
+    local bags = assert(SuuUI.Holdings.Of(me, "bags"))
+    expect(bags.items[CLOTH]).toBe(3)
+    expect(bags.items[POTION]).toBe(2)
+    expect(bags.bound).toEqual({ [POTION] = 2 })
+    expect(bags.live).toBe(true)
+    -- another character's, as saved; a bank never seen: none
+    local theirs = assert(SuuUI.Holdings.Of(OTHER, "bags"))
+    expect(theirs.items).toEqual({ [CLOTH] = 4 })
+    expect(theirs.live).toBe(false)
+    local bank = assert(SuuUI.Holdings.Of(OTHER, "bank"))
+    expect(bank.items).toEqual({ [POTION] = 1 })
+    expect(bank.seen).toBe(assert(assert(assert(M:EntryOf(OTHER)).bank).seen))
+    expect(SuuUI.Holdings.Of(me, "bank")).toBeNil()
+    expect(SuuUI.Holdings.Of("Nobody - Realm", "bags")).toBeNil()
+    -- told: a change of your bags, not the same bags saved again
+    local heard: string[] = {}
+    events.on("SUUUI_HOLDINGS_CHANGED", function(_, place: string, key: string)
+        heard[#heard + 1] = place .. " " .. key
+    end, LISTENER)
+    M:SaveMe()
+    expect(heard).toEqual({})
+    mock.setBag(0, { slots = 16, items = { [1] = { id = CLOTH, count = 5 } } })
+    M:SaveMe()
+    expect(heard).toEqual({ "bags " .. me })
+    expect(assert(SuuUI.Holdings.Of(me, "bags")).items[CLOTH]).toBe(5)
+    -- the bank: told each visit (its time is shown)
+    atBank()
+    M:SaveMe()
+    expect(heard[#heard]).toBe("bank " .. me)
+    expect(assert(SuuUI.Holdings.Of(me, "bank")).items[CLOTH]).toBe(7)
+    mock.fireEvent("BANKFRAME_CLOSED")
+    mock.advanceTime(0.1)
+    -- forgotten: told
+    heard = {}
+    M.savedBags:Told("bags", OTHER)
+    expect(heard).toEqual({ "bags " .. OTHER })
+    events.offAll(LISTENER)
+    -- (your own bank as it was: none)
+    M:Char().bank = nil
+    expectNoErrors()
 end
 
 @test("Forget a character: chosen, then a second click; the picker loses them")

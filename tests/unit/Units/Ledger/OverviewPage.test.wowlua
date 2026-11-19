@@ -1,0 +1,304 @@
+-- Units/Ledger/OverviewPage: the four figures (the chosen characters'
+-- gold and who they are, this week from the gold kept, the mail waiting
+-- as the inboxes were read, this session), where money came from and went
+-- this week (green in, red out, the biggest first, how many), the goal
+-- (set, its bar and pace, changed, cleared), the last scan's deals (the
+-- top three with both marks, all of them in Prices, a deal's page), the
+-- latest three transactions (all of them, an item's page).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type OverviewPage from "/Units/Ledger/OverviewPage"
+import * as parts from "/Units/Ledger/Parts"
+import PASS_ITEMS from "/Units/Ledger/PriceIndex"
+import expectNoErrors from "../../../helpers"
+import seed, seedBooks, openLedger, wipe, AXE, ESSENCE, KINGSBLOOD, see from "./LedgerHelpers"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
+
+@afterEach
+local function cleanup()
+    local d = parts.askDialog()
+    if d then
+        d.panel:Hide()
+    end
+    wipe()
+    expectNoErrors()
+end
+
+local function page(): OverviewPage
+    return openLedger("overview").overview
+end
+
+@test("the gold: all characters, how many on how many rulesets, who has most; a ruleset; one")
+local function gold()
+    seed()
+    local p = page()
+    local total = M:GoldTotal(nil)
+    expect(p.gold.label:GetText()).toBe("Gold, all characters")
+    expect(p.gold.money.copper).toBe(total)
+    local n = #M:Characters()
+    expect(p.gold.sub:GetText()).toContain(n .. " characters on 2 rulesets")
+    expect(p.gold.sub:GetText()).toContain("Kaelith has")
+    local w = p.w
+    w.scope = "rs:Roleplay"
+    w:Refresh()
+    expect(p.gold.label:GetText()).toBe("Gold, Roleplay Ruleset")
+    expect(p.gold.sub:GetText()).toBe("Lum \194\183 Roleplay Ruleset")
+    w.scope = "c:Lum - Roleplay"
+    w:Refresh()
+    expect(p.gold.label:GetText()).toBe("Gold")
+    expect(p.gold.money.copper).toBe(41000)
+end
+
+@test("this week: the gold now against a week ago, signed; since the Ledger began when that's later")
+local function week()
+    seed()
+    local p = page()
+    local today = M:Today()
+    local s = M:GoldSeries(nil, today - 7, today)
+    expect(p.week.money.copper).toBe(math.abs(s[#s] - s[1]))
+    expect(p.week.money.sign).toBe(s[#s] > s[1] and 1 or s[#s] < s[1] and -1 or 0)
+    expect(p.week.sub:GetText()).toBe("against a week ago")
+    -- only days kept since yesterday
+    wipe()
+    local d = M:Data()
+    d.gold = nil
+    M:RecordMoney(true)
+    local map = M:GoldMap()
+    for _, c in pairs(map) do
+        c.days[today - 1] = 100
+    end
+    p = page()
+    expect(p.week.sub:GetText()).toContain("when the Ledger began")
+end
+
+@test("the mail waiting, as the inboxes were last read; this session: this character's money since it began")
+local function session()
+    seed()
+    M.sessionMoney = (M.sessionMoney or 0) - 12000
+    M.sessionAt = time() - 2 * 3600
+    local p = page()
+    expect(p.mail.word:GetText()).toBe("\226\128\148")
+    expect(p.mail.sub:GetText()).toBe("Open a mailbox to see")
+    -- the inboxes as last read: the chosen characters' money, their sales
+    M:SetMailWaiting(431860, 3)
+    mock.advanceFrames(2)
+    expect(p.mail.money.copper).toBe(431860)
+    expect(p.mail.sub:GetText()).toBe("3 sales, the house\226\128\153s cut taken")
+    M:SetMailWaiting(0, 0)
+    mock.advanceFrames(2)
+    expect(p.mail.sub:GetText()).toBe("Nothing waiting")
+    p.w.scope = "c:Lum - Roleplay"
+    p.w:Refresh()
+    expect(p.mail.word:GetText()).toBe("\226\128\148")
+    p.w.scope = "all"
+    p.w:Refresh()
+    expect(p.session.money.copper).toBe(12000)
+    expect(p.session.money.sign).toBe(1)
+    expect(p.session.sub:GetText()).toBe("2 h 0 min \194\183 60s an hour")
+    -- not known: a dash
+    M.sessionMoney = nil
+    p.w:Refresh()
+    expect(p.session.word:GetText()).toBe("\226\128\148")
+end
+
+@test("where it came from and went this week: a row per source, the biggest first, green in and red out")
+local function sources()
+    seed()
+    local p = page()
+    expect(p.cameNote).toBeShown()
+    expect(p.wentNote).toBeShown()
+    expect(p.latestNote).toBeShown()
+    seedBooks()
+    p = page()
+    expect(p.cameNote).never.toBeShown()
+    local came = p.cameRows
+    expect(came[1].label:GetText()).toBe("Mail")
+    expect(came[1].amount.copper).toBe(500000)
+    expect(came[1].amount.sign).toBe(1)
+    expect(came[2].label:GetText()).toBe("Quests")
+    expect(came[3].label:GetText()).toBe("Looted coin")
+    expect(came[3].count:GetText()).toBe("118\195\151")
+    expect(came[4].label:GetText()).toBe("Auction sales")
+    expect(came[4].amount.copper).toBe(29640)
+    expect(came[5].label:GetText()).toBe("Vendors")
+    expect(came[6]).never.toBeShown()
+    -- the biggest has the whole bar
+    expect(math.abs(came[1].fill:GetWidth() - came[1].track:GetWidth()) < 0.5).toBe(true)
+    expect(came[2].fill:GetWidth() < came[1].fill:GetWidth()).toBe(true)
+    local went = p.wentRows
+    expect(went[1].label:GetText()).toBe("Training")
+    expect(went[1].amount.sign).toBe(-1)
+    expect(went[2].label:GetText()).toBe("Repairs")
+    expect(went[3].label:GetText()).toBe("Travel")
+    expect(went[4].label:GetText()).toBe("Deposits lost")
+    -- the chosen character's only
+    p.w.scope = "c:Kaelith - " .. SuuUI.Ruleset()
+    p.w:Refresh()
+    expect(p.cameRows[1].label:GetText()).toBe("Quests")
+    expect(p.cameRows[2]).never.toBeShown()
+end
+
+@test("the latest three: when, what, the item or where from, the amount; all of them; an item's page")
+local function latest()
+    seed()
+    seedBooks()
+    local p = page()
+    local rows = p.latestRows
+    expect(rows[1].what:GetText()).toBe("Mail")
+    expect(rows[1].name:GetText()).toBe("From Brannoc")
+    expect(rows[1].amount.sign).toBe(1)
+    expect(rows[2].what:GetText()).toBe("Repairs")
+    expect(rows[2].name:GetText()).toBe("Gearcutter Cogspinner")
+    expect(rows[3].name:GetText()).toBe("Eastern Plaguelands \194\183 118 corpses")
+    expect(p.latestNote).never.toBeShown()
+    mock.click(p.allTx)
+    expect(p.w.view).toBe("transactions")
+    p.w:Go("overview")
+    -- a row with an item opens its page
+    M:BookTx({ at = time(), kind = "sold", amount = 100, item = KINGSBLOOD, qty = 1 })
+    mock.advanceFrames(2)
+    expect(rows[1].name:GetText()).toBe("Test Kingsblood")
+    mock.click(rows[1])
+    expect(p.w.view).toBe("item")
+    expect(p.w.item.itemID).toBe(KINGSBLOOD)
+end
+
+@test("the goal: none, then set through the dialog; its bar and pace; changed; cleared")
+local function goal()
+    seed()
+    local p = page()
+    expect(p.goalNone).toBeShown()
+    expect(p.goalBox).never.toBeShown()
+    expect(p.goalButton.label:GetText()).toBe("Set a goal")
+    mock.click(p.goalButton)
+    local d = assert(parts.askDialog())
+    expect(d.name).toBeShown()
+    d.name:SetValue("Swift Frostsaber")
+    d.amount:SetCopper(20000000)
+    mock.click(d.ok)
+    mock.advanceFrames(3)
+    expect(M:Goal()).toEqual({ name = "Swift Frostsaber", amount = 20000000 })
+    expect(p.goalBox).toBeShown()
+    expect(p.goalName:GetText()).toBe("Swift Frostsaber")
+    expect(p.goalHave.copper).toBe(M:GoldTotal(nil))
+    expect(p.goalNeed.copper).toBe(20000000)
+    local _, max = p.goalBar.bar:GetMinMaxValues()
+    expect(max).toBe(20000000)
+    expect(p.goalEta:GetText()).toBeTruthy()
+    expect(p.goalButton.label:GetText()).toBe("Change")
+    -- reached
+    M:SetGoal("Small", 1)
+    mock.advanceFrames(3)
+    expect(p.goalEta:GetText()).toBe("You have it.")
+    -- a name left empty: Savings
+    mock.click(p.goalButton)
+    d.name:SetValue("  ")
+    d.amount:SetCopper(5)
+    mock.click(d.ok)
+    expect(assert(M:Goal()).name).toBe("Savings")
+    -- cleared
+    mock.click(p.goalButton)
+    mock.click(d.other)
+    mock.advanceFrames(3)
+    expect(M:Goal()).toBeNil()
+    expect(p.goalNone).toBeShown()
+end
+
+@test("the deals: the top ones with both marks; all of them in Prices; a deal's page")
+local function deals()
+    seed()
+    local p = page()
+    local list = M:Deals()
+    expect(#list >= 2).toBe(true)
+    expect(p.deals.meta:GetText()).toContain("today")
+    expect(p.allDeals.label:GetText()).toBe("All " .. #list .. " deals")
+    local first = p.dealRows[1]
+    expect(first).toBeShown()
+    expect(first.itemID).toBe(list[1].itemID)
+    -- the axe: under vendor price, and (when far enough) under its usual
+    local axe = false
+    for _, r in ipairs(p.dealRows) do
+        if r.itemID == AXE then
+            expect(r.vendor).toBeShown()
+            expect(r.vendor.label:GetText()).toBe("Under vendor")
+            axe = true
+        end
+        if r.itemID == ESSENCE then
+            expect(r.under).toBeShown()
+            expect(r.under.label:GetText()).toContain("% under")
+        end
+    end
+    expect(axe).toBe(true)
+    -- a row opens its page; All deals opens Prices at Deals
+    mock.click(first)
+    expect(p.w.view).toBe("item")
+    expect(p.w.item.itemID).toBe(list[1].itemID)
+    p.w:Go("overview")
+    mock.click(p.allDeals)
+    expect(p.w.view).toBe("prices")
+    expect(p.w.prices.show).toBe("deals")
+end
+
+@test("the deals while the prices are worked out (after a /reload, a new day): the loading mark, then the top ones; kept for the next open")
+local function dealsLoading()
+    seed()
+    -- (hundreds of items more, and nothing worked out yet: as after a /reload)
+    local today = M:Today()
+    for i = 1, 700 do
+        priceStore.look(3200000 + i, 100 + i, 0, 1, 1, SuuUI.Calendar.TimeOf(today, 1))
+    end
+    M:DropIndexes()
+    local p = page()
+    expect(p.dealsLoading).toBeShown()
+    expect(p.dealRows[1]).never.toBeShown()
+    expect(p.allDeals.label:GetText()).toBe("All prices")
+    mock.advanceFrames(math.ceil(706 / PASS_ITEMS) + 2)
+    expect(p.dealsLoading).never.toBeShown()
+    expect(p.dealRows[1]).toBeShown()
+    expect(p.dealRows[1].itemID).toBe(M:Deals()[1].itemID)
+    -- opened again: at once
+    p.w.frame:Hide()
+    p = page()
+    expect(p.dealsLoading).never.toBeShown()
+    expect(p.dealRows[1]).toBeShown()
+end
+
+@test("a deal and a latest row: the names the Ledger kept, though the client hasn't got them")
+local function keptNames()
+    seed()
+    seedBooks()
+    -- a deal whose item the client hasn't got, its name from the scan
+    mock.defineItem(990631, { name = "Test Hidden Moss", quality = 2, sellPrice = 900 }, { cached = false, delay = 600 })
+    M:KeepName(990631, "Test Hidden Moss", 2)
+    for k = 3, 1, -1 do
+        see(990631, 1000, 0, 1, 1, time() - k * 86400)
+    end
+    see(990631, 10, 0, 1, 1)
+    M:BookTx({ at = time() - 10, kind = "vendor", amount = 900, item = 990631, qty = 1 })
+    mock.advanceTime(0.05)
+    local p = page()
+    local found = false
+    for _, r in ipairs(p.dealRows) do
+        if r:IsShown() and r.itemID == 990631 then
+            expect(r.name:GetText()).toBe("Test Hidden Moss")
+            found = true
+        end
+    end
+    expect(found).toBe(true)
+    -- the latest: its sale at a vendor, by the kept name
+    expect(p.latestRows[1].name:GetText()).toBe("Test Hidden Moss")
+end
+
+@test("no scan yet: how to find deals; All prices")
+local function noScan()
+    local p = page()
+    expect(p.dealsNone).toBeShown()
+    expect(p.dealsNone:GetText()).toContain("Scan all")
+    expect(p.allDeals.label:GetText()).toBe("All prices")
+    mock.click(p.allDeals)
+    expect(p.w.prices.show).toBe("all")
+    expect(SuuUI.RulesetName()).toContain("Ruleset")
+end

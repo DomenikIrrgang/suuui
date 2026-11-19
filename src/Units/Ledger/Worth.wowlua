@@ -1,0 +1,436 @@
+-- Units/Ledger/Worth.wowlua
+-- What the chosen characters' things are worth (the Gold tab's "What it's
+-- worth", asked 2026-11-19): each character's bags, bank, auctions and mail
+-- as the modules that keep them read them (SuuUI.Holdings), each item at
+-- the usual price of that character's ruleset (each ruleset has its own
+-- auction house: SuuUI.Prices.Usual) times how many.
+--
+-- Left out, and counted for the note ("412 of them": items, a stack of 20
+-- counts 20): soulbound items (the bags and the bank keep whether each slot
+-- is; an item the auction house never had has no usual price anyway, so a
+-- bind-on-pickup item never counts), items with no usual price on that
+-- ruleset (never seen on its house), quest items and the hearthstone (by
+-- the item's class, at once: never asked of the server). The mail's money
+-- counts, its cash on delivery taken off (a place never under nothing).
+-- Your auctions count at the usual price, not their buyout: what they're
+-- worth, not what you hope for.
+--
+-- Kept so a page never works it out again: one result per character and
+-- place, until that place is read again (SUUUI_HOLDINGS_CHANGED), a price
+-- of an item it holds changes (a search's look; a Scan all or the prune:
+-- all of that ruleset's), or the day turns (the usual price is today's).
+-- The usual prices are kept per ruleset and item the same way. Working out
+-- runs a slice a frame (at most PASS_MS and PASS_ITEMS items) when the page
+-- asks (Prepare), a few items at once; `done` tells the page.
+--
+-- The Items tab asks for each item too (Prepare's `items`): a result then
+-- keeps its items as worked out (HeldItem: how many, the usual price each,
+-- or why it was left out), soulbound ones apart from the rest of the same
+-- item; the Gold tab's results keep none. One pass makes both, so the tab's
+-- rows add up to the Gold tab's places exactly.
+
+import type Holding from "/Core/API"
+import * as days from "./Days"
+
+export type WorthOptions = {
+    -- a character's place as last read (nil: never, or not kept now);
+    -- whether a module keeps the place now
+    holding: (charKey: string, place: string) -> Holding?,
+    kept: (place: string) -> boolean,
+    -- an item's usual price on a ruleset (nil: never seen there)
+    usual: (itemID: number, ruleset: string) -> number?,
+    -- whether an item never counts (a quest item, the hearthstone)
+    never: (itemID: number) -> boolean,
+    every: (seconds: number, fn: (ticker: TickerHandle) -> ()) -> TickerHandle,
+    -- a pass came to its end (the page waiting draws)
+    done: () -> (),
+}
+
+-- Why an item is left out: soulbound, never seen on that ruleset's house
+-- (no usual price), a quest item, the hearthstone.
+export const WHY_WORDS: { [string]: string } = {
+    bound = "Soulbound",
+    never = "Never seen",
+    quest = "Quest item",
+    hearth = "Hearthstone",
+}
+
+-- An item of a character's place as worked out (the Items tab's rows): how
+-- many, the usual price each (nil: left out, `why`).
+export type HeldItem = { itemID: number, count: number, each?: number, why?: string }
+
+-- One character's place as worked out: its worth in copper, how many items
+-- were left out, when it was read, whether it follows every change (your
+-- bags), the ruleset its prices are; what the place's money adds to its
+-- worth (the mail's: its money less COD, the place never under nothing),
+-- that money and COD; its items when they were asked for (in item order).
+export type CharWorth = {
+    value: number,
+    left: number,
+    seen: number,
+    live: boolean,
+    ruleset: string,
+    money: number,
+    cash: number,
+    cod: number,
+    items?: HeldItem[],
+}
+
+-- A place for the chosen characters together: the worth, the items left
+-- out, how many of them have it read (`known`) and how many not, the
+-- oldest read among them, whether every read one is live, whether a module
+-- keeps the place now.
+export type PlaceWorth = {
+    value: number,
+    left: number,
+    known: number,
+    unknown: number,
+    oldest?: number,
+    live: boolean,
+    kept: boolean,
+}
+
+-- A chosen character: its key and its ruleset.
+export type Chosen = { key: string, ruleset: string }
+
+type Job = {
+    key: string,
+    place: string,
+    ruleset: string,
+    h: Holding,
+    ids: number[],
+    i: number,
+    value: number,
+    left: number,
+    gone: boolean,
+    rows?: HeldItem[],
+}
+
+-- A slice: at most this many ms (in game) and items a frame.
+export const PASS_MS = 4
+export const PASS_ITEMS = 200
+
+-- the hearthstone (soulbound anyway; never counted, even with a price)
+local HEARTHSTONE = 6948
+
+export class Worth
+    readonly o: WorthOptions
+    -- per character, per place: its worth (false: never read)
+    results: { [string]: { [string]: CharWorth | false } } = {}
+    -- per ruleset, per item: the usual price (false: none)
+    usuals: { [string]: { [number]: number | false } } = {}
+    -- per ruleset, the items the results hold (a look of another item
+    -- changes none of them)
+    held: { [string]: { [number]: boolean } } = {}
+    -- the places still to work out (jobs[ji] on), by "key\0place" too
+    jobs: Job[] = {}
+    ji: number = 1
+    pending: { [string]: Job } = {}
+    ticker: TickerHandle? = nil
+    -- the day the usual prices are (the next day's are other)
+    day: number = -1
+
+    constructor(o: WorthOptions)
+        self.o = o
+    end
+
+    -- A new day: everything again.
+    function Check()
+        local today = days.dayOf()
+        if today ~= self.day then
+            self.day = today
+            self:Drop()
+        end
+    end
+
+    -- Nothing kept any more (a new day, the module turned off).
+    function Drop()
+        self.results, self.usuals, self.held = {}, {}, {}
+        for _, job in ipairs(self.jobs) do
+            job.gone = true
+        end
+        self.jobs, self.ji, self.pending = {}, 1, {}
+    end
+
+    -- An item's usual price on a ruleset, kept.
+    function Usual(itemID: number, ruleset: string): number?
+        local map = self.usuals[ruleset]
+        if not map then
+            map = {}
+            self.usuals[ruleset] = map
+        end
+        local u = map[itemID]
+        if u == nil then
+            u = self.o.usual(itemID, ruleset) or false
+            map[itemID] = u
+        end
+        return u or nil
+    end
+
+    -- A character's place as kept (nil: not worked out yet; false: never read).
+    function Result(key: string, place: string): (CharWorth | false)?
+        local r = self.results[key]
+        return r and r[place]
+    end
+
+    function SetResult(key: string, place: string, r: CharWorth | false)
+        local map = self.results[key]
+        if not map then
+            map = {}
+            self.results[key] = map
+        end
+        map[place] = r
+    end
+
+    -- A place queued to be worked out (once; again with its items when they
+    -- are asked for and it was queued without); one never read is known at
+    -- once.
+    function Queue(key: string, place: string, ruleset: string, items: boolean?)
+        local id = key .. "\0" .. place
+        local was = self.pending[id]
+        if was then
+            if was.rows or not items then
+                return
+            end
+            was.gone = true
+            self.pending[id] = nil
+        end
+        local h = self.o.holding(key, place)
+        if not h then
+            self:SetResult(key, place, false)
+            return
+        end
+        local ids: number[] = {}
+        for itemID in pairs(h.items) do
+            ids[#ids + 1] = itemID
+        end
+        if items then
+            -- (in item order: the same rows in the same order each time)
+            table.sort(ids)
+        end
+        local job: Job = {
+            key = key,
+            place = place,
+            ruleset = ruleset,
+            h = h,
+            ids = ids,
+            i = 1,
+            value = 0,
+            left = 0,
+            gone = false,
+            rows = items and {} or nil,
+        }
+        self.jobs[#self.jobs + 1] = job
+        self.pending[id] = job
+    end
+
+    -- Up to `n` items of the queued places worked out (a ms budget too,
+    -- when given). -> whether every one is done.
+    function Run(n: number, ms: number?): boolean
+        local deadline = ms and (debugprofilestop() + ms) or nil
+        local done = 0
+        while self.ji <= #self.jobs do
+            local job = self.jobs[self.ji]
+            if not job.gone then
+                local items, bound = job.h.items, job.h.bound
+                local ruleset = job.ruleset
+                local held = self.held[ruleset]
+                if not held then
+                    held = {}
+                    self.held[ruleset] = held
+                end
+                local ids = job.ids
+                local rows = job.rows
+                while job.i <= #ids do
+                    if done >= n or (deadline and debugprofilestop() > deadline) then
+                        return false
+                    end
+                    local itemID = ids[job.i]
+                    job.i += 1
+                    done += 1
+                    held[itemID] = true
+                    local count = items[itemID] or 0
+                    local b = math.min(count, bound and bound[itemID] or 0)
+                    local free = count - b
+                    job.left += b
+                    if rows and b > 0 then
+                        rows[#rows + 1] = { itemID = itemID, count = b, why = "bound" }
+                    end
+                    if free > 0 then
+                        local u = self:Usual(itemID, ruleset)
+                        if u and not (itemID == HEARTHSTONE or self.o.never(itemID)) then
+                            job.value += u * free
+                            if rows then
+                                rows[#rows + 1] = { itemID = itemID, count = free, each = u }
+                            end
+                        else
+                            job.left += free
+                            if rows then
+                                local why = itemID == HEARTHSTONE and "hearth" or (self.o.never(itemID) and "quest") or "never"
+                                rows[#rows + 1] = { itemID = itemID, count = free, why = why }
+                            end
+                        end
+                    end
+                end
+                local h = job.h
+                local cash, cod = h.money or 0, h.cod or 0
+                local value = math.max(0, job.value + cash - cod)
+                self:SetResult(job.key, job.place, {
+                    value = value,
+                    left = job.left,
+                    seen = h.seen,
+                    live = h.live == true,
+                    ruleset = ruleset,
+                    money = value - job.value,
+                    cash = cash,
+                    cod = cod,
+                    items = rows,
+                })
+                self.pending[job.key .. "\0" .. job.place] = nil
+            end
+            self.ji += 1
+        end
+        self.jobs, self.ji = {}, 1
+        return true
+    end
+
+    -- How many items are still to work out.
+    function Left(): number
+        local n = 0
+        for k = self.ji, #self.jobs do
+            local job = self.jobs[k]
+            if not job.gone then
+                n += #job.ids - job.i + 1
+            end
+        end
+        return n
+    end
+
+    -- The chosen characters' places worked out (`items`: with their items,
+    -- the Items tab's): at once with `now` items or fewer to do, else a
+    -- slice a frame and `done` told at the end. -> whether all of it is
+    -- there now.
+    function Prepare(chosen: Chosen[], places: string[], now: number?, items: boolean?): boolean
+        self:Check()
+        for _, c in ipairs(chosen) do
+            for _, place in ipairs(places) do
+                if self.o.kept(place) then
+                    local r = self:Result(c.key, place)
+                    if r == nil or (items and r and not r.items) then
+                        self:Queue(c.key, place, c.ruleset, items)
+                    end
+                end
+            end
+        end
+        if self.ji > #self.jobs then
+            self.jobs, self.ji = {}, 1
+            return true
+        end
+        if self:Left() <= (now or 0) and self:Run(math.huge) then
+            return true
+        end
+        if not self.ticker then
+            self.ticker = self.o.every(0, function(ticker: TickerHandle)
+                if self:Run(PASS_ITEMS, PASS_MS) then
+                    ticker:Cancel()
+                    self.ticker = nil
+                    self.o.done()
+                end
+            end)
+        end
+        return false
+    end
+
+    -- The chosen characters' places together, as worked out so far.
+    function Sum(chosen: Chosen[], places: string[]): { [string]: PlaceWorth }
+        local out: { [string]: PlaceWorth } = {}
+        for _, place in ipairs(places) do
+            local kept = self.o.kept(place)
+            local pw: PlaceWorth = { value = 0, left = 0, known = 0, unknown = 0, live = true, kept = kept }
+            for _, c in ipairs(chosen) do
+                local r = kept and self:Result(c.key, place) or nil
+                if r then
+                    pw.value += r.value
+                    pw.left += r.left
+                    pw.known += 1
+                    if not r.live then
+                        pw.live = false
+                        local oldest = pw.oldest
+                        if not oldest or r.seen < oldest then
+                            pw.oldest = r.seen
+                        end
+                    end
+                else
+                    pw.unknown += 1
+                end
+            end
+            out[place] = pw
+        end
+        return out
+    end
+
+    -- A character's place read again ("": every character's).
+    function HoldingChanged(place: string, key: string)
+        for k, map in pairs(self.results) do
+            if key == "" or k == key then
+                map[place] = nil
+            end
+        end
+        for id, job in pairs(self.pending) do
+            if job.place == place and (key == "" or job.key == key) then
+                job.gone = true
+                self.pending[id] = nil
+            end
+        end
+    end
+
+    -- Every result of a ruleset's characters again (its prices changed).
+    function DropRuleset(ruleset: string)
+        for _, map in pairs(self.results) do
+            for place, r in pairs(map) do
+                if r and r.ruleset == ruleset then
+                    map[place] = nil
+                end
+            end
+        end
+        for id, job in pairs(self.pending) do
+            if job.ruleset == ruleset then
+                job.gone = true
+                self.pending[id] = nil
+            end
+        end
+        self.held[ruleset] = nil
+    end
+
+    -- A look changed an item's prices (SUUUI_PRICE_CHANGED): its usual price
+    -- again; the results again only when one of them holds it. -> whether
+    -- any result went.
+    function PriceChanged(ruleset: string, itemID: number): boolean
+        local map = self.usuals[ruleset]
+        if map then
+            map[itemID] = nil
+        end
+        local held = self.held[ruleset]
+        if held and held[itemID] then
+            self:DropRuleset(ruleset)
+            return true
+        end
+        return false
+    end
+
+    -- A Scan all's looks or the prune: every usual price of the ruleset again.
+    function PricesChanged(ruleset: string)
+        self.usuals[ruleset] = nil
+        self:DropRuleset(ruleset)
+    end
+
+    -- Nothing worked out any more (the module turned off).
+    function Stop()
+        local t = self.ticker
+        if t then
+            t:Cancel()
+        end
+        self.ticker = nil
+        self:Drop()
+    end
+end

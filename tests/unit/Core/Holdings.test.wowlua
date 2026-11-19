@@ -1,0 +1,123 @@
+-- Core/Holdings: what each character holds, per place: a module's reader
+-- given and read (Of, All, Kept), a later one replacing it, changes told
+-- only by the place's own module, every reader of a module gone with its
+-- release, the count the module checks use; the same through SuuUI.Holdings;
+-- SuuUI's own modules reading their places while on.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as holdings from "/Core/Holdings"
+import type Holding from "/Core/Holdings"
+import * as events from "/Core/Events"
+import SuuUI from "/Core/API"
+import type AnyModule from "/Core/API"
+import expectNoErrors from "../../helpers"
+
+const OWNER = { name = "HoldingsTest" }
+const OTHER = { name = "HoldingsTestOther" }
+const LISTENER = { name = "HoldingsTestListener" }
+
+@afterEach
+local function cleanup()
+    holdings.release(OWNER)
+    holdings.release(OTHER)
+    events.offAll(LISTENER)
+    expectNoErrors()
+end
+
+local function changes(): (name: string, ...unknown) -> ()
+    local heard = mock.spy(function(_: string, ...: unknown) end)
+    events.on("SUUUI_HOLDINGS_CHANGED", heard, LISTENER)
+    return heard
+end
+
+local function reader(by: { [string]: Holding }): (key: string) -> Holding?
+    return function(key: string): Holding?
+        return by[key]
+    end
+end
+
+@test("a place's reader given: each character's holding read, nil for one never read; kept; told to everyone")
+local function provides()
+    local heard = changes()
+    expect(holdings.kept("zzvault")).toBe(false)
+    expect(holdings.of("Ann - R", "zzvault")).toBeNil()
+    local ann: Holding = { items = { [100] = 3 }, seen = 1000 }
+    holdings.provide(OWNER, "zzvault", reader({ ["Ann - R"] = ann }))
+    expect(holdings.kept("zzvault")).toBe(true)
+    expect(holdings.of("Ann - R", "zzvault") == ann).toBe(true)
+    expect(holdings.of("Bo - R", "zzvault")).toBeNil()
+    expect(heard).toHaveBeenCalledWith("SUUUI_HOLDINGS_CHANGED", "zzvault", "")
+    expect(holdings.count(OWNER)).toBe(1)
+    -- every place of a character that was read
+    holdings.provide(OWNER, "zzcellar", reader({}))
+    expect(holdings.all("Ann - R").zzvault == ann).toBe(true)
+    expect(holdings.all("Ann - R").zzcellar).toBeNil()
+    expect(holdings.count(OWNER)).toBe(2)
+end
+
+@test("a later reader replaces the earlier one; only the place's module tells a change")
+local function replaces()
+    holdings.provide(OWNER, "zzvault", reader({ ["Ann - R"] = { items = {}, seen = 1 } }))
+    local later: Holding = { items = { [5] = 1 }, seen = 2 }
+    holdings.provide(OTHER, "zzvault", reader({ ["Ann - R"] = later }))
+    expect(holdings.of("Ann - R", "zzvault") == later).toBe(true)
+    local heard = changes()
+    holdings.changed(OTHER, "zzvault", "Ann - R")
+    expect(heard).toHaveBeenCalledWith("SUUUI_HOLDINGS_CHANGED", "zzvault", "Ann - R")
+    local ok, err = pcall(holdings.changed, OWNER, "zzvault", "Ann - R")
+    expect(ok).toBe(false)
+    expect(tostring(err)).toContain("only the module that reads a place")
+    expect(pcall(holdings.changed, OWNER, "zznowhere", "Ann - R")).toBe(false)
+    -- the earlier owner's release leaves the later one's place
+    holdings.release(OWNER)
+    expect(holdings.kept("zzvault")).toBe(true)
+end
+
+@test("released: every place of the module gone, each told; nothing read")
+local function released()
+    holdings.provide(OWNER, "zzvault", reader({ ["Ann - R"] = { items = {}, seen = 1 } }))
+    holdings.provide(OWNER, "zzcellar", reader({}))
+    holdings.provide(OTHER, "zzattic", reader({}))
+    local heard = changes()
+    holdings.release(OWNER)
+    expect(holdings.kept("zzvault")).toBe(false)
+    expect(holdings.kept("zzcellar")).toBe(false)
+    expect(holdings.kept("zzattic")).toBe(true)
+    expect(holdings.of("Ann - R", "zzvault")).toBeNil()
+    expect(heard).toHaveBeenCalledTimes(2)
+    expect(heard).toHaveBeenCalledWith("SUUUI_HOLDINGS_CHANGED", "zzcellar", "")
+    expect(heard).toHaveBeenCalledWith("SUUUI_HOLDINGS_CHANGED", "zzvault", "")
+    expect(holdings.count(OWNER)).toBe(0)
+end
+
+@test("a reader must be a function and a place a name")
+local function checks()
+    expect(pcall(holdings.provide, OWNER, "", reader({}))).toBe(false)
+    expect(pcall(holdings.provide, OWNER, "zzvault", {} :: unknown :: (key: string) -> Holding?)).toBe(false)
+    expect(holdings.kept("zzvault")).toBe(false)
+end
+
+@test("SuuUI.Holdings: the places, Of, All, Kept, Provide and Changed by a module")
+local function api()
+    expect(SuuUI.Holdings.PLACES).toEqual({ "bags", "bank", "mail", "auctions" })
+    local m = assert(SuuUI.GetModule("bags"))
+    local heard = changes()
+    -- the bags module's own places: yours read (your bags, saved as they change)
+    expect(SuuUI.Holdings.Kept("bags")).toBe(true)
+    expect(SuuUI.Holdings.Kept("bank")).toBe(true)
+    expect(SuuUI.Holdings.Kept("mail")).toBe(true)
+    expect(SuuUI.Holdings.Kept("auctions")).toBe(true)
+    holdings.provide(OWNER, "zzvault", reader({ ["Ann - R"] = { items = { [1] = 1 }, seen = 3 } }))
+    expect(assert(SuuUI.Holdings.Of("Ann - R", "zzvault")).seen).toBe(3)
+    expect(assert(SuuUI.Holdings.All("Ann - R").zzvault).seen).toBe(3)
+    SuuUI.Holdings.Changed(m, "bags", "Ann - R")
+    expect(heard).toHaveBeenCalledWith("SUUUI_HOLDINGS_CHANGED", "bags", "Ann - R")
+    -- a module (a plugin's too) gives a place of its own, gone with it
+    local own = OWNER :: unknown :: AnyModule
+    SuuUI.Holdings.Provide(own, "zzbagsextra", reader({}))
+    expect(holdings.kept("zzbagsextra")).toBe(true)
+    holdings.release(OWNER)
+    expect(holdings.kept("zzbagsextra")).toBe(false)
+    expect(holdings.kept("bags")).toBe(true)
+end

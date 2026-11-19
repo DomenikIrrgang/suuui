@@ -1,7 +1,7 @@
 -- UI/Inventory: the item slot's skin (on a plain button and on a template's,
 -- empty, by quality, dimmed and locked, hover), money and its text, the
 -- inventory panel (search, sort, the grid and its sections, the foot's
--- note, money and action), the characters view (picker, Bags/Bank, All
+-- note, money and action; a click on the money), the characters view (picker, Bags/Bank, All
 -- characters, the banner, found items), columns and a theme change.
 
 import test, expect, afterEach, cases from "wowlua:test"
@@ -85,6 +85,25 @@ local function item(quality: string?, edge: string)
     expect(borderToken(s.border)).toBe(edge)
     s:SetItem({ icon = 1, count = 1 })
     expect(s.count:GetText()).toBe("")
+end
+
+@test("the same look again: the well and the edge not painted again; a change is")
+local function sameLook()
+    local s = itemSlot(host()).skin
+    s:SetItem({ icon = 134400, quality = "rare" })
+    local edge = mock.spy()
+    local setColor = s.border.SetColor
+    mock.stub(s.border, "SetColor", function(self: unknown, token: string)
+        edge(token)
+        setColor(s.border, token)
+    end)
+    s:SetItem({ icon = 134401, quality = "rare" })
+    expect(s.icon:GetTextureFileID()).toBe(134401)
+    expect(edge).never.toHaveBeenCalled()
+    s:SetItem({ icon = 134401, quality = "epic" })
+    expect(edge).toHaveBeenCalledWith("quality-epic")
+    expect(borderToken(s.border)).toBe("quality-epic")
+    expectNoErrors()
 end
 
 @test("dimmed: greyed and faded; locked: greyed only; back to full")
@@ -174,6 +193,50 @@ local function moneyWidget()
     expect(m:GetHeight()).toBe(T.type.numeric.lineHeight)
     m:SetCopper("x")
     expect(m.copper).toBe(0)
+    -- the same amount again: its text not made again
+    m:SetCopper(500)
+    local setText = mock.spy(m.text.SetText)
+    mock.stub(m.text, "SetText", setText)
+    m:SetCopper(500)
+    expect(setText).never.toHaveBeenCalled()
+    m:SetCopper(501)
+    expect(setText).toHaveBeenCalledTimes(1)
+end
+
+@test("money in or out (0.48): + in fel, − in ember-text, 0 plain; a plain amount after; kept on a theme change")
+local function signedMoney()
+    local m = money(host())
+    m:SetSigned(38200)
+    expect(m.copper).toBe(38200)
+    expect(m.sign).toBe(1)
+    expect(plain(m.text:GetText() :: string)).toBe("+3g  82s")
+    expect(tokenOf(m.text)).toBe("fel")
+    m:SetSigned(-410)
+    expect(plain(m.text:GetText() :: string)).toBe("\226\136\1464s  10c")
+    expect(tokenOf(m.text)).toBe("ember-text")
+    m:SetSigned(0)
+    expect(plain(m.text:GetText() :: string)).toBe("0c")
+    expect(tokenOf(m.text)).toBe("ink")
+    m:SetSigned(-5)
+    events.emit("SUUUI_THEME_CHANGED", "suuui")
+    expect(plain(m.text:GetText() :: string)).toBe("\226\136\1465c")
+    expect(tokenOf(m.text)).toBe("ember-text")
+    m:SetCopper(7)
+    expect(m.sign).toBeNil()
+    expect(plain(m.text:GetText() :: string)).toBe("7c")
+    expect(tokenOf(m.text)).toBe("ink")
+end
+
+@test("money at a size of its own (0.48): the numeric face at that size, taller; the style's again")
+local function moneySize()
+    local m = money(host())
+    m:SetCopper(123456)
+    m:SetFontSize(16)
+    local _, size = m.text:GetFont()
+    expect(math.floor(assert(size) + 0.5)).toBe(16)
+    expect(m:GetHeight() > T.type.numeric.lineHeight).toBe(true)
+    m:SetFontSize(nil)
+    expect(m:GetHeight()).toBe(T.type.numeric.lineHeight)
 end
 
 --------------------------------------------------------------------------------
@@ -339,6 +402,31 @@ local function foot()
     make():SetAction(nil)
 end
 
+@test("a click on the money (0.48): its call and tooltip; nil makes it plain text again")
+local function moneyClick()
+    local inv = make()
+    inv:SetMoney(10000)
+    expect(inv.money:IsMouseEnabled()).toBe(false)
+    local clicked = mock.spy()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    inv:SetMoneyClick(clicked, { title = "Money", meta = "Click: the Ledger" })
+    expect(inv.money:IsMouseEnabled()).toBe(true)
+    mock.hover(inv.money)
+    expect(show).toHaveBeenCalledWith(inv.money, { title = "Money", meta = "Click: the Ledger" })
+    mock.click(inv.money)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    -- the right button: nothing
+    mock.click(inv.money, "RightButton")
+    expect(clicked).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- off: no click, no tooltip
+    inv:SetMoneyClick(nil)
+    expect(inv.money:IsMouseEnabled()).toBe(false)
+    mock.click(inv.money)
+    expect(clicked).toHaveBeenCalledTimes(1)
+end
+
 @test("close: onClose when set, else hidden")
 local function close()
     local inv = make()
@@ -472,10 +560,10 @@ local function theme()
     local inv = make()
     local m = money(host())
     m:SetCopper(5)
-    local set = mock.stub(m, "SetCopper")
+    local set = mock.stub(m, "Redraw")
     local fit = mock.stub(inv, "FitBody")
     events.emit("SUUUI_THEME_CHANGED", "suuui")
-    expect(set).toHaveBeenCalledWith(m, 5)
+    expect(set).toHaveBeenCalledWith(m)
     expect(fit).toHaveBeenCalled()
 end
 

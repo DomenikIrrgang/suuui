@@ -1,0 +1,118 @@
+-- Core/Holdings.wowlua
+-- What each of your characters holds, and where (asked 2026-11-19: the
+-- Ledger's "What it's worth", the bags' item counts in tooltips): per
+-- character (its key, Core/Settings' "Name - Realm") and place ("bags",
+-- "bank", "mail", "auctions") the items, item ID -> how many, which of them
+-- are soulbound, the money there, and when it was read.
+--
+-- Owned by no module and kept by none here: the module that reads a place
+-- keeps it in its own data and gives a reader for it (provide) - the bags
+-- module the bags and the bank, the mail module the inbox, the auction
+-- house module your auctions. A module turned off contributes nothing: its
+-- readers go with its release (Core/Modules' onRelease), so its places read
+-- as not kept; what it saved stays in its data and reads again once it is
+-- on. One reader a place (a later one replaces it, like a service).
+--
+-- Anyone reads (SuuUI.Holdings, Core/API); a holding is the reader's
+-- answer, never changed by the caller. Nil: that character's place was
+-- never read (or its module is off). A place's module tells a change of a
+-- character's holding (changed): SUUUI_HOLDINGS_CHANGED(place, charKey) on
+-- SuuUI's bus; a reader given or gone tells it with charKey "" (every
+-- character's).
+
+import * as events from "./Events"
+import * as modules from "./Modules"
+
+-- The places SuuUI's own modules keep, in the order they are shown.
+export const PLACES: string[] = { "bags", "bank", "mail", "auctions" }
+
+-- A character's place as last read.
+export type Holding = {
+    -- item ID -> how many (soulbound ones too)
+    items: { [number]: number },
+    -- item ID -> how many of those are soulbound (nil: none known)
+    bound?: { [number]: number },
+    -- copper there (the mail's money), and cash on delivery to pay for
+    -- what is there (the mail's)
+    money?: number,
+    cod?: number,
+    -- when it was read (time()); `live`: it follows every change as it
+    -- happens (this character's bags), so its time says nothing
+    seen: number,
+    live?: boolean,
+}
+
+export type HoldingReader = (charKey: string) -> Holding?
+
+type Provider = { read: HoldingReader, owner: unknown }
+local providers: { [string]: Provider } = {}
+
+-- `owner` (a module) reads `place` for any character from now on.
+export function provide(owner: unknown, place: string, read: HoldingReader)
+    assert(type(place) == "string" and place ~= "", "SuuUI.Holdings.Provide: a place is required")
+    assert(type(read) == "function", "SuuUI.Holdings.Provide: a reader function is required")
+    providers[place] = { read = read, owner = owner }
+    events.emit("SUUUI_HOLDINGS_CHANGED", place, "")
+end
+
+-- Every place `owner` reads, gone (it turned off).
+export function release(owner: unknown)
+    local gone: string[] = {}
+    for place, p in pairs(providers) do
+        if p.owner == owner then
+            gone[#gone + 1] = place
+        end
+    end
+    table.sort(gone)
+    for _, place in ipairs(gone) do
+        providers[place] = nil
+        events.emit("SUUUI_HOLDINGS_CHANGED", place, "")
+    end
+end
+
+-- A character's place changed (`owner` must be the one reading it).
+export function changed(owner: unknown, place: string, charKey: string)
+    local p = providers[place]
+    assert(p and p.owner == owner, "SuuUI.Holdings.Changed: only the module that reads a place tells its changes")
+    events.emit("SUUUI_HOLDINGS_CHANGED", place, charKey)
+end
+
+-- How many places `owner` reads.
+export function count(owner: unknown): number
+    local n = 0
+    for _, p in pairs(providers) do
+        if p.owner == owner then
+            n += 1
+        end
+    end
+    return n
+end
+
+-- Whether a module reads `place` now.
+export function kept(place: string): boolean
+    return providers[place] ~= nil
+end
+
+-- A character's place as last read (nil: never read, or not kept now).
+export function of(charKey: string, place: string): Holding?
+    local p = providers[place]
+    if not p then
+        return nil
+    end
+    return p.read(charKey)
+end
+
+-- Every place of a character that was read, by place.
+export function all(charKey: string): { [string]: Holding }
+    local out: { [string]: Holding } = {}
+    for place, p in pairs(providers) do
+        local h = p.read(charKey)
+        if h then
+            out[place] = h
+        end
+    end
+    return out
+end
+
+-- (a module's readers go with everything else it registered)
+modules.onRelease(release)

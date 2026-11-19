@@ -1,9 +1,11 @@
 -- Units/Bags/Characters: the saved characters' picker, counts, search,
--- banner and foot, and the texts they use.
+-- banner and foot, and the texts they use; a saved bags as a holding, what
+-- each character's mail holds in the counts and the search.
 
 import test, expect, cases from "wowlua:test"
 import SuuUI from "/Core/API"
 import * as chars from "/Units/Bags/Characters"
+import type Holding from "/Core/API"
 
 type Character = chars.Character
 
@@ -205,6 +207,97 @@ local function searchResults()
     expect(#ring).toBe(1)
     expect(ring[1].label).toBe("Blue Ring")
     expect(#chars.searchResults(list, "nothing like it")).toBe(0)
+end
+
+-- Bo's mail: 4 linen cloth, a tome (only in the mail), a gem nobody names.
+local function mailOf(key: string): Holding?
+    if key == "bo" then
+        return { items = { [2589] = 4, [7000] = 1, [7001] = 2 }, seen = NOW }
+    end
+    return nil
+end
+local function itemOf(id: number): { name: string, quality: number, icon: number | string }?
+    if id == 7000 then
+        return { name = "Old Tome", quality = 3, icon = 133744 }
+    elseif id == 2589 then
+        return { name = "Linen Cloth", quality = 1, icon = 1 }
+    end
+    return nil
+end
+
+@test("the mail in the counts: its own part, in the total; none without a mail reader")
+local function countsMail()
+    local list = twoCharacters()
+    local counts = chars.countsFor(list, 2589, mailOf)
+    expect({ counts[1].mail, counts[1].total }).toEqual({ 0, 9 })
+    expect({ counts[2].bags, counts[2].mail, counts[2].total }).toEqual({ 20, 4, 24 })
+    -- only in Bo's mail: counted
+    local tome = chars.countsFor(list, 7000, mailOf)
+    expect(#tome).toBe(1)
+    expect(tome[1].c).toBe(list[2])
+    expect({ tome[1].mail, tome[1].bags, tome[1].total }).toEqual({ 1, 0, 1 })
+    -- the mail module off: no mail
+    expect(chars.countsFor(list, 2589)[2].total).toBe(20)
+    expect(#chars.countsFor(list, 7000)).toBe(0)
+end
+
+@test("All characters finds what's in the mail: beside the bags, alone, by its kept name; one without a name isn't found")
+local function searchMail()
+    local list = twoCharacters()
+    local cloth = chars.searchResults(list, "linen", mailOf, itemOf)
+    expect(#cloth).toBe(1)
+    expect(cloth[1].count).toBe(33)
+    expect(cloth[1].lines).toEqual({ "Ann · Bags ×8", "Ann · Bank ×1", "Bo · Bags ×20", "Bo · Mail ×4" })
+    local tome = chars.searchResults(list, "tome", mailOf, itemOf)
+    expect(#tome).toBe(1)
+    expect({ tome[1].label, tome[1].quality, tome[1].icon, tome[1].link, tome[1].count }).toEqual({
+        "Old Tome",
+        "rare",
+        133744,
+        "item:7000",
+        1,
+    })
+    expect(tome[1].lines).toEqual({ "Bo · Mail ×1" })
+    -- everything: the gem has no name, so it isn't listed
+    local all = chars.searchResults(list, "", mailOf, itemOf)
+    expect(#all).toBe(4)
+    -- without the mail's reader, as before
+    expect(#chars.searchResults(list, "tome")).toBe(0)
+end
+
+@test("a saved bags as a holding: items by ID, the soulbound ones, when; none saved")
+local function holdingOf()
+    local h = assert(chars.holdingOf(box({
+        { t = 1, c = 5, q = 1, l = link(2589, "Linen Cloth") },
+        false,
+        { t = 1, c = 3, q = 1, l = link(2589, "Linen Cloth"), b = true },
+        { t = 2, c = 1, q = 3, l = link(9000, "Blue Ring"), b = true },
+        -- (no link: not an item it can name)
+        { t = 3, c = 2, q = 1 },
+    }, NOW - 60)))
+    expect(h.items).toEqual({ [2589] = 8, [9000] = 1 })
+    expect(h.bound).toEqual({ [2589] = 3, [9000] = 1 })
+    expect(h.seen).toBe(NOW - 60)
+    expect(h.live).toBe(nil)
+    -- yours: live; a box without its time takes the character's
+    local mine = assert(chars.holdingOf({ slots = { { t = 1, c = 2, q = 1, l = link(1, "Stone") } }, size = 1, free = 0 }, NOW, true))
+    expect(mine.items).toEqual({ [1] = 2 })
+    expect(mine.bound).toBe(nil)
+    expect(mine.seen).toBe(NOW)
+    expect(mine.live).toBe(true)
+    expect(chars.holdingOf(nil, NOW)).toBe(nil)
+end
+
+@test("the same items: each slot's item, count and soulbound state")
+local function sameItems()
+    local a = box({ { t = 1, c = 5, q = 1, l = link(1, "Stone") }, false })
+    expect(chars.sameItems(a, box({ { t = 9, c = 5, q = 2, l = link(1, "Stone") }, false }))).toBe(true)
+    expect(chars.sameItems(a, box({ { t = 1, c = 4, q = 1, l = link(1, "Stone") }, false }))).toBe(false)
+    expect(chars.sameItems(a, box({ { t = 1, c = 5, q = 1, l = link(1, "Stone"), b = true }, false }))).toBe(false)
+    expect(chars.sameItems(a, box({ false, { t = 1, c = 5, q = 1, l = link(1, "Stone") } }))).toBe(false)
+    expect(chars.sameItems(a, box({ { t = 1, c = 5, q = 1, l = link(1, "Stone") } }))).toBe(false)
+    expect(chars.sameItems(nil, a)).toBe(false)
+    expect(chars.sameItems(nil, nil)).toBe(true)
 end
 
 @test("a character without a name is named by its key")

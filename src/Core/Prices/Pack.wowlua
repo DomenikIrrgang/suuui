@@ -1,0 +1,383 @@
+-- Core/Prices/Pack.wowlua
+-- An item's price history as the price store keeps it (Core/Prices): one
+-- short string per item and ruleset, so 6,400 items scanned every day for
+-- 60 days stay a few megabytes in SuuUIPrices (Store's size test measures
+-- it). Its numbers' format is the API's too (SuuUI.PackNumber,
+-- SuuUI.UnpackNumber: the Ledger's books are written in it).
+--
+-- The string is a list of looks, the newest first, one per period of a day
+-- (Days: Night, Morning, Noon, Evening): the lowest buyout per unit seen in
+-- that period, what most sell it for (when a cheap few sell under them),
+-- how many were offered and in how many auctions (the latest look's).
+-- Each look is a few numbers, each number written in printable characters
+-- that a SavedVariables file keeps as they are (33-126 without `"` and
+-- `\`): 64 of them end a number (6 bits), the other 28 carry more of it
+-- before the end (base 28), so 0-63 take one character, up to 1,791 two,
+-- up to 50,175 three, up to 1.4 million (140g) four.
+--
+-- A look: its head, then low, [most - low], qty, [n]. The head is
+-- ((day * 4 + period - 1) * 4 + flags): day is the day number (Days) for
+-- the newest look and, for each after it, how many days before the one
+-- before it (0 for another period of the same day: one character for a
+-- look a day or less older); flags 2: most is there, 1: n is the same as
+-- qty (and left out). Unknown counts are 0.
+--
+-- Recording a look touches only the newest one: the same period merges
+-- into it, a later one goes in front. Reading what the window asks (the
+-- latest look, the last 14 or 30 days) reads only the front of the string;
+-- dropping what is older than 60 days cuts its end.
+
+export type Points = {
+    count: number,
+    day: number[],
+    period: number[],
+    low: number[],
+    most: number[],
+    qty: number[],
+    n: number[],
+}
+
+export function newPoints(): Points
+    return { count = 0, day = {}, period = {}, low = {}, most = {}, qty = {}, n = {} }
+end
+
+-- The alphabet: CHAR[v] writes digit v (0-63 a number's last, 64-91 one
+-- before it); CODE[byte] reads it back.
+local CHAR: { [number]: string } = {}
+local CODE: { [number]: number } = {}
+do
+    local v = 0
+    for b = 33, 126 do
+        if b ~= 34 and b ~= 92 then
+            CHAR[v] = string.char(b)
+            CODE[b] = v
+            v += 1
+        end
+    end
+end
+
+local byte, floor, sub = string.byte, math.floor, string.sub
+
+-- A whole number 0 or more as characters.
+export function encodeNumber(value: number): string
+    local v = floor(value)
+    local last = v % 64
+    local q = (v - last) / 64
+    local out = CHAR[last] or ""
+    while q > 0 do
+        local d = q % 28
+        out = (CHAR[64 + d] or "") .. out
+        q = (q - d) / 28
+    end
+    return out
+end
+
+-- The number that starts at `i`, and where the next one starts. (Past the
+-- end it reads a last digit 0: a cut string gives odd looks, never a
+-- loop.)
+-- (local: the reads below call it for every number of every look, and an
+-- exported function's arguments are checked on each call in dev builds)
+local function num(s: string, i: number): (number, number)
+    local acc = 0
+    local v = CODE[byte(s, i) or 0] or 0
+    while v >= 64 do
+        acc = acc * 28 + (v - 64)
+        i += 1
+        v = CODE[byte(s, i) or 0] or 0
+    end
+    return acc * 64 + v, i + 1
+end
+
+-- Where the number after the one at `i` starts.
+local function skip(s: string, i: number): number
+    while (CODE[byte(s, i) or 0] or 0) >= 64 do
+        i += 1
+    end
+    return i + 1
+end
+
+export function readNumber(s: string, i: number): (number, number)
+    return num(s, i)
+end
+
+-- One look: `head` the day field (the day for the newest, the days back
+-- for the others).
+local function point(head: number, period: number, low: number, most: number, qty: number, n: number): string
+    local hasMost = most > 0 and most >= low
+    local same = n == qty
+    local h = (head * 4 + period - 1) * 4 + (hasMost and 2 or 0) + (same and 1 or 0)
+    local out = encodeNumber(h) .. encodeNumber(low)
+    if hasMost then
+        out = out .. encodeNumber(most - low)
+    end
+    out = out .. encodeNumber(qty)
+    if not same then
+        out = out .. encodeNumber(n)
+    end
+    return out
+end
+
+-- A head's parts: the day field, the period, the flags.
+local function splitHead(h: number): (number, number, number)
+    local flags = h % 4
+    local rest = (h - flags) / 4
+    local p = rest % 4
+    return (rest - p) / 4, p + 1, flags
+end
+
+-- The looks of `s` into `out` (cleared first), the newest first; with
+-- `oldest`, only those on that day or later. -> out, and where the first
+-- look left out starts (past the end: none was).
+export function decode(s: string?, out: Points, oldest: number?): (Points, number)
+    out.count = 0
+    if not s then
+        return out, 1
+    end
+    local len = #s
+    local i = 1
+    local prev: number? = nil
+    while i <= len do
+        local start = i
+        local h: number
+        h, i = num(s, i)
+        local field, period, flags = splitHead(h)
+        local day = prev and (prev - field) or field
+        if oldest and day < oldest then
+            return out, start
+        end
+        local low: number
+        low, i = num(s, i)
+        local most = 0
+        if flags >= 2 then
+            local over: number
+            over, i = num(s, i)
+            most = low + over
+        end
+        local qty: number
+        qty, i = num(s, i)
+        local n = qty
+        if flags % 2 == 0 then
+            n, i = num(s, i)
+        end
+        local c = out.count + 1
+        out.count = c
+        out.day[c], out.period[c], out.low[c], out.most[c], out.qty[c], out.n[c] = day, period, low, most, qty, n
+        prev = day
+    end
+    return out, len + 1
+end
+
+-- The looks of `p` as a string (nil: none).
+export function encodePoints(p: Points): string?
+    if p.count == 0 then
+        return nil
+    end
+    local parts: string[] = {}
+    for i = 1, p.count do
+        local head = i == 1 and p.day[1] or (p.day[i - 1] - p.day[i])
+        parts[i] = point(head, p.period[i], p.low[i], p.most[i], p.qty[i], p.n[i])
+    end
+    return table.concat(parts)
+end
+
+-- The newest look: day, period, low, most, qty, n (nil: none).
+export function newest(s: string?): (number?, number, number, number, number, number)
+    if not s or s == "" then
+        return nil, 0, 0, 0, 0, 0
+    end
+    local h, i = num(s, 1)
+    local day, period, flags = splitHead(h)
+    local low: number, most: number, qty: number, n: number = 0, 0, 0, 0
+    low, i = num(s, i)
+    if flags >= 2 then
+        local over: number
+        over, i = num(s, i)
+        most = low + over
+    end
+    qty, i = num(s, i)
+    n = qty
+    if flags % 2 == 0 then
+        n, i = num(s, i)
+    end
+    return day, period, low, most, qty, n
+end
+
+-- The daily lows of the last `count` days that have a look, from `oldest`
+-- to `today` (later days skipped), the newest first, into `out` (cleared
+-- first). Reads only the front of the string: it stops at the first look
+-- of the day after the last one it needs. -> how many.
+export function recentLows(s: string?, today: number, oldest: number, count: number, out: number[]): number
+    local got = 0
+    local len = s and #s or 0
+    local i = 1
+    local prev: number? = nil
+    local day = -1
+    while s and i <= len do
+        local h: number
+        h, i = num(s, i)
+        local flags = h % 4
+        local rest = (h - flags) / 4
+        local field = (rest - rest % 4) / 4
+        local d = prev and (prev - field) or field
+        if d < oldest then
+            break
+        end
+        local low: number
+        low, i = num(s, i)
+        if flags >= 2 then
+            i = skip(s, i)
+        end
+        i = skip(s, i)
+        if flags % 2 == 0 then
+            i = skip(s, i)
+        end
+        if d <= today then
+            if d == day then
+                if low < out[got] then
+                    out[got] = low
+                end
+            elseif got >= count then
+                break
+            else
+                got += 1
+                out[got] = low
+                day = d
+            end
+        end
+        prev = d
+    end
+    for k = got + 1, #out do
+        (out :: { [number]: number? })[k] = nil
+    end
+    return got
+end
+
+-- Two looks of one period as one: the lowest price kept (and what most
+-- sell it for, when the newer look doesn't say); the counts the newer
+-- look's when it has them.
+local function merged(
+    low0: number,
+    most0: number,
+    qty0: number,
+    n0: number,
+    low: number,
+    most: number,
+    qty: number,
+    n: number
+): (number, number, number, number)
+    local mLow = math.min(low0, low)
+    local mMost = most > 0 and most or most0
+    if mMost < mLow then
+        mMost = 0
+    end
+    if qty > 0 then
+        return mLow, mMost, qty, n
+    end
+    return mLow, mMost, qty0, n0
+end
+
+-- A look recorded into `s`: on `day` in `period`, the lowest buyout per
+-- unit `low`, what most sell it for `most`, `qty` offered in `n` auctions
+-- (copper; 0: not known). -> the new string (`s` itself when nothing
+-- changed).
+export function record(
+    s: string?,
+    day: number,
+    period: number,
+    low: number,
+    most: number,
+    qty: number,
+    n: number
+): string
+    low, most, qty, n = floor(low), floor(most), floor(qty), floor(n)
+    if not s or s == "" then
+        return point(day, period, low, most, qty, n)
+    end
+    local h, i = num(s, 1)
+    local d0, p0, flags = splitHead(h)
+    if day > d0 or (day == d0 and period > p0) then
+        -- a later period: in front, and the one that was newest says how
+        -- many days before this one it is
+        local back = ((day - d0) * 4 + p0 - 1) * 4 + flags
+        return point(day, period, low, most, qty, n) .. encodeNumber(back) .. sub(s, i)
+    end
+    if day == d0 and period == p0 then
+        local low0: number, most0: number, qty0: number, n0: number = 0, 0, 0, 0
+        low0, i = num(s, i)
+        if flags >= 2 then
+            local over: number
+            over, i = num(s, i)
+            most0 = low0 + over
+        end
+        qty0, i = num(s, i)
+        n0 = qty0
+        if flags % 2 == 0 then
+            n0, i = num(s, i)
+        end
+        local mLow, mMost, mQty, mN = merged(low0, most0, qty0, n0, low, most, qty, n)
+        if mLow == low0 and mMost == most0 and mQty == qty0 and mN == n0 then
+            return s
+        end
+        return point(d0, p0, mLow, mMost, mQty, mN) .. sub(s, i)
+    end
+    -- an earlier period than the newest (the computer's clock went back):
+    -- read it all, put the look in its place, write it all again
+    local p = decode(s, newPoints())
+    for k = 1, p.count do
+        local dk, pk = p.day[k], p.period[k]
+        if dk == day and pk == period then
+            p.low[k], p.most[k], p.qty[k], p.n[k] = merged(p.low[k], p.most[k], p.qty[k], p.n[k], low, most, qty, n)
+            return encodePoints(p) or s
+        end
+        if dk < day or (dk == day and pk < period) then
+            table.insert(p.day, k, day)
+            table.insert(p.period, k, period)
+            table.insert(p.low, k, low)
+            table.insert(p.most, k, most)
+            table.insert(p.qty, k, qty)
+            table.insert(p.n, k, n)
+            p.count += 1
+            return encodePoints(p) or s
+        end
+    end
+    local c = p.count + 1
+    p.count = c
+    p.day[c], p.period[c], p.low[c], p.most[c], p.qty[c], p.n[c] = day, period, low, most, qty, n
+    return encodePoints(p) or s
+end
+
+-- `s` without its looks before day `oldest`: nil when none is left. (It
+-- only walks the heads: the prune reads every item once a day.)
+export function prune(s: string?, oldest: number): string?
+    if not s then
+        return nil
+    end
+    local len = #s
+    local i = 1
+    local prev: number? = nil
+    while i <= len do
+        local start = i
+        local h: number
+        h, i = num(s, i)
+        local flags = h % 4
+        local rest = (h - flags) / 4
+        local field = (rest - rest % 4) / 4
+        local d = prev and (prev - field) or field
+        if d < oldest then
+            if start == 1 then
+                return nil
+            end
+            return sub(s, 1, start - 1)
+        end
+        i = skip(s, i)
+        if flags >= 2 then
+            i = skip(s, i)
+        end
+        i = skip(s, i)
+        if flags % 2 == 0 then
+            i = skip(s, i)
+        end
+        prev = d
+    end
+    return s
+end

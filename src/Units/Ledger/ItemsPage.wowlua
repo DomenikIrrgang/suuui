@@ -1,0 +1,1184 @@
+-- Units/Ledger/ItemsPage.wowlua
+-- Items (asked 2026-11-19; the look of Prices): what the chosen characters
+-- hold, with what it's worth. A toolbar (26px): the search (by name, as
+-- you type), Filters (Show: Valued · Left out · All; Rows: Per place · Per
+-- item; Category; Quality), the place (All places, In bags, In the bank,
+-- On the auction house, In the mail, In more than one place), and at the
+-- right how many and what they're worth ("412 items · 162g 48s"). Then a
+-- table: Item (the quality's colour; why a left-out one counts for
+-- nothing, muted) · Where ("Bank · Aster"; per item "3 places") · Count ·
+-- Each (the usual price of its character's ruleset) · Value (count times
+-- each); sortable, Value first (the highest first). A VirtualList: only
+-- the rows in sight are drawn. Under it, what was left out ("Left out
+-- (soulbound, never seen): 37 items", Show). A row opens the item's page
+-- (Back returns here); hovering it shows the item, each place it is in and
+-- as of when.
+--
+-- The rows are Ledger/Worth's: its pass that values each place keeps the
+-- place's items too (asked for here), so they add up to the Gold tab's
+-- What it's worth exactly (the mail's money a row of its own). Kept until
+-- a place is read again or a price of an item it holds changes (Worth's
+-- results; each character's place made into rows once per result, a slice
+-- a frame when there are many); the orders made once until the rows
+-- change. Nothing runs while it only shows.
+
+import SuuUI from "/Core/API"
+import type Text, TextField, FilterMenu, FilterValues, Select, SelectOption, VirtualList, ItemSlot, Money, LoadingMark from "/Core/API"
+import type CharWorth, Chosen from "./Worth"
+import WHY_WORDS from "./Worth"
+import PLACES, PLACE_LABEL, PLACE_HINT, PLACE_OFF from "./GoldPage"
+import HeadCell from "./PricesPage"
+import type Col from "./PricesPage"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+export const ROW_H = 32
+export const TOOL_H = 26
+-- rows made at once (a few places), and a slice a frame beyond that: at
+-- most this many items and ms (Prices' numbers)
+export const NOW_ITEMS = 300
+export const BUILD_ITEMS = 600
+export const BUILD_MS = 4
+local HEAD_H = 20
+local FOOT_H = 24
+-- the place-lines listed in a row's tooltip at most
+local TIP_PLACES = 12
+-- the coin (the mail's money)
+export const MONEY_ICON = 133784
+
+-- What a row knows of its item (shared by its rows: a name that comes
+-- later fills them all).
+export type ItemInfo = { name?: string, lname?: string, quality?: number, icon?: number, classID?: number }
+
+-- A row: an item a character holds at a place (or, per item, all of them
+-- together: `parts`), or a place's money (`money`, item 0).
+export type ItemEntry = {
+    itemID: number,
+    info: ItemInfo,
+    -- the character and the place ("" for several)
+    key: string,
+    place: string,
+    -- its prices' ruleset ("" for several)
+    ruleset: string,
+    count: number,
+    -- the usual price each and count times it (nil and 0: left out, `why`)
+    each?: number,
+    value: number,
+    why?: string,
+    where: string,
+    -- Where's order (lower case; several places first, by how many)
+    lwhere: string,
+    -- when it was read (the oldest of several), and whether it follows
+    -- every change
+    seen: number,
+    live: boolean,
+    money: boolean,
+    cash: number,
+    cod: number,
+    parts?: ItemEntry[],
+}
+
+export const COLS: Col[] = {
+    { key = "name", label = "Item", sort = true },
+    { key = "where", label = "Where", w = 150, sort = true },
+    { key = "count", label = "Count", w = 56, right = true, sort = true },
+    { key = "each", label = "Each", w = 96, right = true, sort = true },
+    { key = "value", label = "Value", w = 110, right = true, sort = true },
+}
+type Place = { x: number, w: number }
+
+-- a place in a row's Where
+export const PLACE_SHORT: { [string]: string } = {
+    bags = "Bags",
+    bank = "Bank",
+    auctions = "Auctions",
+    mail = "Mail",
+}
+
+export const SHOWS: { [string]: boolean } = { valued = true, left = true, all = true }
+export const CHOICES: { [string]: boolean } = { all = true, bags = true, bank = true, auctions = true, mail = true, multi = true }
+
+-- A place's rows made from its worth, kept with the result they came from.
+type Made = { r: CharWorth, list: ItemEntry[] }
+type Todo = { c: Chosen, place: string, r: CharWorth }
+-- (the place being made: todo[i], its next item k, its rows so far)
+type Job = { todo: Todo[], i: number, k: number, list: ItemEntry[], done: number, total: number }
+
+-- The table's column places in a row of width w.
+local function placesFor(w: number): Place[]
+    local fixed = 0
+    for _, c in ipairs(COLS) do
+        fixed += (c.w or 0) + S["space-4"]
+    end
+    local x = S["space-3"]
+    local out: Place[] = {}
+    for i, c in ipairs(COLS) do
+        local cw = c.w or math.max(80, w - fixed - S["space-3"] * 2)
+        out[i] = { x = x, w = cw }
+        x += cw + S["space-4"]
+    end
+    return out
+end
+
+-- An entry's value in a numeric column (nil: none, last; the highest first).
+local function sortValue(e: ItemEntry, key: string): number?
+    if key == "count" then
+        return not e.money and -e.count or nil
+    elseif key == "each" then
+        local each = e.each
+        return each and -each or nil
+    elseif key == "value" then
+        return e.why == nil and -e.value or nil
+    end
+    return nil
+end
+
+-- "12 items", "1 item"
+local function itemsWord(n: number): string
+    return n == 1 and "1 item" or (parts.count(n) .. " items")
+end
+
+export class ItemRow extends Button
+    readonly page: ItemsPage
+    entry?: ItemEntry
+    laid?: Place[]
+    readonly hover: Texture
+    readonly rule: Texture
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly why: Text
+    readonly where: Text
+    readonly count: Text
+    readonly each: Money
+    readonly noEach: Text
+    readonly value: Money
+    readonly noValue: Text
+
+    constructor(page: ItemsPage, parent: Frame)
+        super(nil, parent)
+        self.page = page
+        self:SetHeight(ROW_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.why = UI.Text(self, "caption", "ink-muted")
+        self.where = UI.Text(self, "caption", "ink")
+        self.where:SetWordWrap(false)
+        self.count = UI.Text(self, "numeric", "ink")
+        self.count:SetJustifyH("RIGHT")
+        self.each = UI.Money(self)
+        self.noEach = UI.Text(self, "caption", "ink-muted")
+        self.noEach:SetValue("\226\128\148")
+        self.value = UI.Money(self)
+        self.noValue = UI.Text(self, "caption", "ink-muted")
+        self.noValue:SetValue("\226\128\148")
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local e = self.entry
+            if e then
+                self.page:Tooltip(self, e)
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local e = self.entry
+            if e and not e.money and not parts.modifiedClick(e.itemID) then
+                self.page:OpenItem(e)
+            end
+        end)
+    end
+
+    -- The cells placed by the columns (again only when they moved).
+    function Lay(places: Place[])
+        if self.laid == places then
+            return
+        end
+        self.laid = places
+        local p = places[1]
+        self.slot:ClearAllPoints()
+        self.slot:SetPoint("LEFT", self, "LEFT", p.x, 0)
+        self.name:ClearAllPoints()
+        self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-3"], 0)
+        self.why:ClearAllPoints()
+        self.why:SetPoint("LEFT", self.name, "RIGHT", S["space-3"], 0)
+        local function right(r: Region, i: number)
+            r:ClearAllPoints()
+            r:SetPoint("RIGHT", self, "LEFT", places[i].x + places[i].w, 0)
+        end
+        self.where:ClearAllPoints()
+        self.where:SetPoint("LEFT", self, "LEFT", places[2].x, 0)
+        self.where:SetWidth(places[2].w)
+        self.where:SetJustifyH("LEFT")
+        right(self.count, 3)
+        right(self.each, 4)
+        right(self.noEach, 4)
+        right(self.value, 5)
+        right(self.noValue, 5)
+    end
+
+    -- Draws an entry (the VirtualList's bind: nothing made here).
+    function Bind(e: ItemEntry)
+        self.entry = e
+        local page = self.page
+        self:Lay(page.places)
+        local info = e.info
+        if not (e.money or info.name) then
+            page:Ask(e.itemID)
+        end
+        local left = e.why ~= nil
+        self.slot.skin:SetItem({ icon = info.icon, quality = parts.QUALITY[info.quality or 1] or "common" })
+        self.slot:SetAlpha(left and 0.5 or 1)
+        self.name:SetValue(info.name or ("Item " .. e.itemID))
+        self.name:SetColor((left or not info.name) and "ink-muted" or parts.qualityToken(info.quality))
+        -- why it counts for nothing (or the mail's COD), after the name
+        local why = e.why
+        local word = why and WHY_WORDS[why] or (e.money and e.cod > 0 and "less cash on delivery") or ""
+        self.why:SetValue(word)
+        local room = page.places[1].w - 24 - S["space-3"]
+        local whyW = word ~= "" and (math.ceil(self.why:GetUnboundedStringWidth()) + S["space-3"]) or 0
+        self.name:SetWidth(math.min(math.ceil(self.name:GetUnboundedStringWidth()) + 1, math.max(20, room - whyW)))
+        self.where:SetValue(e.where)
+        self.where:SetColor(left and "ink-muted" or "ink")
+        self.count:SetValue(e.money and "" or parts.count(e.count))
+        self.count:SetColor(left and "ink-muted" or "ink")
+        local each = e.each
+        self.each:SetShown(each ~= nil)
+        self.noEach:SetShown(each == nil and not e.money)
+        if each then
+            self.each:SetCopper(each)
+        end
+        self.value:SetShown(not left)
+        self.noValue:SetShown(left)
+        if not left then
+            if e.value < 0 then
+                self.value:SetSigned(e.value)
+            else
+                self.value:SetCopper(e.value)
+            end
+        end
+    end
+end
+
+export class ItemsPage extends Frame
+    readonly w: LedgerWindow
+    readonly search: TextField
+    readonly filter: FilterMenu
+    readonly placeSelect: Select<string>
+    readonly countText: Text
+    readonly head: Frame
+    readonly heads: HeadCell[] = {}
+    readonly list: VirtualList<ItemEntry>
+    readonly empty: Text
+    readonly foot: Frame
+    readonly footText: Text
+    readonly footLink: parts.Link
+    readonly loadingView: Frame
+    readonly loadingMark: LoadingMark
+    readonly loadingCaption: Text
+    -- what it shows: Show, Rows, Category, Quality; the place; the
+    -- search; the order
+    show: string = "valued"
+    rows: string = "place"
+    filters: FilterValues = {}
+    place: string = "all"
+    query: string = ""
+    sortKey: string = "value"
+    sortReverse: boolean = false
+    -- each character's places as rows ("key\0place"), the items' names and
+    -- icons, the rows still to make (a slice a frame) and its ticker
+    lists: { [string]: Made } = {}
+    infos: { [number]: ItemInfo } = {}
+    job?: Job = nil
+    ticker: TickerHandle? = nil
+    missing: number[] = {}
+    -- the rows of the chosen characters and place (per item: grouped), what
+    -- they were made of; each order of them until they change
+    base?: ItemEntry[] = nil
+    baseKey: string = ""
+    baseFrom: ItemEntry[][] = {}
+    orders: { [string]: ItemEntry[] } = {}
+    -- which places a chosen character had read (the empty state)
+    read: { [string]: boolean } = {}
+    -- the characters' names by key
+    names: { [string]: string } = {}
+    places: Place[] = {}
+    -- what the last draw showed: how many items, their worth, how many left
+    -- out by the same filters
+    shownCount: number = 0
+    shownValue: number = 0
+    leftCount: number = 0
+    namesPending: boolean = false
+    lookingUp: number = 0
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        local bar = CreateFrame("Frame", nil, self)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(TOOL_H)
+        self.search = UI.TextField(bar, {
+            width = 220,
+            placeholder = "Search items",
+            onTextChanged = function(text: string)
+                self:SetQuery(text)
+            end,
+            onChange = function(text: string)
+                self:SetQuery(text)
+            end,
+        })
+        self.search:SetHeight(TOOL_H)
+        self.search:SetPoint("LEFT")
+        self.filter = UI.FilterMenu(bar, {
+            groups = {
+                {
+                    key = "show",
+                    label = "Show",
+                    kind = "one",
+                    options = {
+                        { value = "valued", label = "Valued" },
+                        { value = "left", label = "Left out" },
+                        { value = "all", label = "All" },
+                    },
+                },
+                {
+                    key = "rows",
+                    label = "Rows",
+                    kind = "one",
+                    options = {
+                        { value = "place", label = "Per place" },
+                        { value = "item", label = "Per item" },
+                    },
+                },
+                parts.categoryGroup(),
+                parts.qualityGroup(),
+            },
+            defaults = { show = "valued", rows = "place", cat = {}, q = {} },
+            placeholder = "Filters",
+            width = 110,
+            height = TOOL_H,
+            onChange = function(v: FilterValues)
+                self:SetFilters(v)
+            end,
+        })
+        self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-3"], 0)
+        local choices: SelectOption<string>[] = { { value = "all", label = "All places" } }
+        for _, place in ipairs(PLACES) do
+            choices[#choices + 1] = { value = place, label = PLACE_LABEL[place] or place }
+        end
+        choices[#choices + 1] = { value = "multi", label = "In more than one place" }
+        self.placeSelect = UI.Select(bar, {
+            width = 190,
+            options = choices,
+            onChange = function(v: string)
+                self:SetPlace(v)
+            end,
+        })
+        self.placeSelect:SetHeight(TOOL_H)
+        self.placeSelect:SetPoint("LEFT", self.filter, "RIGHT", S["space-3"], 0)
+        self.placeSelect:SetValue("all")
+        self.countText = UI.Text(bar, "caption", "ink-muted")
+        self.countText:SetPoint("RIGHT")
+        -- the header, the rows, the foot
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT", 0, -(TOOL_H + S["space-4"]))
+        self.head:SetPoint("TOPRIGHT", -(S["space-3"] + 3), -(TOOL_H + S["space-4"]))
+        self.head:SetHeight(HEAD_H)
+        local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT")
+        rule:SetPoint("TOPRIGHT", self.head, "BOTTOMRIGHT")
+        for i, c in ipairs(COLS) do
+            local h = HeadCell.new(self.head, c)
+            h:SetHeight(HEAD_H)
+            if c.sort then
+                h:SetScript("OnClick", function()
+                    self:SortBy(c.key)
+                end)
+                h:SetScript("OnEnter", function(obj: HeadCell)
+                    obj.label:SetColor("ink")
+                end)
+                h:SetScript("OnLeave", function()
+                    self:DrawHead()
+                end)
+            else
+                h:EnableMouse(false)
+            end
+            self.heads[i] = h
+        end
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetPoint("BOTTOMLEFT")
+        self.foot:SetPoint("BOTTOMRIGHT")
+        self.foot:SetHeight(FOOT_H)
+        self.footText = UI.Text(self.foot, "caption", "ink-muted")
+        self.footText:SetPoint("LEFT", S["space-3"], 0)
+        self.footLink = parts.Link.new(self.foot, "Show", function()
+            self:SetShow(self.show == "valued" and "left" or "valued")
+        end)
+        self.footLink:SetPoint("LEFT", self.footText, "RIGHT", S["space-3"], 0)
+        self.list = UI.VirtualList(self, {
+            rowHeight = ROW_H,
+            bar = S["space-3"],
+            make = function(): Frame
+                return ItemRow.new(self, self.list.child)
+            end,
+            bind = function(row: Frame, e: ItemEntry)
+                (row :: ItemRow):Bind(e)
+            end,
+        })
+        self.list:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -1)
+        self.list:SetPoint("BOTTOMRIGHT", self.foot, "TOPRIGHT", -(S["space-3"] + 3), S["space-2"])
+        self.list.scroll:HookScript("OnSizeChanged", function()
+            self:Layout()
+        end)
+        self.empty = UI.Text(self, "body", "ink-muted")
+        self.empty:SetPoint("TOP", self.list, "TOP", 0, -60)
+        self.empty:SetWidth(520)
+        self.empty:SetWordWrap(true)
+        self.empty:Hide()
+        -- while the rows are counted or made: the mark, "Counting your
+        -- items", how far
+        local lv = CreateFrame("Frame", nil, self)
+        lv:SetAllPoints(self.list)
+        lv:Hide()
+        self.loadingView = lv
+        self.loadingMark = UI.LoadingMark(lv, { size = 60 })
+        self.loadingMark:SetPoint("CENTER", 0, 40)
+        local title = UI.Text(lv, "header", "gilt-text")
+        title:SetValue("Counting your items")
+        title:SetPoint("TOP", self.loadingMark, "BOTTOM", 0, -S["space-4"])
+        self.loadingCaption = UI.Text(lv, "caption", "ink-muted")
+        self.loadingCaption:SetPoint("TOP", title, "BOTTOM", 0, -S["space-2"])
+    end
+
+    ----------------------------------------------------------------------------
+    -- What it shows
+    ----------------------------------------------------------------------------
+
+    -- The place ("all", "bags", "bank", "auctions", "mail", "multi").
+    function SetPlace(place: string)
+        if not CHOICES[place] then
+            place = "all"
+        end
+        self.place = place
+        self.placeSelect:SetValue(place)
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    -- A Show ("valued", "left", "all"), as the menu would.
+    function SetShow(show: string)
+        if not SHOWS[show] then
+            show = "valued"
+        end
+        local copy: FilterValues = {}
+        for k, x in pairs(self.filter:GetValue() :: FilterValues) do
+            copy[k] = x
+        end
+        copy.show = show
+        self.filter:SetValue(copy)
+        self:SetFilters(copy)
+    end
+
+    function SetFilters(v: FilterValues)
+        local show = type(v.show) == "string" and v.show :: string or "valued"
+        local rows = v.rows == "item" and "item" or "place"
+        self.show, self.rows, self.filters = SHOWS[show] and show or "valued", rows, v
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    function SetQuery(text: string)
+        local q = (text:match("^%s*(.-)%s*$") or ""):lower()
+        if q == self.query then
+            return
+        end
+        self.query = q
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    function SortBy(key: string)
+        if self.sortKey == key then
+            self.sortReverse = not self.sortReverse
+        else
+            self.sortKey, self.sortReverse = key, false
+        end
+        self:DrawList()
+    end
+
+    -- A row's item page, at its character's ruleset's prices; Back returns.
+    function OpenItem(e: ItemEntry)
+        local rs = e.ruleset
+        if rs ~= "" and rs ~= self.w:Ruleset() then
+            self.w.ruleset = rs
+        end
+        self.w.item:SetItem(e.itemID, "items")
+        self.w:Go("item")
+    end
+
+    -- Every row made again on the next draw (the module turned off).
+    function Forget()
+        self.lists, self.infos = {}, {}
+        self.job = nil
+        self.base, self.baseKey, self.baseFrom = nil, "", {}
+        self.orders = {}
+        self.missing = {}
+    end
+
+    ----------------------------------------------------------------------------
+    -- The rows
+    ----------------------------------------------------------------------------
+
+    -- What a row shows of an item, kept for all its rows (a name not known
+    -- yet: asked for in the background).
+    function Info(itemID: number): ItemInfo
+        local info = self.infos[itemID]
+        if info then
+            return info
+        end
+        local name, quality = self.w.m:ItemName(itemID)
+        if not name then
+            self.missing[#self.missing + 1] = itemID
+        end
+        local icon, classID = parts.instantInfo(itemID)
+        info = { name = name, lname = name and name:lower() or nil, quality = quality, icon = icon, classID = classID }
+        self.infos[itemID] = info
+        return info
+    end
+
+    -- Up to `n` items of the job's places made into rows (`ms`: a budget
+    -- too; a place may end in a later slice), each place kept with its
+    -- result once it is whole. -> whether it's done.
+    function RunJob(n: number, ms: number?): boolean
+        local job = self.job
+        if not job then
+            return true
+        end
+        local deadline = ms and (debugprofilestop() + ms) or nil
+        local done = 0
+        while job.i <= #job.todo do
+            local t = job.todo[job.i]
+            local c, place, r = t.c, t.place, t.r
+            local who = self.names[c.key] or c.key:match("^(.-) %- ") or c.key
+            local where = (PLACE_SHORT[place] or place) .. " \194\183 " .. who
+            local lwhere = where:lower()
+            local items = r.items or {}
+            local list = job.list
+            while job.k <= #items do
+                if done >= n or (deadline and debugprofilestop() > deadline) then
+                    return false
+                end
+                local it = items[job.k]
+                job.k += 1
+                done += 1
+                job.done += 1
+                local each = it.each
+                list[#list + 1] = {
+                    itemID = it.itemID,
+                    info = self:Info(it.itemID),
+                    key = c.key,
+                    place = place,
+                    ruleset = c.ruleset,
+                    count = it.count,
+                    each = each,
+                    value = each and each * it.count or 0,
+                    why = it.why,
+                    where = where,
+                    lwhere = lwhere,
+                    seen = r.seen,
+                    live = r.live,
+                    money = false,
+                    cash = 0,
+                    cod = 0,
+                }
+            end
+            -- the place's money (the mail's: less its COD, as What it's worth)
+            if r.money ~= 0 or r.cash > 0 or r.cod > 0 then
+                local label = r.cash > 0 and "Money" or "Cash on delivery"
+                list[#list + 1] = {
+                    itemID = 0,
+                    info = { name = label, lname = label:lower(), quality = 1, icon = MONEY_ICON },
+                    key = c.key,
+                    place = place,
+                    ruleset = c.ruleset,
+                    count = 0,
+                    value = r.money,
+                    where = where,
+                    lwhere = lwhere,
+                    seen = r.seen,
+                    live = r.live,
+                    money = true,
+                    cash = r.cash,
+                    cod = r.cod,
+                }
+            end
+            self.lists[c.key .. "\0" .. place] = { r = r, list = list }
+            job.i += 1
+            job.k = 1
+            job.list = {}
+        end
+        self.job = nil
+        -- (in the background: the search finds them as they come)
+        if #self.missing > 0 then
+            self.w.m:AskNames(self.missing)
+            self.missing = {}
+        end
+        return true
+    end
+
+    -- The loading mark (`on`), how far it is.
+    function Loading(on: boolean, done: number?, total: number?)
+        local was = self.loadingView:IsShown()
+        self.loadingView:SetShown(on)
+        if on then
+            if not was then
+                self.loadingMark:Start()
+            end
+            self.loadingCaption:SetValue(total and total > 0 and (parts.count(done or 0) .. " of " .. parts.count(total) .. " items") or "")
+            self.list:SetItems({})
+            self.empty:Hide()
+            self.foot:Hide()
+            self.countText:SetValue("Counting\226\128\166")
+        elseif was then
+            self.loadingMark:Stop()
+        end
+    end
+
+    -- The chosen characters' rows at the chosen place, per place or per
+    -- item, in the order they were made (nil: being worked out).
+    function Base(): ItemEntry[]?
+        local m = self.w.m
+        local chosen = self.w:Chosen()
+        local worth = m:Worth()
+        if not worth:Prepare(chosen, PLACES, NOW_ITEMS, true) then
+            -- (the window draws again when Worth is done)
+            self:Loading(true)
+            return nil
+        end
+        local names: { [string]: string } = {}
+        for _, ch in ipairs(m:Characters()) do
+            names[ch.key] = ch.name
+        end
+        self.names = names
+        local choice = self.place
+        local lists: ItemEntry[][] = {}
+        local todo: Todo[] = {}
+        local total = 0
+        local read: { [string]: boolean } = {}
+        for _, c in ipairs(chosen) do
+            for _, place in ipairs(PLACES) do
+                if (choice == "all" or choice == "multi" or choice == place) and SuuUI.Holdings.Kept(place) then
+                    local r = worth:Result(c.key, place)
+                    if r then
+                        read[place] = true
+                        local made = self.lists[c.key .. "\0" .. place]
+                        if made and made.r == r then
+                            lists[#lists + 1] = made.list
+                        else
+                            todo[#todo + 1] = { c = c, place = place, r = r }
+                            total += #(r.items or {})
+                        end
+                    end
+                end
+            end
+        end
+        self.read = read
+        if #todo > 0 then
+            self.job = { todo = todo, i = 1, k = 1, list = {}, done = 0, total = total }
+            -- (a few at once; more a slice a frame)
+            if total <= NOW_ITEMS then
+                self:RunJob(math.huge)
+                return self:Base()
+            end
+            self:Loading(true, 0, total)
+            if not self.ticker then
+                local built = false
+                self.ticker = m:Every(0, function(ticker: TickerHandle)
+                    -- (drawn the frame after the last slice)
+                    if built or not self.job then
+                        ticker:Cancel()
+                        self.ticker = nil
+                        if self:IsVisible() then
+                            self:DrawList()
+                        end
+                        return
+                    end
+                    if self:RunJob(BUILD_ITEMS, BUILD_MS) then
+                        built = true
+                        return
+                    end
+                    local j = self.job
+                    if j and self:IsVisible() then
+                        self:Loading(true, j.done, j.total)
+                    end
+                end)
+            end
+            return nil
+        end
+        -- (the same places' rows as last time: the same base)
+        local key = choice .. "|" .. self.rows
+        local same = self.base ~= nil and key == self.baseKey and #lists == #self.baseFrom
+        if same then
+            for i, l in ipairs(lists) do
+                if self.baseFrom[i] ~= l then
+                    same = false
+                    break
+                end
+            end
+        end
+        if same then
+            return self.base
+        end
+        local rows: ItemEntry[] = {}
+        for _, l in ipairs(lists) do
+            for _, e in ipairs(l) do
+                rows[#rows + 1] = e
+            end
+        end
+        if choice == "multi" then
+            rows = self:InSeveral(rows)
+        end
+        if self.rows == "item" then
+            rows = self:Grouped(rows)
+        end
+        self.base, self.baseKey, self.baseFrom = rows, key, lists
+        self.orders = {}
+        return rows
+    end
+
+    -- The rows of the items held in more than one place (or by more than
+    -- one character).
+    function InSeveral(rows: ItemEntry[]): ItemEntry[]
+        local at: { [number]: { [string]: boolean } } = {}
+        local n: { [number]: number } = {}
+        for _, e in ipairs(rows) do
+            if not e.money then
+                local seen = at[e.itemID]
+                if not seen then
+                    seen = {}
+                    at[e.itemID] = seen
+                end
+                local id = e.key .. "\0" .. e.place
+                if not seen[id] then
+                    seen[id] = true
+                    n[e.itemID] = (n[e.itemID] or 0) + 1
+                end
+            end
+        end
+        local out: ItemEntry[] = {}
+        for _, e in ipairs(rows) do
+            if not e.money and (n[e.itemID] or 0) > 1 then
+                out[#out + 1] = e
+            end
+        end
+        return out
+    end
+
+    -- Per item: each item's rows summed (its left-out ones apart, by why;
+    -- the money in one row), "3 places"; an item in one place its own row.
+    function Grouped(rows: ItemEntry[]): ItemEntry[]
+        local groups: { [string]: ItemEntry[] } = {}
+        local order: string[] = {}
+        for _, e in ipairs(rows) do
+            local k = e.money and "money" or (e.itemID .. ":" .. (e.why or ""))
+            local g = groups[k]
+            if not g then
+                g = {}
+                groups[k] = g
+                order[#order + 1] = k
+            end
+            g[#g + 1] = e
+        end
+        local out: ItemEntry[] = {}
+        for _, k in ipairs(order) do
+            local ps = assert(groups[k])
+            local first = ps[1]
+            if #ps == 1 then
+                out[#out + 1] = first
+            else
+                local g: ItemEntry = {
+                    itemID = first.itemID,
+                    info = first.info,
+                    key = "",
+                    place = "",
+                    ruleset = first.ruleset,
+                    count = 0,
+                    value = 0,
+                    why = first.why,
+                    where = #ps .. " places",
+                    lwhere = string.format("%05d places", #ps),
+                    seen = first.seen,
+                    live = true,
+                    money = first.money,
+                    cash = 0,
+                    cod = 0,
+                    parts = ps,
+                }
+                local each = first.each
+                local oneEach = true
+                for _, p in ipairs(ps) do
+                    g.count += p.count
+                    g.value += p.value
+                    g.cash += p.cash
+                    g.cod += p.cod
+                    if p.ruleset ~= g.ruleset then
+                        g.ruleset = ""
+                    end
+                    if p.each ~= each then
+                        oneEach = false
+                    end
+                    if not p.live then
+                        if g.live or p.seen < g.seen then
+                            g.seen = p.seen
+                        end
+                        g.live = false
+                    end
+                end
+                -- (prices of several rulesets: what one is worth on average)
+                if each and g.count > 0 then
+                    g.each = oneEach and each or math.floor(g.value / g.count + 0.5)
+                end
+                out[#out + 1] = g
+            end
+        end
+        return out
+    end
+
+    -- The base in the chosen order (Value: the highest first; one without
+    -- the column's value last; ties in the base's order), kept until the
+    -- base changes; sorted as numbers or strings without a comparator (as
+    -- Prices).
+    function Ordered(list: ItemEntry[]): ItemEntry[]
+        local key, reverse = self.sortKey, self.sortReverse
+        local ck = key .. (reverse and "-" or "+")
+        local known = self.orders[ck]
+        if known then
+            return known
+        end
+        local n = #list
+        local tail: ItemEntry[] = {}
+        local out: ItemEntry[] = {}
+        if key == "name" or key == "where" then
+            local keys: string[] = {}
+            local of: { [string]: ItemEntry } = {}
+            for r, e in ipairs(list) do
+                local s = key == "name" and e.info.lname or e.lwhere
+                if s then
+                    local k = s .. "\1" .. string.format("%07d", reverse and (n - r) or r)
+                    keys[#keys + 1] = k
+                    of[k] = e
+                else
+                    tail[#tail + 1] = e
+                end
+            end
+            table.sort(keys)
+            local c = #keys
+            for i = 1, c do
+                out[i] = assert(of[keys[reverse and (c - i + 1) or i]])
+            end
+        else
+            local span = 1
+            while span <= n do
+                span *= 2
+            end
+            local limit = math.floor(9007199254740992 / span) - 1
+            local nums: number[] = {}
+            local of: { [number]: ItemEntry } = {}
+            for r, e in ipairs(list) do
+                local v = sortValue(e, key)
+                if v == nil then
+                    tail[#tail + 1] = e
+                else
+                    local q = math.floor((reverse and -v or v) + 0.5)
+                    q = math.max(-limit, math.min(limit, q))
+                    local c = q * span + (r - 1)
+                    nums[#nums + 1] = c
+                    of[c] = e
+                end
+            end
+            table.sort(nums)
+            for i, c in ipairs(nums) do
+                out[i] = assert(of[c])
+            end
+        end
+        for _, e in ipairs(tail) do
+            out[#out + 1] = e
+        end
+        self.orders[ck] = out
+        return out
+    end
+
+    -- The rows the filters and the search keep, in the chosen order (nil:
+    -- being worked out); how many items they are, their worth and how many
+    -- the same filters leave out, kept for the toolbar and the foot.
+    function Shown(): ItemEntry[]?
+        local base = self:Base()
+        if not base then
+            return nil
+        end
+        local all = self:Ordered(base)
+        local f = self.filters
+        local show = self.show
+        local cats, qs = UI.FilterList(f.cat), UI.FilterList(f.q)
+        local q = self.query
+        local names = self.w.m:Names()
+        local lookingUp, n, value, left = 0, 0, 0, 0
+        local out: ItemEntry[] = {}
+        for _, e in ipairs(all) do
+            local info = e.info
+            local keep = true
+            if #cats > 0 then
+                keep = not e.money and parts.holds(cats, parts.categoryOf(info.classID))
+            end
+            if keep and #qs > 0 then
+                local quality = info.quality
+                keep = not e.money and quality ~= nil and parts.holds(qs, parts.QUALITY[quality] or "")
+            end
+            local isLeft = e.why ~= nil
+            local shows = show == "all" or (show == "left") == isLeft
+            if keep and q ~= "" then
+                local name = info.lname
+                keep = name ~= nil and name:find(q, 1, true) ~= nil
+                if not name and shows and names:Pending(e.itemID) then
+                    lookingUp += 1
+                end
+            end
+            if keep and isLeft then
+                left += e.count
+            end
+            if keep and shows then
+                out[#out + 1] = e
+                if not e.money then
+                    n += e.count
+                end
+                if e.why == nil then
+                    value += e.value
+                end
+            end
+        end
+        self.lookingUp = lookingUp
+        self.shownCount, self.shownValue, self.leftCount = n, value, left
+        return out
+    end
+
+    ----------------------------------------------------------------------------
+    -- Names from the client
+    ----------------------------------------------------------------------------
+
+    -- An item's name asked for, before the rest (its row is in sight).
+    function Ask(itemID: number)
+        self.w.m:Names():Ask(itemID, true)
+    end
+
+    -- Whether the list shows differently for a name come (`named`): a
+    -- search, the names' order or the Quality filter waits for it, or its
+    -- row is in sight.
+    function Waits(itemID: number, named: boolean): boolean
+        if self.query ~= "" then
+            return true
+        end
+        if not named then
+            return false
+        end
+        if self.sortKey == "name" or #UI.FilterList(self.filters.q) > 0 then
+            return true
+        end
+        for _, r in ipairs(self.list:Rows()) do
+            local e = r:IsShown() and (r :: ItemRow).entry or nil
+            if e and e.itemID == itemID then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- A name arrived (or was given up): its rows have it; the list drawn
+    -- again shortly (once for many) when it shows it or waits for it.
+    function ItemInfo(itemID: number)
+        local info = self.infos[itemID]
+        if not info or info.name then
+            return
+        end
+        local name, quality = self.w.m:ItemName(itemID)
+        if name then
+            info.name, info.lname, info.quality = name, name:lower(), quality
+            self.orders["name+"], self.orders["name-"] = nil, nil
+        end
+        if self.namesPending or not self:IsVisible() or not self:Waits(itemID, name ~= nil) then
+            return
+        end
+        self.namesPending = true
+        self.w.m:After(0.2, function()
+            self.namesPending = false
+            if self:IsVisible() then
+                self:DrawList(true)
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Drawing
+    ----------------------------------------------------------------------------
+
+    -- A row's tooltip: the item (or the money), then each place it is in,
+    -- how many, as of when.
+    function Tooltip(owner: Frame, e: ItemEntry)
+        local tip = GameTooltip
+        tip:SetOwner(owner, "ANCHOR_RIGHT")
+        if e.money then
+            tip:SetText(e.cash > 0 and "Money in the mail" or "Cash on delivery")
+        else
+            tip:SetItemByID(e.itemID)
+        end
+        local label, value, muted = T.color["ink-muted"], T.color["ink"], T.color["ink-faint"]
+        tip:AddLine(" ")
+        local list = e.parts or { e }
+        for i, p in ipairs(list) do
+            if i > TIP_PLACES then
+                tip:AddLine("and " .. (#list - TIP_PLACES) .. " more places", muted[1], muted[2], muted[3])
+                break
+            end
+            local right: string
+            if p.money then
+                right = UI.MoneyText(p.cash)
+                if p.cod > 0 then
+                    right = right .. " \194\183 " .. UI.MoneyText(p.cod) .. " COD"
+                end
+            else
+                right = parts.count(p.count)
+            end
+            if not p.live then
+                right = right .. " \194\183 as of " .. parts.when(p.seen)
+            end
+            tip:AddDoubleLine(p.where, right, label[1], label[2], label[3], value[1], value[2], value[3])
+        end
+        tip:Show()
+    end
+
+    function Layout()
+        local width = self.list.scroll:GetWidth()
+        if width <= 1 then
+            return
+        end
+        self.places = placesFor(width)
+        self:DrawHead()
+        self.list:Invalidate()
+        self.list:Refresh()
+    end
+
+    function DrawHead()
+        local places = self.places
+        for i, h in ipairs(self.heads) do
+            local p, col = places[i], COLS[i]
+            if p then
+                h:ClearAllPoints()
+                h:SetPoint("LEFT", self.head, "LEFT", p.x, 0)
+                h:SetWidth(p.w)
+            end
+            local on = col.key == self.sortKey
+            h.label:SetColor(on and "ink" or "ink-muted")
+            h.arrow:SetShown(on)
+            if on then
+                UI.Glyph(h.arrow, self.sortReverse and "chevronUp" or "chevronDown")
+            end
+        end
+    end
+
+    -- Everything drawn again (a refresh of the window).
+    function Draw()
+        self.placeSelect:SetValue(self.place)
+        if #self.places == 0 then
+            self.places = placesFor(math.max(400, self.list.scroll:GetWidth()))
+        end
+        self:DrawList()
+    end
+
+    -- Why nothing shows (a place never read, its module off, nothing held,
+    -- the filters).
+    function EmptyText(base: ItemEntry[]): string
+        local choice = self.place
+        if #base == 0 then
+            if PLACE_LABEL[choice] then
+                if not SuuUI.Holdings.Kept(choice) then
+                    return (PLACE_OFF[choice] or "") .. "."
+                elseif not self.read[choice] then
+                    return (PLACE_HINT[choice] or "") .. "."
+                end
+                return "Nothing " .. (PLACE_LABEL[choice] or ""):lower() .. "."
+            end
+            if next(self.read) == nil then
+                return "Nothing counted yet: log in on each character, and visit your bank, your mailbox and the auction house."
+            elseif choice == "multi" then
+                return "No item is in more than one place."
+            end
+            return "Nothing held."
+        end
+        if self.query ~= "" and self.lookingUp > 0 then
+            return "Nothing matches yet: looking up the names of " .. parts.count(self.lookingUp) .. " more items."
+        elseif self.show == "left" and self.query == "" and #UI.FilterList(self.filters.cat) == 0 and #UI.FilterList(self.filters.q) == 0 then
+            return "Nothing is left out."
+        end
+        return "Nothing matches."
+    end
+
+    -- The rows, the count and total, the foot and the empty state (`names`:
+    -- only names came: the rows in sight drawn again too).
+    function DrawList(names: boolean?)
+        self:DrawHead()
+        local shown = self:Shown()
+        if not shown then
+            return
+        end
+        self:Loading(false)
+        if names then
+            self.list:Invalidate()
+        end
+        self.list:SetItems(shown)
+        local text: string
+        if self.show == "left" then
+            text = itemsWord(self.shownCount) .. " left out"
+        else
+            text = itemsWord(self.shownCount) .. " \194\183 " .. UI.MoneyText(self.shownValue)
+        end
+        local more = self.query ~= "" and self.lookingUp or 0
+        if more > 0 then
+            text = text .. " \194\183 Looking up " .. (more == 1 and "1 more name" or (parts.count(more) .. " more names")) .. "\226\128\166"
+        end
+        self.countText:SetValue(text)
+        -- the foot: what the same filters leave out
+        local foot: string? = nil
+        if self.show == "valued" and self.leftCount > 0 then
+            foot = "Left out (soulbound, never seen): " .. itemsWord(self.leftCount)
+            self.footLink:SetLabel("Show")
+        elseif self.show == "left" then
+            foot = "Soulbound, quest items, the hearthstone and items never seen on their ruleset\226\128\153s auction house count for nothing."
+            self.footLink:SetLabel("Show valued")
+        end
+        self.foot:Show()
+        self.footText:SetShown(foot ~= nil)
+        self.footLink:SetShown(foot ~= nil)
+        self.footText:SetValue(foot or "")
+        local empty = #shown == 0 and self:EmptyText(self.base or {}) or nil
+        self.empty:SetShown(empty ~= nil)
+        self.empty:SetValue(empty or "")
+    end
+end

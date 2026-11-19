@@ -17,6 +17,13 @@ import * as modules from "/Core/Modules"
 import * as motion from "/Core/Motion"
 import * as pixel from "/Core/Pixel"
 import * as rolePresets from "/Core/RolePresets"
+import * as rulesets from "/Core/Rulesets"
+import * as prices from "/Core/Prices"
+import * as holdings from "/Core/Holdings"
+import type Holding as HoldingType, HoldingReader from "/Core/Holdings"
+import * as calendar from "/Core/Prices/Days"
+import * as pack from "/Core/Prices/Pack"
+import type Look as PriceLookType from "/Core/Prices/Store"
 import * as roles from "/Core/Roles"
 import * as services from "/Core/Services"
 import ALERTS, TALENTS, PROFESSIONS, COLLECTIONS, BAGS, NOTIFICATIONS, DURABILITY, WELCOME from "/Core/ServiceKeys"
@@ -33,9 +40,11 @@ import * as actionButton from "/UI/ActionButton"
 import * as alert from "/UI/Alert"
 import * as auras from "/UI/Auras"
 import * as bar from "/UI/Bar"
+import * as barChart from "/UI/BarChart"
 import * as castBar from "/UI/CastBar"
 import * as classBars from "/UI/ClassBars"
 import * as combatBadge from "/UI/CombatBadge"
+import * as dealMark from "/UI/DealMark"
 import * as contextMenu from "/UI/ContextMenu"
 import * as controls from "/UI/Controls"
 import * as cooldownTracker from "/UI/CooldownTracker"
@@ -59,6 +68,7 @@ import * as keybindMode from "/UI/KeybindMode"
 import * as layout from "/UI/Layout"
 import * as legacy from "/UI/Legacy"
 import * as levelUp from "/UI/LevelUp"
+import * as lineChart from "/UI/LineChart"
 import * as loadingMark from "/UI/LoadingMark"
 import * as loot from "/UI/Loot"
 import * as lootRollTray from "/UI/LootRollTray"
@@ -279,6 +289,7 @@ API.Services = {
     CONVERGENCES = serviceKeys.CONVERGENCES,
     DURABILITY = serviceKeys.DURABILITY,
     FLIGHT_MAP = serviceKeys.FLIGHT_MAP,
+    LEDGER = serviceKeys.LEDGER,
     MARKS = serviceKeys.MARKS,
     MOUSE_BINDINGS = serviceKeys.MOUSE_BINDINGS,
     NOTIFICATIONS = serviceKeys.NOTIFICATIONS,
@@ -309,6 +320,7 @@ local rawUI = {
     AnchorPicker = pickers.anchorPicker,
     AttachTooltip = tooltip.attachTooltip,
     AuraContainer = auras.auraContainer,
+    BarChart = barChart.barChart, -- 0.48
     Bind = draw.bind,
     Border = draw.border,
     Button = controls.button,
@@ -320,6 +332,7 @@ local rawUI = {
     CloseButton = panel.closeButton,
     CloseContextMenu = contextMenu.closeContextMenu,
     CombatBadge = combatBadge.combatBadge, -- 0.34
+    DealMark = dealMark.dealMark, -- 0.48
     Confirm = panel.confirm,
     Contacts = social.contacts,
     ContextMenu = contextMenu.contextMenu,
@@ -373,6 +386,7 @@ local rawUI = {
     LegacyTrack = legacy.legacyTrack,
     LevelColor = unitFrame.levelColor,
     LevelUp = levelUp.levelUp,
+    LineChart = lineChart.lineChart, -- 0.48
     LoadingMark = loadingMark.loadingMark,
     LootRollTray = lootRollTray.lootRollTray,
     LootWindow = loot.lootWindow,
@@ -443,7 +457,9 @@ local rawUI = {
     Shadow = draw.shadow,
     ShortKey = actionButton.shortKey,
     ShowRaidMarker = unitFrame.showRaidMarker,
+    ShortMoney = lineChart.shortMoney, -- 0.48
     ShowTooltip = tooltip.showTooltip,
+    SignedPercent = barChart.signedPercent, -- 0.48
     Size = draw.size,
     Skin = draw.skin,
     SkinBar = draw.skinBar,
@@ -454,6 +470,7 @@ local rawUI = {
     SkinWindow = windowSkin.skinWindow,
     Slider = inputs.slider,
     SoftEdge = draw.softEdge,
+    Sparkline = lineChart.sparkline, -- 0.48
     SpellTooltip = tooltip.spellTooltip,
     Spellbook = spellbook.spellbook,
     StanceBar = classBars.stanceBar,
@@ -643,6 +660,9 @@ API.UI.InlineMark = draw.inlineMark
 API.UI.WithPixelUnit = draw.withPixelUnit
 -- copper as gold, silver and copper with their icons
 API.UI.MoneyText = inventory.moneyText
+-- 0.48: a deal's mark ("26% under", "Under vendor"): micro arcane text
+-- on arcane-soft with an arcane edge, sized to its text; :SetValue(text)
+API.UI.DealMark = dealMark.dealMark
 -- a skinned game window's chrome (title, close button, body…), or nil
 API.UI.WindowChrome = windowSkin.chromeOf
 -- a filter choice's values, as a list
@@ -669,6 +689,16 @@ API.UI.OpenRoot = reskin.openRoot
 -- Dress(frame, kind[, head][, headPoint][, box]): the theme's dress (art on
 -- the frame, UI/Dress.wowlua) for a kind: "window", "minimap", "unit", "chat"
 API.UI.Dress = dress.register
+
+-- 0.48: charts (the Ledger's price history, gold and "When it's cheapest"):
+-- values over time on one axis with gaps, marks, a crosshair and its
+-- tooltip; a sparkline; bars up and down from a middle line. Money short
+-- for an axis ("1,240g"), a percentage with its sign ("−11%").
+API.UI.LineChart = lineChart.lineChart
+API.UI.Sparkline = lineChart.sparkline
+API.UI.BarChart = barChart.barChart
+API.UI.ShortMoney = lineChart.shortMoney
+API.UI.SignedPercent = barChart.signedPercent
 
 -- A settings section that is always there (a module uses module:RegisterSettings,
 -- whose section goes away with the module). See SettingsUI/Registry.lua.
@@ -1342,6 +1372,199 @@ function API.AccountData(namespace: string): { [string]: unknown }
     return tbl.recordAt(map, namespace)
 end
 
+--------------------------------------------------------------------------------
+-- 0.48: rulesets (Core/Rulesets.wowlua). Forever has no realms, only
+-- rulesets, each with its own auction house: what is kept per house is
+-- keyed by SuuUI.Ruleset().
+--------------------------------------------------------------------------------
+
+-- This character's ruleset, as a key (for now the realm's name).
+function API.Ruleset(): string
+    return rulesets.current()
+end
+
+-- A ruleset's name as SuuUI shows it: "Normal Ruleset" (nil: this one's).
+function API.RulesetName(key: string?): string
+    return rulesets.displayName(key)
+end
+
+-- The ruleset of a character's key ("Name - Realm": M:CharKey(), the keys
+-- of M:AllCharData()), for data saved without its ruleset; nil: none told.
+function API.RulesetOfCharKey(charKey: string): string?
+    return rulesets.ofCharKey(charKey)
+end
+
+--------------------------------------------------------------------------------
+-- 0.48: the price store (Core/Prices): what the auction house showed, one
+-- copy per ruleset, the last 60 days, owned by neither the auction house
+-- module nor the Ledger. Anyone reads it; only SuuUI's own modules write
+-- (the auction house's looks, the names the Ledger learns).
+--------------------------------------------------------------------------------
+
+-- A write's module must be one of SuuUI's own.
+local function ownModule(m: unknown, what: string)
+    if not (type(m) == "table" and (m :: modules.AnyModule).builtIn == true) then
+        error("SuuUI.Prices." .. what .. ": only SuuUI's own modules write prices", 3)
+    end
+end
+
+API.Prices = {
+    -- how many days of looks are kept
+    KEEP_DAYS = prices.KEEP_DAYS,
+    -- the rulesets with prices, this character's first; the items with
+    -- prices on one (nil: this character's), and how many
+    Rulesets = function(): string[]
+        return prices.rulesetList()
+    end,
+    Items = function(ruleset: string?): number[]
+        return prices.items(ruleset)
+    end,
+    ItemCount = function(ruleset: string?): number
+        return prices.itemCount(ruleset)
+    end,
+    -- whether an item has prices on any ruleset
+    Known = function(itemID: number): boolean
+        return prices.known(itemID)
+    end,
+    -- the newest look { day, period, low, most, qty, n } (nil: none)
+    Latest = function(itemID: number, ruleset: string?): PriceLookType?
+        return prices.latest(itemID, ruleset)
+    end,
+    -- the usual price today: the middle of the lowest buyouts of the last
+    -- 14 days that have a look (nil: none)
+    Usual = function(itemID: number, ruleset: string?): number?
+        return prices.usual(itemID, ruleset)
+    end,
+    -- the daily lows of the last `count` days (index `count` today, 0: no
+    -- look), and what most sold it for at each day's lowest look
+    DailyLows = function(itemID: number, count: number, ruleset: string?): (number[], number[])
+        return prices.dailyLows(itemID, count, ruleset)
+    end,
+    -- every look of the last `count` days (nil: all kept), newest first
+    Looks = function(itemID: number, count: number?, ruleset: string?): PriceLookType[]
+        return prices.looks(itemID, count, ruleset)
+    end,
+    -- an item's name and quality: the kept one, else the client's cache's
+    -- (nil: neither); KeptName only the kept one
+    Name = function(itemID: number): (string?, number?)
+        return prices.nameOf(itemID)
+    end,
+    KeptName = function(itemID: number): (string?, number?)
+        return prices.keptName(itemID)
+    end,
+    -- when a look was: "this morning", "yesterday", "3 days ago"
+    When = function(at: number): string
+        return prices.whenText(at)
+    end,
+    -- (SuuUI's own modules) a look on this character's ruleset, now: the
+    -- lowest buyout per unit, what most sell it for, how many offered in
+    -- how many auctions (0 or nil: not known), and its name -> whether it
+    -- changed what is kept
+    Record = function(
+        m: modules.AnyModule,
+        itemID: number,
+        low: number,
+        most: number?,
+        qty: number?,
+        n: number?,
+        name: string?,
+        quality: number?
+    ): boolean
+        ownModule(m, "Record")
+        return prices.record(itemID, low, most, qty, n, name, quality)
+    end,
+    -- (SuuUI's own modules) Scan all's looks: five numbers an item
+    -- (itemID, low, most, qty, n), how many items, the names the house
+    -- told; kept a slice a frame, then SUUUI_PRICES_SCANNED
+    RecordScan = function(
+        m: modules.AnyModule,
+        looks: number[],
+        items: number,
+        names: { [number]: string }?,
+        qualities: { [number]: number }?
+    )
+        ownModule(m, "RecordScan")
+        prices.recordScan(looks, items, names, qualities)
+    end,
+    -- (SuuUI's own modules) an item's name learned -> whether it changed
+    KeepName = function(m: modules.AnyModule, itemID: number, name: string?, quality: number?): boolean
+        ownModule(m, "KeepName")
+        return prices.keepName(itemID, name, quality)
+    end,
+}
+
+-- 0.48: what each of your characters holds, and where (Core/Holdings): per
+-- character key and place ("bags", "bank", "mail", "auctions") the items,
+-- which are soulbound, the money there, when it was read. The modules that
+-- read a place keep it and give a reader (Provide); one turned off
+-- contributes nothing. Anyone reads.
+API.Holdings = {
+    -- the places SuuUI's own modules keep, in the order they are shown
+    PLACES = holdings.PLACES,
+    -- a character's place as last read (nil: never read, or not kept now)
+    Of = function(charKey: string, place: string): HoldingType?
+        return holdings.of(charKey, place)
+    end,
+    -- every place of a character that was read, by place
+    All = function(charKey: string): { [string]: HoldingType }
+        return holdings.all(charKey)
+    end,
+    -- whether a module keeps a place now
+    Kept = function(place: string): boolean
+        return holdings.kept(place)
+    end,
+    -- (a module) reads `place` for any character from now on, until it
+    -- turns off; tells SUUUI_HOLDINGS_CHANGED(place, "")
+    Provide = function(m: modules.AnyModule, place: string, read: HoldingReader)
+        holdings.provide(m, place, read)
+    end,
+    -- (the module reading `place`) a character's place read again:
+    -- SUUUI_HOLDINGS_CHANGED(place, charKey)
+    Changed = function(m: modules.AnyModule, place: string, charKey: string)
+        holdings.changed(m, place, charKey)
+    end,
+}
+
+-- 0.48: the calendar the prices are kept by (Core/Prices/Days): a day as a
+-- number (days since 1 January 1970 by the computer's calendar), the time
+-- of day as one of four periods by the computer's clock.
+API.Calendar = {
+    NIGHT = calendar.NIGHT,
+    MORNING = calendar.MORNING,
+    NOON = calendar.NOON,
+    EVENING = calendar.EVENING,
+    PERIODS = calendar.PERIODS,
+    WEEKDAYS = calendar.WEEKDAYS,
+    -- the day and period of a time (nil: now)
+    DayOf = function(at: number?): (number, number)
+        return calendar.dayOf(at)
+    end,
+    -- a day's date: year, month, day of the month
+    DateOf = function(day: number): (number, number, number)
+        return calendar.dateOf(day)
+    end,
+    DayNumber = function(year: number, month: number, day: number): number
+        return calendar.dayNumber(year, month, day)
+    end,
+    -- 1 Monday … 7 Sunday
+    Weekday = function(day: number): number
+        return calendar.weekday(day)
+    end,
+    PeriodOfHour = function(hour: number): number
+        return calendar.periodOfHour(hour)
+    end,
+    -- the time() a period of a day starts at
+    TimeOf = function(day: number, period: number): number
+        return calendar.timeOf(day, period)
+    end,
+}
+
+-- 0.48: a whole number as printable characters a SavedVariables file keeps
+-- as they are (the price store's format; the Ledger's books use it too),
+-- and the number at `i` of such a string with where the next one starts.
+API.PackNumber = pack.encodeNumber
+API.UnpackNumber = pack.readNumber
+
 -- Opens the first-run welcome again (the welcome module). False when that
 -- module is off.
 function API.ShowWelcome()
@@ -1382,6 +1605,10 @@ export type SettingsSection = modules.SettingsSection
 export type AlertsService = serviceKeys.AlertsService
 export type AuctionHouseService = serviceKeys.AuctionHouseService
 export type AuctionPrice = serviceKeys.AuctionPrice
+-- Core/Prices (0.48)
+export type PriceLook = PriceLookType
+-- Core/Holdings (0.48)
+export type Holding = HoldingType
 export type AutoQuestsService = serviceKeys.AutoQuestsService
 export type BagsService = serviceKeys.BagsService
 export type BindSpell = serviceKeys.BindSpell
@@ -1395,6 +1622,10 @@ export type DurabilityPiece = serviceKeys.DurabilityPiece
 export type DurabilityService = serviceKeys.DurabilityService
 export type FlightMapService = serviceKeys.FlightMapService
 export type FoundFire = serviceKeys.FoundFire
+export type LedgerService = serviceKeys.LedgerService
+export type LedgerOpenOptions = serviceKeys.LedgerOpenOptions
+export type LedgerUnder = serviceKeys.LedgerUnder
+export type LedgerScan = serviceKeys.LedgerScan
 export type MapMark = serviceKeys.MapMark
 export type MarkFilters = serviceKeys.MarkFilters
 export type MarksService = serviceKeys.MarksService
@@ -1434,6 +1665,10 @@ export type PreviewItem = auras.PreviewItem
 export type UnitAuras = auras.UnitAuras
 -- UI/Bar
 export type Bar = bar.Bar
+-- UI/BarChart (0.48)
+export type BarChart = barChart.BarChart
+export type BarChartData = barChart.BarChartData
+export type BarChartOptions = barChart.BarChartOptions
 -- UI/CastBar
 export type CastBar = castBar.CastBar
 -- UI/ClassBars
@@ -1442,6 +1677,8 @@ export type StanceBar = classBars.StanceBar
 export type TotemBar = classBars.TotemBar
 -- UI/CombatBadge
 export type CombatBadge = combatBadge.CombatBadge
+-- UI/DealMark
+export type DealMark = dealMark.DealMark
 -- UI/Controls
 export type StateBadge = controls.StateBadge
 export type SuuButton = controls.SuuButton
@@ -1530,6 +1767,14 @@ export type TrackStop = legacy.TrackStop
 export type LevelUpCard = levelUp.LevelUpCard
 export type LevelUpDef = levelUp.LevelUpDef
 export type LevelUpSpell = levelUp.LevelUpSpell
+-- UI/LineChart (0.48)
+export type ChartMark = lineChart.ChartMark
+export type ChartSeries = lineChart.ChartSeries
+export type ChartValue = lineChart.ChartValue
+export type LineChart = lineChart.LineChart
+export type LineChartData = lineChart.LineChartData
+export type LineChartOptions = lineChart.LineChartOptions
+export type Sparkline = lineChart.Sparkline
 -- UI/LoadingMark
 export type LoadingMark = loadingMark.LoadingMark
 -- UI/Loot
@@ -1668,6 +1913,8 @@ export type StandInPerson = unitFrame.StandInPerson
 export type UnitApi = unitFrame.UnitApi
 export type UnitFrame = unitFrame.UnitFrame
 export type UnitFrameOptions = unitFrame.UnitFrameOptions
+-- UI/VirtualList (0.48)
+export type VirtualList<T> = virtualList.VirtualList<T>
 -- UI/WeaponEnchants
 export type WeaponEnchantIcon = weaponEnchants.WeaponEnchantIcon
 -- UI/WindowSkin

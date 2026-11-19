@@ -355,6 +355,43 @@ local function wrap()
     expect(wrapped).toBe(true)
 end
 
+@test("a single choice too wide for the panel: chips that wrap, one on at a time")
+local function singleWide()
+    local opts: FilterOption[] = {}
+    for i = 1, 6 do
+        opts[i] = { value = "v" .. i, label = "Choice number " .. i }
+    end
+    local onChange = mock.spy()
+    local m = make({ groups = { { key = "k", label = "Show", kind = "one", options = opts } }, defaults = { k = "v1" }, onChange = onChange })
+    m:Open()
+    local p = panel(m)
+    expect(p.rows[1].control).toBeNil()
+    local row = chipsOf(m, 1)
+    expect(#row).toBe(6)
+    -- every chip inside the panel, wrapped onto more than one line
+    local _, _, _, _, y1 = row[1]:GetPoint(1)
+    local lines = false
+    for _, chip in ipairs(row) do
+        local _, _, _, x, y = chip:GetPoint(1)
+        expect(x + chip:GetWidth() <= p:GetWidth() - S["space-5"] * 2).toBe(true)
+        if y < y1 then
+            lines = true
+        end
+    end
+    expect(lines).toBe(true)
+    expect(row[1].bg).toBeShown()
+    expect(row[3].bg).never.toBeShown()
+    mock.click(row[3])
+    expect(m:GetValue().k).toBe("v3")
+    expect(onChange).toHaveBeenCalledWith({ k = "v3" })
+    expect(row[3].bg).toBeShown()
+    expect(row[1].bg).never.toBeShown()
+    -- clicking the chosen one keeps it chosen
+    mock.click(row[3])
+    expect(m:GetValue().k).toBe("v3")
+    expect(assert(p.count)).toHaveText("1 filter on")
+end
+
 @test("toggles: checkboxes, on adds the value and off takes it away")
 local function toggles()
     local m = make()

@@ -3,13 +3,15 @@
 -- SavedBags saves this character's entry as it changes, fills the picker,
 -- shows another character's bags or bank read only (SuuUI's own saved
 -- slots), lists the "All characters" search, writes the foot (everyone's
--- gold, the backpack's currencies), adds the item counts to tooltips and
--- builds the Forget row of the settings. The data work is Bags/Characters';
+-- gold, the backpack's currencies), adds the item counts to tooltips (with
+-- what each character's mail holds: the mail module's, read through
+-- SuuUI.Holdings, nothing while it is off) and builds the Forget row of the
+-- settings; each character's bags and bank as holdings (Core/Holdings). The data work is Bags/Characters';
 -- SavedBags works on the module it is made with (its window, picker state,
 -- saved slots and characters' data).
 
 import SuuUI, ItemSlotClass from "/Core/API"
-import type FoundItem, ResultRow, Select, SelectOption, SuuButton from "/Core/API"
+import type FoundItem, ResultRow, Select, SelectOption, SuuButton, Holding from "/Core/API"
 import type BagsModule from "../Bags"
 import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
@@ -121,13 +123,31 @@ local label = chars.charLabel
 -- Item counts in tooltips
 --------------------------------------------------------------------------------
 
-local WHERE: { key: "bags" | "bank" | "equipped", label: string }[] = {
+local WHERE: { key: "bags" | "bank" | "mail" | "equipped", label: string }[] = {
     { key = "bags", label = "Bags" },
     { key = "bank", label = "Bank" },
+    { key = "mail", label = "Mail" },
     { key = "equipped", label = "Equipped" },
 }
 
--- How many of item `id` each saved character has: { { c, total, bags, bank, equipped } } in picker order.
+-- A character's mail as the mail module keeps it (nil: never read, or that
+-- module is off).
+local function mailOf(key: string): Holding?
+    return SuuUI.Holdings.Of(key, "mail")
+end
+
+-- An item in the mail: its name and quality (the price store's, else the
+-- client's cache: nothing asked for), its icon (nil: no name known).
+local function itemOf(id: number): { name: string, quality: number, icon: number | string }?
+    local name, quality = SuuUI.Prices.Name(id)
+    if not name then
+        return nil
+    end
+    local icon = select(5, try(field(C_Item, "GetItemInfoInstant"), id))
+    return { name = name, quality = quality or 1, icon = asNumber(icon) or asString(icon) or 134400 }
+end
+
+-- How many of item `id` each saved character has: { { c, total, bags, bank, mail, equipped } } in picker order.
 type Counts = chars.Counts
 
 -- Every character's bags and bank for the Bags module `m`.
@@ -148,13 +168,22 @@ export class SavedBags
         d.class, d.level = asString(class), asNumber(UnitLevel("player"))
         d.money, d.seen = GetMoney(), time()
         local bags = containers.snapshot(m:Bags())
+        local key = m:CharKey()
         if bags.size > 0 then
+            local was = d.bags
             d.bags = bags
+            if key and not chars.sameItems(was, bags) then
+                self:Told("bags", key)
+            end
         end
         if m.atBank then
             local bank = containers.snapshot(m:BankBags())
             if bank.size > 0 then
                 d.bank = bank
+                -- (its time too: "as of" follows each visit)
+                if key then
+                    self:Told("bank", key)
+                end
             end
         end
         -- what you wear: item links by slot (head 1 … tabard 19)
@@ -166,6 +195,29 @@ export class SavedBags
             end
         end
         d.equipped = worn
+    end
+
+    -- A character's bags or bank saved anew (or forgotten): told to
+    -- SuuUI.Holdings' readers (the Ledger's "What it's worth").
+    function Told(place: string, key: string)
+        local m = self.m
+        if m:IsEnabled() then
+            SuuUI.Holdings.Changed(m, place, key)
+        end
+    end
+
+    -- A character's bags or bank as a holding (SuuUI.Holdings): nil when
+    -- none was saved. Yours are saved as they change (`live`).
+    function Holding(key: string, place: string): Holding?
+        local m = self.m
+        local d = m:EntryOf(key)
+        if not d then
+            return nil
+        end
+        if place == "bank" then
+            return chars.holdingOf(d.bank, d.seen)
+        end
+        return chars.holdingOf(d.bags, d.seen, key == m:CharKey())
     end
 
     function QueueSave()
@@ -285,7 +337,7 @@ export class SavedBags
         end
         self:SaveMe()
         local found: FoundItem[] = {}
-        for i, r in ipairs(chars.searchResults(self:Characters(), (m.query or ""):lower())) do
+        for i, r in ipairs(chars.searchResults(self:Characters(), (m.query or ""):lower(), mailOf, itemOf)) do
             found[i] = {
                 icon = r.icon,
                 quality = r.quality,
@@ -334,7 +386,7 @@ export class SavedBags
     --------------------------------------------------------------------------------
 
     function CountsFor(id: number): Counts[]
-        return chars.countsFor(self:Characters(), id)
+        return chars.countsFor(self:Characters(), id, mailOf)
     end
 
     function AddCounts(tooltip: GameTooltip, data: unknown)
@@ -355,7 +407,8 @@ export class SavedBags
         for _, n in ipairs(counts) do
             local parts: string[] = {}
             for _, w in ipairs(WHERE) do
-                local count = w.key == "bags" and n.bags or w.key == "bank" and n.bank or n.equipped
+                local count = w.key == "bags" and n.bags or w.key == "bank" and n.bank or w.key == "mail" and n.mail or
+                    n.equipped
                 if count > 0 then
                     parts[#parts + 1] = w.label .. " " .. count
                 end
@@ -392,6 +445,8 @@ export class SavedBags
         end
         return ForgetRow.new(parent, options, function(key: string)
             self.m:ForgetCharData(key)
+            self:Told("bags", key)
+            self:Told("bank", key)
         end)
     end
 end

@@ -1,0 +1,175 @@
+-- Units/Ledger/Matcher.wowlua
+-- What explains a money change (Units/Ledger; /suu probe ledger,
+-- 2026-11-18): every change of a character's money comes 0.1 to 0.6 s
+-- after the call that causes it, several can be on their way at once, and
+-- each amount is known exactly when the call is made. So a call says what
+-- it expects (an Expectation: its kind, the amount, the item, …) and each
+-- change (PLAYER_MONEY's difference) goes to the oldest expectation of
+-- exactly that amount; one that only knows its direction (an auction's
+-- deposit) takes the oldest change that way after the exact ones had
+-- theirs. A change that comes first waits a moment (GRACE) for its
+-- expectation (looted coin's line may come after the money); one nothing
+-- explains is Other, never guessed. An expectation no change answers in
+-- its time is dropped (the call failed). Which window is open decides
+-- nothing.
+-- Pure: the caller gives the clock (GetTime() for the waits, time() for
+-- when it happened) and books what it is told.
+
+-- How long a change waits for what explains it, and an expectation for
+-- its change, in seconds. (A "You loot" or "Your share" line came 0.76
+-- and 0.8 s after its money in the probe: three times that.)
+export const GRACE = 2.5
+export const TTL = 8
+
+-- What a call expects: `amount` (signed copper) exactly, or one of `alts`;
+-- with `sign`, any change that way once no exact expectation took it (the
+-- amount the game told may have changed: a commodity's quote). The rest is what the
+-- transaction says (Books.Tx's fields) and the caller's own (`merge`,
+-- `key`).
+export type Expectation = {
+    kind: string,
+    amount?: number,
+    alts?: number[],
+    sign?: number,
+    item?: number,
+    qty?: number,
+    text?: string,
+    who?: boolean,
+    gross?: number,
+    cut?: number,
+    price?: number,
+    commodity?: boolean,
+    -- the caller's: merged into a row (looted coin per zone), an auction's ID
+    merge?: string,
+    key?: number,
+    -- the matcher's: when it came (GetTime) and how long it waits; the
+    -- caller's: when its row was booked (time())
+    since?: number,
+    ttl?: number,
+    booked?: number,
+}
+
+-- A change waiting: how much, when (GetTime), when (time()).
+export type Change = { amount: number, since: number, at: number }
+
+-- What it books: the expectation (nil: nothing explains it), the change
+-- as it came, when (time()).
+export type BookFn = (e: Expectation?, amount: number, at: number) -> ()
+
+local function fits(e: Expectation, amount: number): boolean
+    if e.amount ~= nil then
+        if e.amount == amount then
+            return true
+        end
+        for _, a in ipairs(e.alts or {}) do
+            if a == amount then
+                return true
+            end
+        end
+        return false
+    end
+    return false
+end
+
+local function loose(e: Expectation, amount: number): boolean
+    return e.sign ~= nil and e.sign * amount > 0
+end
+
+export class Matcher
+    readonly book: BookFn
+    expects: Expectation[] = {}
+    changes: Change[] = {}
+
+    constructor(book: BookFn)
+        self.book = book
+    end
+
+    -- The oldest expectation a change fits (exact first), taken out.
+    function Take(amount: number): Expectation?
+        for pass = 1, 2 do
+            for i, e in ipairs(self.expects) do
+                if (pass == 1 and fits(e, amount)) or (pass == 2 and loose(e, amount)) then
+                    table.remove(self.expects, i)
+                    return e
+                end
+            end
+        end
+        return nil
+    end
+
+    -- A call's expectation: booked at once when a change waiting fits it,
+    -- else kept for its time.
+    function Expect(e: Expectation, now: number)
+        e.since = now
+        for pass = 1, 2 do
+            for i, c in ipairs(self.changes) do
+                if (pass == 1 and fits(e, c.amount)) or (pass == 2 and loose(e, c.amount)) then
+                    table.remove(self.changes, i)
+                    self.book(e, c.amount, c.at)
+                    return
+                end
+            end
+        end
+        self.expects[#self.expects + 1] = e
+    end
+
+    -- A change of money (PLAYER_MONEY's difference): booked with what
+    -- explains it, else waits a moment.
+    function Money(amount: number, now: number, at: number)
+        if amount == 0 then
+            return
+        end
+        local e = self:Take(amount)
+        if e then
+            self.book(e, amount, at)
+            return
+        end
+        self.changes[#self.changes + 1] = { amount = amount, since = now, at = at }
+    end
+
+    -- An expectation dropped (its call failed): whether it was waiting.
+    function Drop(e: Expectation): boolean
+        for i, x in ipairs(self.expects) do
+            if x == e then
+                table.remove(self.expects, i)
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Whether anything waits.
+    function Waiting(): boolean
+        return #self.expects > 0 or #self.changes > 0
+    end
+
+    -- What waited too long: changes booked as Other (oldest first),
+    -- expectations dropped.
+    function Expire(now: number)
+        local keep: Change[] = {}
+        local due: Change[] = {}
+        for _, c in ipairs(self.changes) do
+            if now - c.since >= GRACE then
+                due[#due + 1] = c
+            else
+                keep[#keep + 1] = c
+            end
+        end
+        self.changes = keep
+        local still: Expectation[] = {}
+        for _, e in ipairs(self.expects) do
+            if now - (e.since or now) < (e.ttl or TTL) then
+                still[#still + 1] = e
+            end
+        end
+        self.expects = still
+        for _, c in ipairs(due) do
+            self.book(nil, c.amount, c.at)
+        end
+    end
+
+    -- Everything waiting dropped (the module turned off).
+    function Clear()
+        self.expects, self.changes = {}, {}
+    end
+end

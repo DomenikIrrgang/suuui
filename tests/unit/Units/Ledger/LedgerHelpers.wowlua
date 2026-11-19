@@ -1,0 +1,325 @@
+-- tests/unit/Units/Ledger/LedgerHelpers.wowlua
+-- Shared by the Ledger window's tests (Window, Parts, the pages): test
+-- items, 40 days of looks at every time of day, a Scan all, characters
+-- with gold day by day, the window opened, and a clean slate after.
+--
+--   see(itemID, low, most, qty, n, at?, name?, quality?)
+--                    a look as the auction house tells one: kept in the
+--                    price store, then seen by the Ledger's watches
+--   scanAll(looks, items, names?, qualities?)
+--                    a Scan all's looks kept in the price store (its first
+--                    slice now; the Ledger reads them once all are)
+--   scanRead(looks, items, names?, qualities?)
+--                    the same, run until the Ledger has read it all
+--   seed()           the looks, the scan and the characters
+--   seedBooks()      transactions of this week (yours and Kaelith's)
+--   openLedger(view?, opts?)   the window opened (through the service)
+--   holdings()       your bags and a letter, Kaelith's bags and bank, Lum's
+--                    bags (Roleplay, a price there); cleanHoldings() after
+--   saved(key, place, items, seen) / forget(key)
+--                    another character's bags or bank as saved / gone
+--   wipe()           the Ledger's data, the price store (the names too) and
+--                    the window's state cleared
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type LedgerWindow from "/Units/Ledger/Window"
+import type LedgerOpenOptions from "/Core/API"
+import * as gold from "/Units/Ledger/Gold"
+import * as days from "/Units/Ledger/Days"
+import * as books from "/Units/Ledger/Books"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
+import * as prices from "/Core/Prices"
+import * as store from "/Core/Prices/Store"
+import * as DB from "/Core/DB"
+import internal M as Mail from "/Units/Mail"
+import internal M as Bags from "/Units/Bags"
+
+export const LOTUS = 990601
+export const KINGSBLOOD = 990602
+export const AXE = 990603
+export const ESSENCE = 990604
+export const ORE = 990605
+export const LATE = 990606
+
+mock.defineItem(LOTUS, { name = "Test Lotus", icon = 134400, quality = 2, sellPrice = 100, classID = 7, stackCount = 20 })
+mock.defineItem(KINGSBLOOD, { name = "Test Kingsblood", icon = 134400, quality = 1, sellPrice = 50, classID = 7, stackCount = 20 })
+mock.defineItem(AXE, { name = "Test Axe", icon = 134400, quality = 2, sellPrice = 15000, classID = 2 })
+mock.defineItem(ESSENCE, { name = "Test Essence", icon = 134400, quality = 3, sellPrice = 0, classID = 7, stackCount = 10 })
+mock.defineItem(ORE, { name = "Test Ore", icon = 134400, quality = 1, sellPrice = 25, classID = 7, stackCount = 20 })
+mock.defineItem(LATE, { name = "Test Late Herb", quality = 1, sellPrice = 10, classID = 7 }, { cached = false, delay = 0.3 })
+
+const DAY = 86400
+
+export function see(
+    itemID: number,
+    low: number,
+    most: number,
+    qty: number,
+    n: number,
+    at: number?,
+    name: string?,
+    quality: number?
+): boolean
+    local changed = priceStore.look(itemID, low, most, qty, n, at, name, quality)
+    M:SeeLook(itemID, low, at)
+    return changed
+end
+
+export function scanAll(looks: number[], items: number, names: { [number]: string }?, qualities: { [number]: number }?)
+    prices.recordScan(looks, items, names, qualities)
+end
+
+export function scanRead(looks: number[], items: number, names: { [number]: string }?, qualities: { [number]: number }?)
+    prices.recordScan(looks, items, names, qualities)
+    local guard = 0
+    while (prices.scanning() or M.scanTicker ~= nil) and guard < 1000 do
+        mock.advanceTime(0.01)
+        guard += 1
+    end
+    -- (and what it told, the frame after)
+    mock.advanceTime(0.01)
+end
+
+-- The start of the day `k` days ago, at `hour`.
+local function at(k: number, hour: number): number
+    local t = date("*t", time() - k * DAY) :: { year: number, month: number, day: number }
+    return time({ year = t.year, month = t.month, day = t.day, hour = hour, min = 5 })
+end
+
+-- An item's looks: each of the last `n` days, four times a day, around
+-- `price` (Tuesdays and nights cheaper), what most sell it for a little
+-- dearer.
+local function looks(itemID: number, price: number, n: number)
+    for k = n, 1, -1 do
+        local d = days.dayOf(at(k, 12))
+        local wd = days.weekday(d)
+        for _, hour in ipairs({ 2, 8, 12, 20 }) do
+            local p = price * (1 + ((k * 7) % 5 - 2) / 100)
+            if wd == 2 then
+                p = p * 0.88
+            end
+            if hour == 2 then
+                p = p * 0.93
+            end
+            priceStore.look(itemID, math.floor(p), math.floor(p * 1.15), 40, 6, at(k, hour))
+        end
+    end
+end
+
+-- The characters: you (today's money as the game has it), two more on
+-- this ruleset, one on another.
+local function characters()
+    local map = M:GoldMap()
+    local today = days.dayOf()
+    local here = SuuUI.Ruleset()
+    for k = 20, 1, -1 do
+        gold.record(map, "Kaelith - " .. here, "Kaelith", "MAGE", here, today - k, 640000 - k * 1000, time() - k * DAY)
+        gold.record(map, "Brannoc - " .. here, "Brannoc", "WARRIOR", here, today - k, 180000 + k * 500, time() - k * DAY)
+        gold.record(map, "Lum - Roleplay", "Lum", "PRIEST", "Roleplay", today - k, 41000, time() - k * DAY)
+    end
+    M:RecordMoney(true)
+end
+
+-- Looks of 40 days on four items, today's deals, a Scan all, the
+-- characters.
+export function seed()
+    looks(LOTUS, 400000, 40)
+    looks(KINGSBLOOD, 1500, 40)
+    looks(AXE, 16000, 12)
+    looks(ESSENCE, 84000, 30)
+    looks(LATE, 900, 5)
+    looks(ORE, 2000, 3)
+    -- the scan: the lotus 29 % under, the axe under vendor price, the rest
+    -- as usual
+    priceStore.scan({
+        LOTUS,
+        284000,
+        320000,
+        3,
+        2,
+        KINGSBLOOD,
+        1480,
+        1700,
+        412,
+        37,
+        AXE,
+        11914,
+        0,
+        4,
+        4,
+        ESSENCE,
+        58000,
+        70000,
+        5,
+        3,
+        LATE,
+        880,
+        0,
+        12,
+        2,
+    }, 5)
+    characters()
+    mock.advanceTime(0.05)
+end
+
+-- Transactions: yours today (a sale of Kingsblood, a post, vendor, looted
+-- coin, repairs, money from Brannoc) and two days ago (training), and
+-- Kaelith's yesterday (a quest, a flight). Run after seed().
+export function seedBooks()
+    local now = time()
+    M:BookTx({ at = now - 7200, kind = "posted", amount = -2400, item = KINGSBLOOD, qty = 200, price = 1520, commodity = true })
+    M:BookTx({ at = now - 3600, kind = "sold", amount = 29640, item = KINGSBLOOD, qty = 20, gross = 31200, cut = 1560 })
+    M:BookTx({ at = now - 3000, kind = "vendor", amount = 8500, item = ORE, qty = 34 })
+    M:BookTx({ at = now - 2400, kind = "loot", amount = 81900, text = "Eastern Plaguelands", n = 118 })
+    M:BookTx({ at = now - 1800, kind = "repair", amount = -14210, text = "Gearcutter Cogspinner" })
+    M:BookTx({ at = now - 600, kind = "mail", amount = 500000, text = "Brannoc", who = true })
+    M:BookTx({ at = now - 2 * DAY, kind = "train", amount = -200000, text = "Expert Riding" })
+    local key = "Kaelith - " .. SuuUI.Ruleset()
+    local map = M:BookMap()
+    local b = map[key] or {}
+    map[key] = b
+    books.add(b, { at = now - DAY, kind = "quest", amount = 100000, text = "A Test Quest" })
+    books.add(b, { at = now - DAY - 60, kind = "travel", amount = -3900, text = "Ironforge to Light\226\128\153s Hope" })
+    M:Store():ForgetChar(key)
+    mock.advanceTime(0.05)
+end
+
+-- Another character's saved bags or bank (the Bags module's, as saved on
+-- that character): item ID -> count, the soulbound ones.
+export function saved(key: string, place: string, items: { { number } }, seen: number)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    local entry = all[key] or {}
+    all[key] = entry
+    local bags = (entry.bags or { name = key:match("^(.-) %- ") }) :: { [string]: unknown }
+    entry.bags = bags
+    local slots: unknown[] = {}
+    for i, it in ipairs(items) do
+        slots[i] = { t = 134400, c = it[2], q = 1, l = "|Hitem:" .. it[1] .. "::|h[x]|h", b = it[3] == 1 or nil }
+    end
+    bags[place] = { slots = slots, size = #slots, free = 0, seen = seen }
+    Bags.savedBags:Told(place, key)
+end
+
+export function forget(key: string)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    local entry = all[key]
+    if entry then
+        entry.bags = nil
+    end
+    Bags.savedBags:Told("bags", key)
+    Bags.savedBags:Told("bank", key)
+end
+
+export function usual(itemID: number, ruleset: string?): number
+    return assert(SuuUI.Prices.Usual(itemID, ruleset))
+end
+
+export const NOBODY = 990699 -- never seen on any house
+
+-- You: 2 lotus and 20 kingsblood in your bags (one ore soulbound), a
+-- letter with an essence and 5,000 copper; Kaelith (this ruleset): 10
+-- kingsblood and 3 of an item never seen in her bags, a lotus in her bank
+-- three days ago; Lum (Roleplay): a lotus at Roleplay's price; Brannoc:
+-- nothing counted yet.
+export function holdings(): (string, string)
+    local kaelith, lum = "Kaelith - " .. SuuUI.Ruleset(), "Lum - Roleplay"
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = LOTUS, count = 2 },
+            [2] = { id = KINGSBLOOD, count = 20 },
+            [3] = { id = ORE, count = 1, bound = true },
+        },
+    })
+    mock.advanceTime(1.5)
+    local box = mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    mock.defineMailbox(box, {
+        letters = { { sender = "Tamsin", subject = "For you", money = 5000, items = { { id = ESSENCE, count = 1 } }, daysLeft = 20 } },
+    })
+    mock.player:interact(box)
+    mock.advanceTime(2)
+    CloseMail()
+    saved(kaelith, "bags", { { KINGSBLOOD, 10 }, { NOBODY, 3 } }, time() - DAY)
+    saved(kaelith, "bank", { { LOTUS, 1 } }, time() - 3 * DAY)
+    saved(lum, "bags", { { LOTUS, 1 } }, time() - 2 * DAY)
+    local day, period = SuuUI.Calendar.DayOf()
+    store.record(assert(prices.map("Roleplay", true)), LOTUS, day, period, 500000, 0, 0, 0)
+    mock.advanceTime(0.1)
+    return kaelith, lum
+end
+
+export function cleanHoldings(kaelith: string, lum: string)
+    forget(kaelith)
+    forget(lum)
+    mock.setBag(0, { slots = 16, items = {} })
+    Mail:MailData().inbox = nil
+    mock.advanceTime(1.5)
+end
+
+export function window(): LedgerWindow
+    return M:Window()
+end
+
+-- Opened as another module would: through the service.
+export function openLedger(view: string?, opts: LedgerOpenOptions?): LedgerWindow
+    local service = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    assert(service.Open)(view, opts)
+    mock.advanceFrames(2)
+    return M:Window()
+end
+
+export function wipe()
+    local w = M.window
+    if w then
+        w.frame:Hide()
+        w.scope, w.ruleset, w.view = "all", nil, "overview"
+        local p = w.prices
+        p.filter:SetValue(nil)
+        p:SetFilters(p.filter:GetValue())
+        p.sortKey, p.sortReverse = "change", false
+        p.search.edit:ClearFocus()
+        p.search:SetValue("")
+        p:SetQuery("")
+        p:Forget()
+        w.item.days = 30
+        w.gold.days = 30
+        local t = w.transactions
+        t.filter:SetValue(nil)
+        t.filters = t.filter:GetValue()
+        t.search.edit:ClearFocus()
+        t.search:SetValue("")
+        t:SetQuery("")
+        t.range:SetValue("week")
+        t.rangeKey = "week"
+        local it = w.items
+        it.filter:SetValue(nil)
+        it:SetFilters(it.filter:GetValue())
+        it.sortKey, it.sortReverse = "value", false
+        it.search.edit:ClearFocus()
+        it.search:SetValue("")
+        it:SetQuery("")
+        it:SetPlace("all")
+        it:Forget()
+        w.item.from = "prices"
+    end
+    local d = M:Data()
+    d.scans, d.watches, d.gold, d.goal = nil, nil, nil, nil
+    d.books, d.mail, d.booksPruned = nil, nil, nil
+    priceStore.wipe()
+    local names = M.itemNames
+    if names then
+        names:Stop()
+        names.tries, names.gaveUp = {}, {}
+    end
+    M:DropIndexes()
+    local worth = M.worth
+    if worth then
+        worth:Stop()
+    end
+    M.vendor = {}
+    M:Store():Reset()
+    M.atHouse = false
+    mock.advanceTime(0.05)
+end

@@ -1,0 +1,1111 @@
+-- Units/Ledger/PricesPage.wowlua
+-- Prices (design board "Ledger"): every item the chosen ruleset's auction
+-- house has shown SuuUI. A toolbar (26px): the search (it matches as you
+-- type), Filters (Show: All seen · Deals · Under vendor price · Watched ·
+-- You sold · In your bags; Seen; Category; Quality), the ruleset, the count
+-- at the right ("6,412 items", "14 deals in the last scan"). Then a table:
+-- Item (the quality's colour, a star when watched, one mark: Under vendor
+-- before Deal) · Lowest now · Usual · 30 days (a sparkline) · Change ·
+-- Cheapest · Offered · Seen; sortable, Change first (the furthest under
+-- first; Deals: the furthest under their usual or vendor price first). It
+-- is a VirtualList: only the rows in sight are drawn. A row opens the
+-- item's page.
+-- Names come from the price store's (Ledger/Names: kept from the auction
+-- house and the client), else the client's item cache. The items of the
+-- ruleset without one are asked for in the background (a few at a time,
+-- never thousands at once), a row's as it comes into sight before the
+-- rest; each is filled in as it arrives, and a search notes how many it
+-- is still looking up.
+
+import SuuUI from "/Core/API"
+import type DealMark, Text, TextField, FilterMenu, FilterValues, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline, LoadingMark from "/Core/API"
+import type ItemSummary from "./PriceIndex"
+import type Watch from "../Ledger"
+import * as days from "./Days"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+export const ROW_H = 32
+export const TOOL_H = 26
+-- rows built at once on a draw (a search's look, a few items), and a
+-- slice a frame beyond that: at most this many items and ms
+export const NOW_ITEMS = 300
+export const BUILD_ITEMS = 600
+export const BUILD_MS = 4
+local HEAD_H = 20
+
+-- A row: the item and what the table shows of it.
+export type PriceEntry = {
+    itemID: number,
+    name?: string,
+    -- the name in lower case (the search, the order by name)
+    lname?: string,
+    quality?: number,
+    icon?: number,
+    classID?: number,
+    low: number,
+    usual?: number,
+    change?: number,
+    qty: number,
+    day: number,
+    period: number,
+    watched: boolean,
+    -- how far under its usual price (a deal), under vendor price
+    under?: number,
+    underVendor: boolean,
+    -- the deals' order: the furthest under first
+    order: number,
+}
+
+-- What a row shows that's dear to work out: drawn when it comes into sight,
+-- kept until the prices change.
+type Extra = { spark: number[], cheapest: string }
+
+export type Col = { key: string, label: string, w?: number, right?: boolean, sort?: boolean }
+export const COLS: Col[] = {
+    { key = "name", label = "Item", sort = true },
+    { key = "low", label = "Lowest now", w = 100, right = true, sort = true },
+    { key = "usual", label = "Usual", w = 92, right = true, sort = true },
+    { key = "spark", label = "30 days", w = 68 },
+    { key = "change", label = "Change", w = 56, right = true, sort = true },
+    { key = "cheap", label = "Cheapest", w = 92 },
+    { key = "offered", label = "Offered", w = 56, right = true, sort = true },
+    { key = "seen", label = "Seen", w = 76, right = true, sort = true },
+}
+type Place = { x: number, w: number }
+
+export const SHOWS: { [string]: boolean } = {
+    all = true,
+    deals = true,
+    vendor = true,
+    watched = true,
+    sold = true,
+    bags = true,
+}
+
+-- The table's column places in a row of width w.
+local function placesFor(w: number): Place[]
+    local fixed = 0
+    for _, c in ipairs(COLS) do
+        fixed += (c.w or 0) + S["space-4"]
+    end
+    local x = S["space-3"]
+    local out: Place[] = {}
+    for i, c in ipairs(COLS) do
+        local cw = c.w or math.max(80, w - fixed - S["space-3"] * 2)
+        out[i] = { x = x, w = cw }
+        x += cw + S["space-4"]
+    end
+    return out
+end
+
+local has = parts.holds
+
+-- An entry's value in a sortable column (nil: none; Seen and Deals the
+-- newest and the furthest under first).
+local function sortValue(e: PriceEntry, key: string): number?
+    if key == "low" then
+        return e.low
+    elseif key == "usual" then
+        return e.usual
+    elseif key == "change" then
+        return e.change
+    elseif key == "offered" then
+        return e.qty
+    elseif key == "seen" then
+        return -(e.day * 4 + e.period)
+    elseif key == "deal" then
+        return -e.order
+    end
+    return nil
+end
+
+export class PriceRow extends Button
+    readonly page: PricesPage
+    entry?: PriceEntry
+    laid?: Place[]
+    readonly hover: Texture
+    readonly rule: Texture
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly star: Texture
+    readonly mark: DealMark
+    readonly low: Money
+    readonly none: Text
+    readonly usual: Money
+    readonly noUsual: Text
+    readonly spark: Sparkline
+    readonly change: Text
+    readonly cheapest: Text
+    readonly offered: Text
+    readonly seen: Text
+
+    constructor(page: PricesPage, parent: Frame)
+        super(nil, parent)
+        self.page = page
+        self:SetHeight(ROW_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.star = self:CreateTexture(nil, "ARTWORK")
+        self.star:SetSize(12, 12)
+        UI.Glyph(self.star, "star")
+        UI.Paint(self.star, "ink-muted")
+        self.mark = parts.dealMark(self)
+        self.low = UI.Money(self)
+        self.none = UI.Text(self, "caption", "ink-muted")
+        self.none:SetValue("none now")
+        self.usual = UI.Money(self)
+        self.noUsual = UI.Text(self, "caption", "ink-muted")
+        self.noUsual:SetValue("\226\128\148")
+        self.spark = UI.Sparkline(self, 64, 18)
+        self.change = UI.Text(self, "numeric", "ink-muted")
+        self.change:SetJustifyH("RIGHT")
+        self.cheapest = UI.Text(self, "caption", "ink")
+        self.offered = UI.Text(self, "numeric", "ink")
+        self.offered:SetJustifyH("RIGHT")
+        self.seen = UI.Text(self, "caption", "ink-muted")
+        self.seen:SetJustifyH("RIGHT")
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local e = self.entry
+            if e then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetItemByID(e.itemID)
+                GameTooltip:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local e = self.entry
+            if e and not parts.modifiedClick(e.itemID) then
+                self.page:OpenItem(e.itemID)
+            end
+        end)
+    end
+
+    -- The cells placed by the columns (again only when they moved).
+    function Lay(places: Place[])
+        if self.laid == places then
+            return
+        end
+        self.laid = places
+        local p = places[1]
+        self.slot:ClearAllPoints()
+        self.slot:SetPoint("LEFT", self, "LEFT", p.x, 0)
+        self.name:ClearAllPoints()
+        self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-3"], 0)
+        local function right(r: Region, i: number)
+            r:ClearAllPoints()
+            r:SetPoint("RIGHT", self, "LEFT", places[i].x + places[i].w, 0)
+        end
+        local function left(r: Region, i: number)
+            r:ClearAllPoints()
+            r:SetPoint("LEFT", self, "LEFT", places[i].x, 0)
+        end
+        right(self.low, 2)
+        right(self.none, 2)
+        right(self.usual, 3)
+        right(self.noUsual, 3)
+        left(self.spark, 4)
+        right(self.change, 5)
+        left(self.cheapest, 6)
+        self.cheapest:SetWidth(places[6].w)
+        self.cheapest:SetJustifyH("LEFT")
+        right(self.offered, 7)
+        right(self.seen, 8)
+        self.seen:SetWidth(places[8].w)
+    end
+
+    -- Draws an entry (the VirtualList's bind: nothing made here).
+    function Bind(e: PriceEntry)
+        self.entry = e
+        local page = self.page
+        self:Lay(page.places)
+        if not e.name then
+            page:Ask(e.itemID)
+        end
+        self.slot.skin:SetItem({ icon = e.icon, quality = parts.QUALITY[e.quality or 1] or "common" })
+        self.name:SetValue(e.name or ("Item " .. e.itemID))
+        self.name:SetColor(e.name and parts.qualityToken(e.quality) or "ink-muted")
+        -- the name, the star and the mark share the item's column
+        local word = e.underVendor and "Under vendor" or (e.under and "Deal") or nil
+        parts.setMark(self.mark, word)
+        local room = page.places[1].w - 24 - S["space-3"]
+        local markW = word and (self.mark:GetWidth() + S["space-3"]) or 0
+        local starW = e.watched and (12 + S["space-2"]) or 0
+        local nameW = math.min(math.ceil(self.name:GetUnboundedStringWidth()) + 1, math.max(20, room - markW - starW))
+        self.name:SetWidth(nameW)
+        self.star:SetShown(e.watched)
+        self.star:ClearAllPoints()
+        self.star:SetPoint("LEFT", self.name, "RIGHT", S["space-2"], 0)
+        self.mark:ClearAllPoints()
+        self.mark:SetPoint("LEFT", e.watched and self.star or self.name, "RIGHT", S["space-3"], 0)
+        -- the prices
+        self.low:SetShown(e.low > 0)
+        self.none:SetShown(e.low <= 0)
+        self.low:SetCopper(e.low)
+        local usual = e.usual
+        self.usual:SetShown(usual ~= nil)
+        self.noUsual:SetShown(usual == nil)
+        if usual then
+            self.usual:SetCopper(usual)
+        end
+        local extra = page:Extra(e.itemID)
+        self.spark:SetValues(extra.spark)
+        local change = e.change
+        self.change:SetValue(change and UI.SignedPercent(change) or "")
+        self.cheapest:SetValue(extra.cheapest)
+        local quiet = extra.cheapest == "any time" or extra.cheapest == "\226\128\148"
+        self.cheapest:SetColor(quiet and "ink-muted" or "ink")
+        self.offered:SetValue(parts.count(e.qty))
+        self.seen:SetValue(parts.ago(e.day, page.today))
+    end
+end
+
+-- The header: a caption per column; a click on a sortable one sorts by it
+-- (Items' too).
+export class HeadCell extends Button
+    readonly label: Text
+    readonly arrow: Texture
+
+    constructor(parent: Frame, col: Col)
+        super(nil, parent)
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetValue(col.label)
+        self.arrow = self:CreateTexture(nil, "ARTWORK")
+        self.arrow:SetSize(8, 8)
+        UI.Paint(self.arrow, "ink")
+        self.arrow:Hide()
+        if col.right then
+            self.label:SetPoint("RIGHT")
+            self.arrow:SetPoint("RIGHT", self.label, "LEFT", -S["space-2"], 0)
+        else
+            self.label:SetPoint("LEFT")
+            self.arrow:SetPoint("LEFT", self.label, "RIGHT", S["space-2"], 0)
+        end
+    end
+end
+
+export class PricesPage extends Frame
+    readonly w: LedgerWindow
+    readonly search: TextField
+    readonly filter: FilterMenu
+    readonly rulesets: Select<string>
+    readonly countText: Text
+    readonly head: Frame
+    readonly heads: HeadCell[] = {}
+    readonly list: VirtualList<PriceEntry>
+    readonly empty: Text
+    readonly loadingView: Frame
+    readonly loadingMark: LoadingMark
+    readonly loadingCaption: Text
+    -- what it shows: Show, Seen, Category, Quality; the search; the order
+    show: string = "all"
+    filters: FilterValues = {}
+    query: string = ""
+    sortKey: string = "change"
+    sortReverse: boolean = false
+    -- every item of the ruleset in item order (nil: built again on the
+    -- next draw), and what they are of: the ruleset, the index's pass
+    -- (PriceIndex.gen) and how much of its log they took in
+    entries?: PriceEntry[]
+    byID: { [number]: PriceEntry } = {}
+    builtFor?: string
+    builtGen: number = -1
+    logSeen: number = 0
+    -- rows being built a slice a frame (the items, the next), and its
+    -- ticker; whether it added or removed one; the names it lacked
+    job?: { ids: number[], i: number, fresh: boolean } = nil
+    ticker: TickerHandle? = nil
+    added: boolean = false
+    removed: boolean = false
+    missing: number[] = {}
+    watchesDirty: boolean = false
+    -- the entries in each order ("change+", "name-" …), until they change
+    orders: { [string]: PriceEntry[] } = {}
+    extras: { [number]: Extra } = {}
+    places: Place[] = {}
+    today: number = 0
+    -- names arrived: the list drawn again shortly
+    namesPending: boolean = false
+    -- the search's matches still possible: names being looked up
+    lookingUp: number = 0
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        local bar = CreateFrame("Frame", nil, self)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(TOOL_H)
+        self.search = UI.TextField(bar, {
+            width = 260,
+            placeholder = "Search items",
+            onTextChanged = function(text: string)
+                self:SetQuery(text)
+            end,
+            onChange = function(text: string)
+                self:SetQuery(text)
+            end,
+        })
+        self.search:SetHeight(TOOL_H)
+        self.search:SetPoint("LEFT")
+        self.filter = UI.FilterMenu(bar, {
+            groups = {
+                {
+                    key = "show",
+                    label = "Show",
+                    kind = "one",
+                    options = {
+                        { value = "all", label = "All seen" },
+                        { value = "deals", label = "Deals" },
+                        { value = "vendor", label = "Under vendor price" },
+                        { value = "watched", label = "Watched" },
+                        { value = "sold", label = "You sold" },
+                        { value = "bags", label = "In your bags" },
+                    },
+                },
+                {
+                    key = "seen",
+                    label = "Seen",
+                    kind = "one",
+                    options = {
+                        { value = "any", label = "Any time" },
+                        { value = "scan", label = "Last scan" },
+                        { value = "week", label = "This week" },
+                    },
+                },
+                parts.categoryGroup(),
+                parts.qualityGroup(),
+            },
+            defaults = { show = "all", seen = "any", cat = {}, q = {} },
+            placeholder = "Filters",
+            width = 110,
+            height = TOOL_H,
+            onChange = function(v: FilterValues)
+                self:SetFilters(v)
+            end,
+        })
+        self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-3"], 0)
+        self.rulesets = UI.Select(bar, {
+            width = 170,
+            options = {},
+            onChange = function(v: string)
+                self.w.ruleset = v
+                self:Forget()
+                self.w:Refresh()
+            end,
+        })
+        self.rulesets:SetHeight(TOOL_H)
+        self.rulesets:SetPoint("LEFT", self.filter, "RIGHT", S["space-3"], 0)
+        self.countText = UI.Text(bar, "caption", "ink-muted")
+        self.countText:SetPoint("RIGHT")
+        -- the header and the rows
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT", 0, -(TOOL_H + S["space-4"]))
+        self.head:SetPoint("TOPRIGHT", -(S["space-3"] + 3), -(TOOL_H + S["space-4"]))
+        self.head:SetHeight(HEAD_H)
+        local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT")
+        rule:SetPoint("TOPRIGHT", self.head, "BOTTOMRIGHT")
+        for i, c in ipairs(COLS) do
+            local h = HeadCell.new(self.head, c)
+            h:SetHeight(HEAD_H)
+            if c.sort then
+                h:SetScript("OnClick", function()
+                    self:SortBy(c.key)
+                end)
+                h:SetScript("OnEnter", function(obj: HeadCell)
+                    obj.label:SetColor("ink")
+                end)
+                h:SetScript("OnLeave", function()
+                    self:DrawHead()
+                end)
+            else
+                h:EnableMouse(false)
+            end
+            self.heads[i] = h
+        end
+        self.list = UI.VirtualList(self, {
+            rowHeight = ROW_H,
+            bar = S["space-3"],
+            make = function(): Frame
+                return PriceRow.new(self, self.list.child)
+            end,
+            bind = function(row: Frame, e: PriceEntry)
+                (row :: PriceRow):Bind(e)
+            end,
+            key = function(e: PriceEntry): unknown
+                return e.itemID
+            end,
+        })
+        self.list:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -1)
+        self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+        self.list.scroll:HookScript("OnSizeChanged", function()
+            self:Layout()
+        end)
+        self.empty = UI.Text(self, "body", "ink-muted")
+        self.empty:SetPoint("TOP", self.list, "TOP", 0, -60)
+        self.empty:Hide()
+        -- while the rows are built: the mark, "Reading prices", how far
+        local lv = CreateFrame("Frame", nil, self)
+        lv:SetAllPoints(self.list)
+        lv:Hide()
+        self.loadingView = lv
+        self.loadingMark = UI.LoadingMark(lv, { size = 60 })
+        self.loadingMark:SetPoint("CENTER", 0, 40)
+        local title = UI.Text(lv, "header", "gilt-text")
+        title:SetValue("Reading prices")
+        title:SetPoint("TOP", self.loadingMark, "BOTTOM", 0, -S["space-4"])
+        self.loadingCaption = UI.Text(lv, "caption", "ink-muted")
+        self.loadingCaption:SetPoint("TOP", title, "BOTTOM", 0, -S["space-2"])
+    end
+
+    ----------------------------------------------------------------------------
+    -- What it shows
+    ----------------------------------------------------------------------------
+
+    -- Prices at a Show ("deals", "vendor", "watched", "sold", "bags", "all").
+    function SetShow(show: string)
+        if not SHOWS[show] then
+            show = "all"
+        end
+        local v = self.filter:GetValue() :: FilterValues
+        local copy: FilterValues = {}
+        for k, x in pairs(v) do
+            copy[k] = x
+        end
+        copy.show = show
+        self.filter:SetValue(copy)
+        self:SetFilters(copy)
+    end
+
+    function SetFilters(v: FilterValues)
+        local show = type(v.show) == "string" and v.show :: string or "all"
+        if show ~= self.show then
+            -- deals: the furthest under first
+            self.sortKey = (show == "deals" or show == "vendor") and "deal" or "change"
+            self.sortReverse = false
+        end
+        self.show, self.filters = show, v
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    function SetQuery(text: string)
+        local q = (text:match("^%s*(.-)%s*$") or ""):lower()
+        if q == self.query then
+            return
+        end
+        self.query = q
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    function SortBy(key: string)
+        if self.sortKey == key then
+            self.sortReverse = not self.sortReverse
+        else
+            self.sortKey, self.sortReverse = key, false
+        end
+        self:DrawList()
+    end
+
+    function OpenItem(itemID: number)
+        self.w.item:SetItem(itemID)
+        self.w:Go("item")
+    end
+
+    -- Every row built again on the next draw (another ruleset).
+    function Forget()
+        self.entries = nil
+        self.builtGen = -1
+        self.extras = {}
+        self.orders = {}
+        self.job = nil
+    end
+
+    -- The watches changed: the stars set again on the next draw.
+    function WatchesChanged()
+        self.watchesDirty = true
+    end
+
+    ----------------------------------------------------------------------------
+    -- The entries
+    ----------------------------------------------------------------------------
+
+    -- An item's row made or brought up to date from its summary (nil: it
+    -- has none any more). -> the entry.
+    function Fill(itemID: number, sm: ItemSummary?, watches: { [number]: Watch }): PriceEntry?
+        local e = self.byID[itemID]
+        if not sm then
+            if e then
+                self.byID[itemID] = nil
+                self.removed = true
+            end
+            return nil
+        end
+        if not e then
+            local m = self.w.m
+            local name, quality = m:ItemName(itemID)
+            if not name then
+                self.missing[#self.missing + 1] = itemID
+            end
+            local icon, classID = parts.instantInfo(itemID)
+            e = {
+                itemID = itemID,
+                name = name,
+                lname = name and name:lower() or nil,
+                quality = quality,
+                icon = icon,
+                classID = classID,
+                low = 0,
+                qty = 0,
+                day = 0,
+                period = 0,
+                watched = false,
+                underVendor = false,
+                order = 0,
+            }
+            self.byID[itemID] = e
+            self.added = true
+        end
+        local look = sm.look
+        e.low, e.qty, e.day, e.period = look.low, look.qty, look.day, look.period
+        e.usual, e.change = sm.usual, sm.change
+        e.under, e.underVendor, e.order = sm.under, sm.underVendor, sm.order
+        e.watched = watches[itemID] ~= nil
+        return e
+    end
+
+    -- Whether the rows are there for the ruleset's prices as they are now:
+    -- built a slice a frame the first time (after a scan, a new day, other
+    -- deal settings: what the index works out first, the same way), only
+    -- the items changed since after that. While they aren't, the loading
+    -- mark shows; the page draws again when they are.
+    function Sync(): boolean
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local idx = m:Index(ruleset)
+        if not idx:Prepare(NOW_ITEMS) then
+            -- (the window draws again when the index is done)
+            local done, total = idx:Progress()
+            self:Loading(true, done, total)
+            return false
+        end
+        if self.builtFor ~= ruleset or self.builtGen ~= idx.gen or not self.entries then
+            -- every item: in item order
+            local ids: number[] = {}
+            for itemID in pairs(idx.items) do
+                ids[#ids + 1] = itemID
+            end
+            table.sort(ids)
+            self.entries, self.byID = {}, {}
+            self.builtFor, self.builtGen = ruleset, idx.gen
+            self.logSeen = #idx.log
+            self.extras, self.orders = {}, {}
+            self.watchesDirty = false
+            self.job = { ids = ids, i = 1, fresh = true }
+        elseif self.logSeen < #idx.log then
+            local ids: number[] = {}
+            local seen: { [number]: boolean } = {}
+            for k = self.logSeen + 1, #idx.log do
+                local id = idx.log[k]
+                if not seen[id] then
+                    seen[id] = true
+                    ids[#ids + 1] = id
+                end
+            end
+            self.logSeen = #idx.log
+            local job = self.job
+            if job then
+                for _, id in ipairs(ids) do
+                    job.ids[#job.ids + 1] = id
+                end
+            else
+                self.job = { ids = ids, i = 1, fresh = false }
+            end
+        end
+        if self.watchesDirty then
+            self.watchesDirty = false
+            local watches = m:Watches(ruleset)
+            for _, e in ipairs(self.entries or {}) do
+                e.watched = watches[e.itemID] ~= nil
+            end
+        end
+        local job = self.job
+        if not job then
+            return true
+        end
+        -- (a few at once; more a slice a frame)
+        if #job.ids - job.i + 1 <= NOW_ITEMS then
+            return self:RunJob(NOW_ITEMS)
+        end
+        self:Loading(true, job.i - 1, #job.ids)
+        if not self.ticker then
+            local built = false
+            self.ticker = m:Every(0, function(ticker: TickerHandle)
+                -- (the list drawn the frame after the last slice: the rows
+                -- in sight are made and bound then)
+                if built or not self.job then
+                    ticker:Cancel()
+                    self.ticker = nil
+                    if self:IsVisible() then
+                        self:DrawList()
+                    end
+                    return
+                end
+                if self:RunJob(BUILD_ITEMS, BUILD_MS) then
+                    built = true
+                    -- (the chosen order with the last slice)
+                    self:Ordered()
+                    return
+                end
+                local j = self.job
+                if j and self:IsVisible() then
+                    self:Loading(true, j.i - 1, #j.ids)
+                end
+            end)
+        end
+        return false
+    end
+
+    -- Up to `n` rows of the job built (`ms`: a budget too). -> whether it's
+    -- done (the rows then in item order, the orders made again).
+    function RunJob(n: number, ms: number?): boolean
+        local job = self.job
+        if not job then
+            return true
+        end
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local idx = m:Index(ruleset)
+        local watches = m:Watches(ruleset)
+        local ids = job.ids
+        local stop = math.min(#ids, job.i + n - 1)
+        local deadline = ms and (debugprofilestop() + ms) or nil
+        local i = job.i
+        while i <= stop do
+            local id = ids[i]
+            self:Fill(id, idx.items[id], watches)
+            i += 1
+            if deadline and debugprofilestop() > deadline then
+                break
+            end
+        end
+        job.i = i
+        if i <= #ids then
+            return false
+        end
+        self.job = nil
+        local entries = self.entries or {}
+        if job.fresh or self.added or self.removed then
+            -- (in item order: the orders' ties, and the same order for the
+            -- same prices)
+            local all: number[] = {}
+            for id in pairs(self.byID) do
+                all[#all + 1] = id
+            end
+            table.sort(all)
+            entries = {}
+            for k, id in ipairs(all) do
+                entries[k] = self.byID[id]
+            end
+            self.entries = entries
+        end
+        self.added, self.removed = false, false
+        self.orders = {}
+        if not job.fresh then
+            -- (the rows of the items that changed work out their sparkline
+            -- and Cheapest again)
+            for _, id in ipairs(ids) do
+                self.extras[id] = nil
+            end
+        end
+        -- (in the background: the search finds them as they come)
+        if #self.missing > 0 then
+            m:AskNames(self.missing)
+            self.missing = {}
+        end
+        return true
+    end
+
+    -- The loading mark (`on`), how far it is.
+    function Loading(on: boolean, done: number?, total: number?)
+        local was = self.loadingView:IsShown()
+        self.loadingView:SetShown(on)
+        if on then
+            if not was then
+                self.loadingMark:Start()
+            end
+            self.loadingCaption:SetValue(total and total > 0 and (parts.count(done or 0) .. " of " .. parts.count(total) .. " items") or "")
+            self.list:SetItems({})
+            self.empty:Hide()
+            self.countText:SetValue("Reading prices\226\128\166")
+        elseif was then
+            self.loadingMark:Stop()
+        end
+    end
+
+    -- Every item with a look on the ruleset (nil: being built).
+    function Build(): PriceEntry[]?
+        if not self:Sync() then
+            return nil
+        end
+        return self.entries
+    end
+
+    -- A row's sparkline and Cheapest, worked out when it first shows.
+    function Extra(itemID: number): Extra
+        local e = self.extras[itemID]
+        if e then
+            return e
+        end
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local made: Extra = {
+            spark = m:Spark(itemID, ruleset),
+            cheapest = parts.cheapestShort(m:WhenCheapest(itemID, ruleset)),
+        }
+        self.extras[itemID] = made
+        return made
+    end
+
+    -- The items in your bags (this character's).
+    function InBags(): { [number]: boolean }
+        local out: { [number]: boolean } = {}
+        for bag = 0, 4 do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+                local id = C_Container.GetContainerItemID(bag, slot)
+                if type(id) == "number" then
+                    out[id] = true
+                end
+            end
+        end
+        return out
+    end
+
+    -- The entries the filters and the search keep, in the chosen order (nil:
+    -- being built).
+    function Shown(): PriceEntry[]?
+        if not self:Build() then
+            return nil
+        end
+        local all = self:Ordered()
+        local f = self.filters
+        local show, seen = self.show, type(f.seen) == "string" and f.seen :: string or "any"
+        local cats, qs = UI.FilterList(f.cat), UI.FilterList(f.q)
+        local q = self.query
+        local bags = show == "bags" and self:InBags() or nil
+        local sold: { [number]: boolean }? = nil
+        if show == "sold" then
+            -- (a year of transactions: read a slice a frame first)
+            if not self.w.m:BooksReady({ ruleset = self.w:Ruleset() }) then
+                self:Loading(true)
+                return nil
+            end
+            sold = self.w.m:SoldItems(self.w:Ruleset())
+        end
+        local scanDay, scanPeriod = -1, -1
+        if seen == "scan" then
+            local scan = self.w.m:LastScan(self.w:Ruleset())
+            if scan then
+                scanDay, scanPeriod = days.dayOf(scan.at)
+            end
+        end
+        if show == "all" and seen == "any" and #cats == 0 and #qs == 0 and q == "" then
+            -- (every entry: the kept order itself, it isn't changed)
+            self.lookingUp = 0
+            return all
+        end
+        local today = self.today
+        local names = self.w.m:Names()
+        local lookingUp = 0
+        local out: PriceEntry[] = {}
+        for _, e in ipairs(all) do
+            local keep = true
+            if show == "deals" then
+                keep = e.under ~= nil or e.underVendor
+            elseif show == "vendor" then
+                keep = e.underVendor
+            elseif show == "watched" then
+                keep = e.watched
+            elseif sold then
+                keep = sold[e.itemID] == true
+            elseif bags then
+                keep = bags[e.itemID] == true
+            end
+            if keep and seen == "scan" then
+                keep = e.day == scanDay and e.period == scanPeriod
+            elseif keep and seen == "week" then
+                keep = e.day >= today - 6
+            end
+            if keep and #cats > 0 then
+                keep = has(cats, parts.categoryOf(e.classID))
+            end
+            if keep and #qs > 0 then
+                keep = e.quality ~= nil and has(qs, parts.QUALITY[e.quality] or "")
+            end
+            if keep and q ~= "" then
+                local name = e.lname
+                keep = name ~= nil and name:find(q, 1, true) ~= nil
+                if not name and names:Pending(e.itemID) then
+                    lookingUp += 1
+                end
+            end
+            if keep then
+                out[#out + 1] = e
+            end
+        end
+        self.lookingUp = lookingUp
+        return out
+    end
+
+    -- Every entry in the chosen order (Change: the furthest under first;
+    -- one without the column's value last; ties by item), kept until the
+    -- entries change. Sorted as numbers (or strings, by name) without a
+    -- comparator: each entry's value and its place in item order as one
+    -- number, so 7,000 entries sort in the game's own code, not 90,000
+    -- calls of a Lua function (about 25 ms in game, measured 2026-11-19).
+    function Ordered(): PriceEntry[]
+        local key, reverse = self.sortKey, self.sortReverse
+        local ck = key .. (reverse and "-" or "+")
+        local known = self.orders[ck]
+        if known then
+            return known
+        end
+        local list = self.entries or {}
+        local n = #list
+        local tail: PriceEntry[] = {}
+        local out: PriceEntry[] = {}
+        if key == "name" then
+            local keys: string[] = {}
+            local of: { [string]: PriceEntry } = {}
+            for r, e in ipairs(list) do
+                local name = e.lname
+                if name then
+                    -- (reversed: sorted up, then turned round, ties by item)
+                    local k = name .. "\1" .. string.format("%06d", reverse and (n - r) or r)
+                    keys[#keys + 1] = k
+                    of[k] = e
+                else
+                    tail[#tail + 1] = e
+                end
+            end
+            table.sort(keys)
+            local c = #keys
+            for i = 1, c do
+                out[i] = assert(of[keys[reverse and (c - i + 1) or i]])
+            end
+        else
+            local span = 1
+            while span <= n do
+                span *= 2
+            end
+            local limit = math.floor(9007199254740992 / span) - 1
+            local scale = (key == "change" or key == "deal") and 1000 or 1
+            local nums: number[] = {}
+            local of: { [number]: PriceEntry } = {}
+            for r, e in ipairs(list) do
+                local v = sortValue(e, key)
+                if v == nil then
+                    tail[#tail + 1] = e
+                else
+                    local q = math.floor((reverse and -v or v) * scale + 0.5)
+                    q = math.max(-limit, math.min(limit, q))
+                    local c = q * span + (r - 1)
+                    nums[#nums + 1] = c
+                    of[c] = e
+                end
+            end
+            table.sort(nums)
+            for i, c in ipairs(nums) do
+                out[i] = assert(of[c])
+            end
+        end
+        for _, e in ipairs(tail) do
+            out[#out + 1] = e
+        end
+        self.orders[ck] = out
+        return out
+    end
+
+    ----------------------------------------------------------------------------
+    -- Names from the client
+    ----------------------------------------------------------------------------
+
+    -- An item's name asked for, before the rest (its row is in sight).
+    function Ask(itemID: number)
+        self.w.m:Names():Ask(itemID, true)
+    end
+
+    -- Whether the list shows differently for a name come (`named`) or given
+    -- up: a search or the Quality filter waits for it, the names' order, or
+    -- its row is in sight (thousands come in the background after a scan:
+    -- the list isn't sorted again for each).
+    function Waits(itemID: number, named: boolean): boolean
+        if self.query ~= "" then
+            return true
+        end
+        if not named then
+            return false
+        end
+        if self.sortKey == "name" or #UI.FilterList(self.filters.q) > 0 then
+            return true
+        end
+        for _, r in ipairs(self.list:Rows()) do
+            local e = r:IsShown() and (r :: PriceRow).entry or nil
+            if e and e.itemID == itemID then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- A name arrived (or was given up): the list drawn again shortly (once
+    -- for many) when it shows it or a search waits for it.
+    function ItemInfo(itemID: number)
+        local e = self.byID[itemID]
+        if not (e and self.entries) or e.name then
+            return
+        end
+        local name, quality = self.w.m:ItemName(itemID)
+        if name then
+            e.name, e.lname, e.quality = name, name:lower(), quality
+            self.orders["name+"], self.orders["name-"] = nil, nil
+        end
+        if self.namesPending or not self:IsVisible() or not self:Waits(itemID, name ~= nil) then
+            return
+        end
+        self.namesPending = true
+        self.w.m:After(0.2, function()
+            self.namesPending = false
+            if self:IsVisible() then
+                self:DrawList(true)
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Drawing
+    ----------------------------------------------------------------------------
+
+    function Layout()
+        local width = self.list.scroll:GetWidth()
+        if width <= 1 then
+            return
+        end
+        self.places = placesFor(width)
+        self:DrawHead()
+        self.list:Invalidate()
+        self.list:Refresh()
+    end
+
+    function DrawHead()
+        local places = self.places
+        for i, h in ipairs(self.heads) do
+            local p, col = places[i], COLS[i]
+            if p then
+                h:ClearAllPoints()
+                h:SetPoint("LEFT", self.head, "LEFT", p.x, 0)
+                h:SetWidth(p.w)
+            end
+            local on = col.key == self.sortKey
+            h.label:SetColor(on and "ink" or "ink-muted")
+            h.arrow:SetShown(on)
+            if on then
+                UI.Glyph(h.arrow, self.sortReverse and "chevronUp" or "chevronDown")
+            end
+        end
+    end
+
+    -- Everything drawn again (a refresh of the window).
+    function Draw()
+        local m = self.w.m
+        self.today = days.dayOf()
+        local options: SelectOption<string>[] = {}
+        for _, rs in ipairs(m:Rulesets()) do
+            options[#options + 1] = { value = rs, label = SuuUI.RulesetName(rs) }
+        end
+        self.rulesets:SetOptions(options)
+        self.rulesets:SetValue(self.w:Ruleset())
+        if #self.places == 0 then
+            self.places = placesFor(math.max(400, self.list.scroll:GetWidth()))
+        end
+        self:DrawList()
+    end
+
+    -- The rows, the count and the empty state (`names`: only names came:
+    -- the rows in sight drawn again too).
+    function DrawList(names: boolean?)
+        self:DrawHead()
+        local shown = self:Shown()
+        if not shown then
+            return
+        end
+        self:Loading(false)
+        if names then
+            self.list:Invalidate()
+        end
+        self.list:SetItems(shown)
+        local n = #shown
+        local show = self.show
+        local text: string
+        if show == "deals" then
+            text = n == 1 and "1 deal in the last scan" or (parts.count(n) .. " deals in the last scan")
+        elseif show == "vendor" then
+            text = parts.count(n) .. " under vendor price"
+        elseif show == "watched" then
+            text = parts.count(n) .. " watched"
+        else
+            text = n == 1 and "1 item" or (parts.count(n) .. " items")
+        end
+        local more = self.query ~= "" and self.lookingUp or 0
+        if more > 0 then
+            local words = more == 1 and "1 more name" or (parts.count(more) .. " more names")
+            text = text .. " \194\183 Looking up " .. words .. "\226\128\166"
+        end
+        self.countText:SetValue(text)
+        local empty: string? = nil
+        if n == 0 then
+            if #(self.entries or {}) == 0 then
+                empty = "Nothing seen yet: Scan all or search at the auction house."
+            elseif show == "sold" then
+                empty = "Nothing you sold on this ruleset: a sale shows once you collect its money from the mail."
+            elseif show == "deals" then
+                empty = "No item in the last scan is far under its usual price."
+            elseif show == "vendor" then
+                empty = "Nothing is offered under what a vendor pays."
+            elseif show == "watched" then
+                empty = "You watch nothing on this ruleset: open an item and choose Watch."
+            elseif show == "bags" then
+                empty = "Nothing in your bags has a price on this ruleset."
+            elseif more > 0 then
+                empty = "Nothing matches yet: looking up the names of " .. parts.count(more) .. " more items."
+            else
+                empty = "Nothing matches."
+            end
+        end
+        self.empty:SetShown(empty ~= nil)
+        self.empty:SetValue(empty or "")
+    end
+end

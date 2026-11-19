@@ -1,0 +1,172 @@
+-- Core/Prices/Store: the price store's reads (the latest look, the daily
+-- lows and what most sell it for, the last 14 days' lows and the usual
+-- price, every look of a range), a look recorded into a
+-- ruleset's map, the old ones pruned; and its size for a heavy user: 6,400
+-- items, 60 days, one or two looks a day.
+
+import test, expect from "wowlua:test"
+import * as store from "/Core/Prices/Store"
+import type PriceMap from "/Core/Prices/Store"
+import * as pack from "/Core/Prices/Pack"
+import expectNoErrors from "../../../helpers"
+
+const TODAY = 20775
+const ITEM = 990301
+
+@test("the latest look, the daily lows with what most sell it for, every look of a range")
+local function reads()
+    expect(store.latest(nil)).toBeNil()
+    local s = pack.record(nil, TODAY - 3, 1, 1200, 0, 10, 2)
+    s = pack.record(s, TODAY - 3, 4, 1100, 1500, 12, 3)
+    s = pack.record(s, TODAY - 1, 2, 1300, 0, 9, 9)
+    s = pack.record(s, TODAY, 1, 1250, 1400, 7, 2)
+    s = pack.record(s, TODAY, 3, 1250, 0, 5, 1)
+    expect(store.latest(s)).toEqual({ day = TODAY, period = 3, low = 1250, most = 0, qty = 5, n = 1 })
+    local lows, mosts = store.dailyLows(s, TODAY, 5)
+    expect(lows).toEqual({ 0, 1100, 0, 1300, 1250 })
+    -- (today: two looks at 1250, the one that says what most sell it for)
+    expect(mosts).toEqual({ 0, 1500, 0, 0, 1400 })
+    -- every look of the last two days, the newest first
+    local list = store.looks(s, TODAY - 1)
+    expect(#list).toBe(3)
+    expect(list[3]).toEqual({ day = TODAY - 1, period = 2, low = 1300, most = 0, qty = 9, n = 9 })
+    local p = store.points(s, TODAY)
+    expect(p.count).toBe(2)
+    -- a look after today (the clock went back) isn't in today's days
+    local ahead = pack.record(s, TODAY + 1, 1, 10, 0, 1, 1)
+    expect((store.dailyLows(ahead, TODAY, 2))).toEqual({ 1300, 1250 })
+    expect(store.recentLows(ahead, TODAY, 14)).toEqual({ 1250, 1300, 1100 })
+end
+
+@test("the usual price: the middle of the last 14 days with a look, within the 60 kept")
+local function usual()
+    local s: string? = nil
+    -- 20 days with a look every other day, 100 … 119 copper; and one 70 days ago
+    s = pack.record(s, TODAY - 70, 1, 5, 0, 1, 1)
+    for i = 19, 0, -1 do
+        s = pack.record(s, TODAY - i * 2, 2, 100 + (19 - i), 0, 1, 1)
+    end
+    local recent = store.recentLows(s, TODAY, 14)
+    expect(#recent).toBe(14)
+    expect(recent[1]).toBe(119)
+    expect(recent[14]).toBe(106)
+    expect(store.usualOf(s, TODAY)).toBe(113)
+    expect(store.usualOf(nil, TODAY)).toBeNil()
+    -- one look only: that look
+    expect(store.usualOf(pack.record(nil, TODAY, 1, 777, 0, 1, 1), TODAY)).toBe(777)
+    -- the lowest of a day counts
+    local two = pack.record(nil, TODAY, 1, 500, 0, 1, 1)
+    two = pack.record(two, TODAY, 4, 400, 0, 1, 1)
+    expect(store.recentLows(two, TODAY, 14)).toEqual({ 400 })
+end
+
+@test("the median and the usual price from the daily lows: the first 14 count, to the copper")
+local function usualOfLows()
+    local list = { 5, 1, 4, 2, 3 }
+    expect(store.median(list)).toBe(3)
+    expect(list).toEqual({ 5, 1, 4, 2, 3 })
+    expect(store.median({ 4, 1, 3, 2 })).toBe(2.5)
+    expect(store.median({ 9, 1, 3, 2 }, 3)).toBe(3)
+    expect(store.median({})).toBeNil()
+    expect(store.median({ 1 }, 0)).toBeNil()
+    expect(store.usual({})).toBeNil()
+    expect(store.usual({ 1000 })).toBe(1000)
+    expect(store.usual({ 1000, 1001 })).toBe(1001)
+    -- the 15th day back and older don't count
+    local lows: number[] = {}
+    for i = 1, 14 do
+        lows[i] = 100 + i
+    end
+    lows[15], lows[16], lows[17] = 1, 1, 1
+    expect(store.usual(lows)).toBe(108)
+    expectNoErrors()
+end
+
+@test("a look recorded into a ruleset's map; the old ones pruned, the item gone with none left")
+local function recordAndPrune()
+    local map: PriceMap = {}
+    expect(store.record(map, ITEM, TODAY - 65, 1, 1000, 0, 5, 5)).toBe(true)
+    expect(store.record(map, ITEM, TODAY - 65, 1, 1000, 0, 5, 5)).toBe(false)
+    expect(store.record(map, ITEM, TODAY, 2, 900, 0, 5, 5)).toBe(true)
+    expect(store.record(map, ITEM + 1, TODAY - 61, 2, 900, 0, 5, 5)).toBe(true)
+    expect(store.oldestKept(TODAY)).toBe(TODAY - 59)
+    expect(store.prune(map, ITEM, TODAY)).toBe(true)
+    expect(#store.looks(map[ITEM], 0)).toBe(1)
+    expect(store.prune(map, ITEM, TODAY)).toBe(false)
+    expect(store.prune(map, ITEM + 1, TODAY)).toBe(true)
+    expect(map[ITEM + 1]).toBeNil()
+    expect(store.prune(map, ITEM + 2, TODAY)).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- The size for a heavy user
+--------------------------------------------------------------------------------
+
+-- A small fixed random sequence (the test's own: the same every run).
+local seed = 12345
+local function random(): number
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+end
+
+-- What WoW writes for one item of SuuUIPrices.prices[ruleset]: three tabs,
+-- [itemID] = "…",
+local function savedLine(itemID: number, s: string): number
+    return 3 + #("[" .. itemID .. "] = \"") + #s + #("\",\n")
+end
+
+@test("6,400 items, 60 days, one or two looks a day: the size in SuuUIPrices")
+local function size()
+    local map: PriceMap = {}
+    local ITEMS, DAYS = 6400, 60
+    local bases: number[] = {}
+    local stackable: boolean[] = {}
+    local cheapFew: boolean[] = {}
+    for i = 1, ITEMS do
+        -- half under 1g, a third 1g to 50g, the rest 50g to 500g
+        local r = random()
+        bases[i] = r < 0.5 and (100 + random() * 9900) or r < 0.85 and (10000 + random() * 490000) or
+            (500000 + random() * 4500000)
+        stackable[i] = random() < 0.5
+        cheapFew[i] = random() < 0.25
+    end
+    local looks = 0
+    for d = TODAY - DAYS + 1, TODAY do
+        for i = 1, ITEMS do
+            local periods = random() < 0.5 and 1 or 2
+            for k = 1, periods do
+                local low = math.floor(bases[i] * (0.9 + random() * 0.2))
+                local qty = stackable[i] and math.floor(1 + random() * 400) or math.floor(1 + random() * 6)
+                local n = stackable[i] and math.floor(1 + random() * 30) or qty
+                local most = cheapFew[i] and math.floor(low * 1.3) or 0
+                store.record(map, 100000 + i * 7, d, k == 1 and 2 or 4, low, most, qty, n)
+                looks += 1
+            end
+        end
+    end
+    local bytes, chars = 0, 0
+    for itemID, s in pairs(map) do
+        bytes += savedLine(itemID, s)
+        chars += #s
+        expect(s:find('["\\\n]') == nil).toBe(true)
+    end
+    print(
+        ("Price store: %d items, %d days, %d looks: %d characters of looks (%.2f a look), %.2f MB in SuuUIPrices"):format(
+            ITEMS,
+            DAYS,
+            looks,
+            chars,
+            chars / looks,
+            bytes / 1048576
+        )
+    )
+    expect(looks > ITEMS * DAYS * 1.4 and looks < ITEMS * DAYS * 1.6).toBe(true)
+    -- a few megabytes at most (measured 2026-11-18: 4.05 MB, 7.25
+    -- characters a look)
+    expect(bytes < 4.5 * 1048576).toBe(true)
+    -- read back: the newest look and the usual price of one
+    local s = assert(map[100007])
+    expect(assert(store.latest(s)).day).toBe(TODAY)
+    expect(store.usualOf(s, TODAY) ~= nil).toBe(true)
+    expectNoErrors()
+end

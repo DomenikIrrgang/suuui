@@ -1,0 +1,1506 @@
+-- Diagnostics/LedgerProbe.wowlua
+-- "/suu probe ledger" (asked 2026-11-18, for the Ledger: SuuUI's money
+-- window with price history per ruleset, every copper in and out per
+-- character, and gold over time): what Forever tells about money.
+--   now:   the ruleset (which names and keys the client gives for it), what
+--          a vendor pays for some items (and whether the first ask comes
+--          back empty until GET_ITEM_INFO_RECEIVED / ITEM_DATA_LOAD_RESULT),
+--          the clocks (local, server, calendar, game time and their
+--          offsets), the global strings of auction and money messages, the
+--          events and the client's API documentation of all of it
+--   then (until /reload or "/suu probe ledger stop"): every PLAYER_MONEY
+--          with its change, the windows open and the events and calls
+--          around it (GetTime stamps, 3 s before and after: does the money
+--          come before or after the event that explains it?), the
+--          mailbox's letters with their invoices (GetInboxHeaderInfo,
+--          GetInboxInvoiceInfo: a sale, a purchase, an expired or cancelled
+--          auction, outbid), auction and money system lines, the trade
+--          window's money as it changes (GetPlayerTradeMoney,
+--          GetTargetTradeMoney: readable before the trade completes?), and
+--          what SuuUI-free post-hooks see of repairs, purchases, buybacks,
+--          sales at a vendor, flights, training, quest rewards, mail money,
+--          sending mail and the auction house's posts, bids and buys
+--
+--   /suu probe ledger          snapshot and listen (again: a new snapshot,
+--                              the lists go on)
+--   /suu probe ledger stop     stop listening (hooks stay installed, doing
+--                              nothing, until a /reload)
+--   /suu probe ledger status   what it has so far
+--   /suu probe ledger reset    forget everything recorded
+--
+-- Saved in SuuUIProbe.ledger on /reload. Values the game hides read
+-- "secret"; every call is under pcall ("error: …", "missing"). No player's
+-- name is kept: invoices' buyers and sellers, letters from players, trade
+-- partners and system lines that aren't about money read as placeholders.
+--
+-- From Blizzard's UI source for Forever (Gethe/wow-ui-source, branch
+-- forever), read 2026-11-18:
+--   * Ruleset: no API names it in game. ConnectionDocumentation.lua has
+--     GetRealmName, GetRealmID, GetNativeRealmID, SelectedRealmName and
+--     IsOnTournamentRealm; PlayerScriptDocumentation.lua GetNormalizedRealmName
+--     and GetPlayerInfoByGUID (its realmName); BattleNetDocumentation.lua's
+--     game account info realmName, realmDisplayName, realmID. The PvP and RP
+--     flags exist only in the realm list before login (C_RealmList, in
+--     Blizzard_GlueXML/Mainline/RealmList.lua: realmInfo.isPvP / isRP,
+--     shown as PVP_PARENTHESES, RP_PARENTHESES, RPPVP_PARENTHESES,
+--     GAMETYPE_NORMAL). GameRulesDocumentation.lua (C_GameRules:
+--     GetActiveGameMode, IsGameRuleActive over Enum.GameRule,
+--     GetForeverExperiencePreset …) is read here too, in case a rule tells
+--     the ruleset apart; the player's GUID's server ID is a candidate key.
+--   * Mail: GetInboxHeaderInfo and GetInboxInvoiceInfo aren't in the
+--     generated docs; Blizzard_MailFrame/MailFrame.lua reads the header as
+--     packageIcon, stationeryIcon, sender, subject, money, CODAmount,
+--     daysLeft, itemCount, wasRead, wasReturned, textCreated, canReply,
+--     isGM, firstItemQuantity, firstItemLink, and the invoice as
+--     invoiceType ("buyer", "seller", "seller_temp_invoice"), itemName,
+--     playerName (nil: several), bid, buyout, deposit, consignment,
+--     moneyDelay, etaHour, etaMin, count, commerceAuction. A seller's
+--     takings are bid + deposit - consignment. MailInfoDocumentation.lua
+--     (C_Mail): HasInboxMoney, MAIL_INBOX_UPDATE, MAIL_SUCCESS, …
+--   * Auction notices: ChatFrameUtil.GetAuctionHouseNotificationText
+--     (Blizzard_ChatFrameUtil) maps Enum.AuctionHouseNotification (BidPlaced,
+--     AuctionRemoved, AuctionWon, AuctionOutbid, AuctionSold,
+--     AuctionExpired) to ERR_AUCTION_BID_PLACED, ERR_AUCTION_REMOVED,
+--     ERR_AUCTION_WON_S, ERR_AUCTION_OUTBID_S, ERR_AUCTION_SOLD_S,
+--     ERR_AUCTION_EXPIRED_S; Blizzard_Game's EventRouting sends
+--     AUCTION_HOUSE_SHOW_NOTIFICATION and _FORMATTED_NOTIFICATION to
+--     GameEvent.HandleAuctionHouseNotification, which prints that line to
+--     the chat wherever you are (AuctionSold = 4, the item's name as its
+--     text; CHAT_MSG_SYSTEM is secret on Forever). Both events are
+--     recorded with their arguments, here and away from the house (the
+--     Ledger's Sold note is built on the formatted one). The house's own frame prints
+--     ERR_AUCTION_COMMODITY_WON_S on AUCTION_HOUSE_SHOW_COMMODITY_WON_NOTIFICATION.
+--   * Restricted: SendMail and AcceptTrade are HasRestrictions in
+--     SecureTransferDocumentation.lua (C_SecureTransfer); nothing here calls
+--     them, the hooks only watch. C_Item.GetItemInfo and GetCoinText take
+--     secret arguments only untainted; GetItemInfo's sellPrice isn't marked
+--     secret. TradeInfoDocumentation.lua has the trade money events
+--     (PLAYER_TRADE_MONEY, TRADE_MONEY_CHANGED, TRADE_ACCEPT_UPDATE).
+
+import after from "wowlua:timer"
+import isSecret from "wowlua:secret"
+import hook from "wowlua:hooks"
+import * as tbl from "wowlua:table"
+import * as DB from "/Core/DB"
+import print, version from "/Core/Init"
+import * as apiDocs from "/Diagnostics/ApiDocs"
+import pattern from "/Diagnostics/Watch/Kit"
+
+local field = tbl.field
+
+type Record = { [string]: unknown }
+-- A money change: when (seconds since arming, and the clock), the money
+-- and the change, the windows open, the group, and the log lines of the
+-- 3 s before and after it.
+export type MoneyEntry = {
+    t: number,
+    at: string,
+    money: unknown,
+    delta: unknown,
+    open: string,
+    group: string,
+    onTaxi: string,
+    before: string[],
+    after: string[],
+}
+-- A letter as the mailbox showed it (the latest look), its invoice once
+-- one came back, and how often it was read.
+export type Letter = { firstSeen: string, reads: number, header: Record, invoice?: Record, noInvoice?: string }
+-- What the probe saves in SuuUIProbe.ledger.
+export type Ledger = {
+    layout: number,
+    at: string,
+    suuui: string,
+    build: string,
+    sessions: string[],
+    armed: boolean,
+    ruleset: Record,
+    clock: Record,
+    prices: { [string]: Record },
+    priceApis: { [string]: string[] },
+    globals: { [string]: string },
+    events: { [string]: string },
+    hooks: { [string]: string },
+    docs: unknown,
+    docFlags: unknown,
+    mail: { reads: number, count: string, letters: Letter[] },
+    money: MoneyEntry[],
+    log: string[],
+    system: Record[],
+    systemOther: number,
+    trade: Record[],
+}
+
+const LAYOUT = 1
+const LOG_CAP = 400
+const MONEY_CAP = 200
+const LETTER_CAP = 40
+const SYSTEM_CAP = 80
+const TRADE_CAP = 40
+-- how far around a money change its log lines are kept (seconds)
+const AROUND = 3
+
+-- Items whose vendor price is asked: Kingsblood, Black Lotus, Mithril Bar,
+-- Linen Cloth, Silk Cloth, Copper Ore, Hearthstone (sells for nothing),
+-- Worn Shortsword, Gladius, Fishing Pole, and an ID no item has.
+export const PRICE_ITEMS: number[] = { 3356, 13468, 3860, 2589, 4306, 2770, 6948, 25, 2488, 6256, 999999 }
+
+-- The global strings of auction and money lines (system lines are matched
+-- against them, in this order: the first that fits names the line).
+const LINE_GLOBALS = {
+    "ERR_AUCTION_SOLD_S",
+    "ERR_AUCTION_WON_S",
+    "ERR_AUCTION_COMMODITY_WON_S",
+    "ERR_AUCTION_EXPIRED_S",
+    "ERR_AUCTION_OUTBID_S",
+    "ERR_AUCTION_REMOVED_S",
+    "ERR_AUCTION_REMOVED",
+    "ERR_AUCTION_BID_PLACED",
+    "ERR_AUCTION_STARTED",
+    "ERR_QUEST_REWARD_MONEY_S",
+    "ERR_TRADE_COMPLETE",
+    "ERR_NOT_ENOUGH_MONEY",
+    "LOOT_MONEY_SPLIT",
+    "LOOT_MONEY_SPLIT_GUILD",
+    "YOU_LOOT_MONEY",
+    "YOU_LOOT_MONEY_GUILD",
+    "LOOT_MONEY_REFUND",
+    "ERR_MAIL_SENT",
+}
+-- The subjects of the auction house's letters.
+const SUBJECT_GLOBALS = {
+    "AUCTION_SOLD_MAIL_SUBJECT",
+    "AUCTION_WON_MAIL_SUBJECT",
+    "AUCTION_EXPIRED_MAIL_SUBJECT",
+    "AUCTION_OUTBID_MAIL_SUBJECT",
+    "AUCTION_REMOVED_MAIL_SUBJECT",
+    "AUCTION_INVOICE_MAIL_SUBJECT",
+    "COD_PAYMENT",
+}
+-- Other strings the Ledger may show or parse.
+const OTHER_GLOBALS = {
+    "AUCTION_HOUSE_MAIL_MULTIPLE_BUYERS",
+    "AUCTION_HOUSE_MAIL_MULTIPLE_SELLERS",
+    "AUCTION_INVOICE_FUNDS_DELAY",
+    "ITEM_SOLD_COLON",
+    "ITEM_PURCHASED_COLON",
+    "AMOUNT_RECEIVED_COLON",
+    "AMOUNT_PAID_COLON",
+    "GOLD_AMOUNT",
+    "SILVER_AMOUNT",
+    "COPPER_AMOUNT",
+    "GAMETYPE_NORMAL",
+    "GAMETYPE_PVP",
+    "GAMETYPE_RP",
+    "GAMETYPE_RPPVP",
+    "PVP_PARENTHESES",
+    "RP_PARENTHESES",
+    "RPPVP_PARENTHESES",
+    "REPAIR_COST",
+    "SELL_PRICE",
+}
+
+-- What opens and closes a window that explains money: show event → name,
+-- close event → name.
+const OPENS: { [string]: string } = {
+    MERCHANT_SHOW = "merchant",
+    TRAINER_SHOW = "trainer",
+    TAXIMAP_OPENED = "taxi",
+    LOOT_OPENED = "loot",
+    QUEST_COMPLETE = "questReward",
+    MAIL_SHOW = "mail",
+    TRADE_SHOW = "trade",
+    AUCTION_HOUSE_SHOW = "auction",
+    BANKFRAME_OPENED = "bank",
+    GUILDBANKFRAME_OPENED = "guildBank",
+    BARBER_SHOP_OPEN = "barber",
+    PET_STABLE_SHOW = "stable",
+    GOSSIP_SHOW = "gossip",
+}
+const CLOSES: { [string]: string } = {
+    MERCHANT_CLOSED = "merchant",
+    TRAINER_CLOSED = "trainer",
+    TAXIMAP_CLOSED = "taxi",
+    LOOT_CLOSED = "loot",
+    QUEST_FINISHED = "questReward",
+    MAIL_CLOSED = "mail",
+    TRADE_CLOSED = "trade",
+    AUCTION_HOUSE_CLOSED = "auction",
+    BANKFRAME_CLOSED = "bank",
+    GUILDBANKFRAME_CLOSED = "guildBank",
+    BARBER_SHOP_CLOSE = "barber",
+    PET_STABLE_CLOSED = "stable",
+    GOSSIP_CLOSED = "gossip",
+}
+
+-- Events whose text arguments are kept (cleaned); every other event's text
+-- reads "<text>" (it may name a player).
+const KEEP_TEXT: { [string]: boolean } = {
+    CHAT_MSG_MONEY = true,
+    UI_INFO_MESSAGE = true,
+    UI_ERROR_MESSAGE = true,
+    AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION = true,
+    AUCTION_HOUSE_SHOW_COMMODITY_WON_NOTIFICATION = true,
+}
+
+export const EVENTS: string[] = {
+    "PLAYER_MONEY",
+    "MERCHANT_SHOW",
+    "MERCHANT_CLOSED",
+    "MERCHANT_UPDATE",
+    "UPDATE_INVENTORY_DURABILITY",
+    "TRAINER_SHOW",
+    "TRAINER_CLOSED",
+    "TAXIMAP_OPENED",
+    "TAXIMAP_CLOSED",
+    "PLAYER_CONTROL_LOST",
+    "PLAYER_CONTROL_GAINED",
+    "LOOT_OPENED",
+    "LOOT_CLOSED",
+    "LOOT_SLOT_CLEARED",
+    "CHAT_MSG_MONEY",
+    "QUEST_COMPLETE",
+    "QUEST_FINISHED",
+    "QUEST_TURNED_IN",
+    "QUEST_LOOT_RECEIVED",
+    "MAIL_SHOW",
+    "MAIL_CLOSED",
+    "MAIL_INBOX_UPDATE",
+    "MAIL_SEND_SUCCESS",
+    "MAIL_SUCCESS",
+    "MAIL_FAILED",
+    "MAIL_SEND_INFO_UPDATE",
+    "SEND_MAIL_MONEY_CHANGED",
+    "SEND_MAIL_COD_CHANGED",
+    "UPDATE_PENDING_MAIL",
+    "CLOSE_INBOX_ITEM",
+    "TRADE_SHOW",
+    "TRADE_CLOSED",
+    "TRADE_MONEY_CHANGED",
+    "PLAYER_TRADE_MONEY",
+    "TRADE_ACCEPT_UPDATE",
+    "TRADE_REQUEST_CANCEL",
+    "AUCTION_HOUSE_SHOW",
+    "AUCTION_HOUSE_CLOSED",
+    "AUCTION_HOUSE_SHOW_NOTIFICATION",
+    "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION",
+    "AUCTION_HOUSE_SHOW_COMMODITY_WON_NOTIFICATION",
+    "AUCTION_HOUSE_AUCTIONS_EXPIRED",
+    "AUCTION_CANCELED",
+    "AUCTION_HOUSE_AUCTION_CREATED",
+    "AUCTION_HOUSE_PURCHASE_COMPLETED",
+    "AUCTION_HOUSE_NEW_BID_RECEIVED",
+    "AUCTION_HOUSE_ITEM_DELIVERY_DELAY_UPDATE",
+    "AUCTION_MULTISELL_START",
+    "AUCTION_MULTISELL_UPDATE",
+    "AUCTION_MULTISELL_FAILURE",
+    "OWNED_AUCTIONS_UPDATED",
+    "BIDS_UPDATED",
+    "BID_ADDED",
+    "ITEM_PURCHASED",
+    "COMMODITY_PURCHASE_SUCCEEDED",
+    "COMMODITY_PURCHASE_FAILED",
+    "COMMODITY_PURCHASED",
+    "CHAT_MSG_SYSTEM",
+    "UI_INFO_MESSAGE",
+    "UI_ERROR_MESSAGE",
+    "PLAYER_INTERACTION_MANAGER_FRAME_SHOW",
+    "PLAYER_INTERACTION_MANAGER_FRAME_HIDE",
+    "CONFIRM_TALENT_WIPE",
+    "BARBER_SHOP_OPEN",
+    "BARBER_SHOP_CLOSE",
+    "BANKFRAME_OPENED",
+    "BANKFRAME_CLOSED",
+    "GUILDBANKFRAME_OPENED",
+    "GUILDBANKFRAME_CLOSED",
+    "GUILDBANK_UPDATE_MONEY",
+    "PET_STABLE_SHOW",
+    "PET_STABLE_CLOSED",
+    "GOSSIP_SHOW",
+    "GOSSIP_CLOSED",
+    "GET_ITEM_INFO_RECEIVED",
+    "ITEM_DATA_LOAD_RESULT",
+}
+
+-- Calls watched with post-hooks (global, or "Namespace.Function").
+const HOOKED: string[] = {
+    "RepairAllItems",
+    "BuyMerchantItem",
+    "BuybackItem",
+    "C_Container.UseContainerItem",
+    "TakeTaxiNode",
+    "BuyTrainerService",
+    "GetQuestReward",
+    "TakeInboxMoney",
+    "AutoLootMailItem",
+    "TakeInboxItem",
+    "SendMail",
+    "AcceptTrade",
+    "SetTradeMoney",
+    "PlaceAuctionBid",
+    "PostAuction",
+    "StartAuction",
+    "CancelAuction",
+    "C_AuctionHouse.PostItem",
+    "C_AuctionHouse.PostCommodity",
+    "C_AuctionHouse.PlaceBid",
+    "C_AuctionHouse.StartCommoditiesPurchase",
+    "C_AuctionHouse.ConfirmCommoditiesPurchase",
+    "C_AuctionHouse.CancelAuction",
+}
+
+--------------------------------------------------------------------------------
+-- Reading values
+--------------------------------------------------------------------------------
+
+-- A text fit to keep: links as their item ID and name, colours and
+-- textures out, line breaks as " / ", cut to `max`.
+export function clean(v: unknown, max: number?): string
+    if isSecret(v) then
+        return "secret"
+    end
+    if type(v) ~= "string" then
+        return tostring(v)
+    end
+    local s = v:gsub("|H(item:%d+)[^|]*|h(.-)|h", "%1 %2")
+    s = s:gsub("|H[^|]*|h(.-)|h", "[link]")
+    s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):gsub("\n", " / ")
+    local limit = max or 160
+    if #s > limit then
+        s = s:sub(1, limit) .. "…"
+    end
+    return s
+end
+
+-- One value as text: "secret", "nil", a table's plain fields, text cleaned.
+local function show(v: unknown): string
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    if type(v) == "table" then
+        local parts: string[] = {}
+        for k, x in pairs(v :: { [unknown]: unknown }) do
+            local xs = isSecret(x) and "secret" or (type(x) == "table" and "table" or clean(x, 60))
+            parts[#parts + 1] = tostring(k) .. "=" .. xs
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    if type(v) == "string" then
+        return clean(v, 120)
+    end
+    return tostring(v)
+end
+
+-- A value fit to save as it is: a plain number or boolean as itself,
+-- anything else as show's text.
+local function plain(v: unknown): unknown
+    if isSecret(v) then
+        return "secret"
+    end
+    if type(v) == "number" or type(v) == "boolean" then
+        return v
+    end
+    return show(v)
+end
+
+local function packed(...: unknown): (number, unknown[])
+    return select("#", ...), { ... }
+end
+
+-- A call's outcome: whether it ran, its error, its values.
+type Got = { ok: boolean, err?: string, values: unknown[], n: number }
+
+local function get(fn: unknown, ...: unknown): Got
+    if type(fn) ~= "function" then
+        return { ok = false, err = "missing", values = {}, n = 0 }
+    end
+    local n, r = packed(pcall(fn, ...))
+    if not r[1] then
+        return { ok = false, err = clean(r[2], 160), values = {}, n = 0 }
+    end
+    local values: unknown[] = {}
+    for i = 2, n do
+        values[i - 1] = r[i]
+    end
+    return { ok = true, values = values, n = n - 1 }
+end
+
+local function joined(g: Got): string
+    if not g.ok then
+        return g.err == "missing" and "missing" or ("error: " .. tostring(g.err))
+    end
+    if g.n == 0 then
+        return "(nothing)"
+    end
+    local parts: string[] = {}
+    for i = 1, g.n do
+        parts[i] = show(g.values[i])
+    end
+    return table.concat(parts, " | ")
+end
+
+-- A call's values as text ("a | b | c"), "missing" or "error: …".
+local function call(fn: unknown, ...: unknown): string
+    return joined(get(fn, ...))
+end
+
+-- A call's first value when it is a plain number.
+local function number(fn: unknown, ...: unknown): number?
+    local g = get(fn, ...)
+    local v = g.values[1]
+    if g.ok and not isSecret(v) and type(v) == "number" then
+        return v
+    end
+    return nil
+end
+
+-- A global or "Namespace.Function".
+local function resolve(path: string): (unknown, unknown, string)
+    local ns, name = path:match("^([%w_]+)%.([%w_]+)$")
+    if ns and name then
+        local t = field(_G, ns)
+        return field(t, name), t, name
+    end
+    return field(_G, path), nil, path
+end
+
+-- The text arguments of an event or call: numbers and booleans as they
+-- are, text only for KEEP_TEXT's events (else "<text>"), six at most.
+local function args(event: string, ...: unknown): string
+    local parts: string[] = {}
+    for i = 1, math.min(select("#", ...), 6) do
+        local v = (select(i, ...))
+        if type(v) == "string" and not isSecret(v) and not KEEP_TEXT[event] then
+            parts[#parts + 1] = "<text>"
+        else
+            parts[#parts + 1] = show(v)
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+--------------------------------------------------------------------------------
+-- The record and the log
+--------------------------------------------------------------------------------
+
+local current: Ledger? = nil
+local armed = false
+local started = 0
+local listener: Frame? = nil
+local hooksInstalled = false
+-- each watched call: "hooked", "missing" or the error (kept for every record)
+local hookStatus: { [string]: string } = {}
+-- the windows open now, by name
+local open: { [string]: boolean } = {}
+-- the log's lines of the last few seconds, and the money changes waiting
+-- for what comes after them
+local recent: { t: number, text: string }[] = {}
+local waiting: MoneyEntry[] = {}
+local lastLine: string? = nil
+local repeats = 0
+local lastMoney: number? = nil
+
+local function fresh(): Ledger
+    return {
+        layout = LAYOUT,
+        at = "",
+        suuui = version,
+        build = "",
+        sessions = {},
+        armed = false,
+        ruleset = {},
+        clock = {},
+        prices = {},
+        priceApis = {},
+        globals = {},
+        events = {},
+        hooks = {},
+        docs = nil,
+        docFlags = nil,
+        mail = { reads = 0, count = "", letters = {} },
+        money = {},
+        log = {},
+        system = {},
+        systemOther = 0,
+        trade = {},
+    }
+end
+
+-- SuuUIProbe.ledger: the one there (when it has this layout) or a new one.
+export function record(): Ledger
+    local old = DB.probe.ledger
+    if type(old) == "table" and field(old, "layout") == LAYOUT then
+        current = old :: Ledger
+        return old :: Ledger
+    end
+    local made = fresh()
+    DB.probe.ledger = made
+    current = made
+    return made
+end
+
+local function push<T>(list: T[], v: T, cap: number)
+    list[#list + 1] = v
+    while #list > cap do
+        table.remove(list, 1)
+    end
+end
+
+local function since(): number
+    return GetTime() - started
+end
+
+local function openNames(): string
+    local names: string[] = {}
+    for name in pairs(open) do
+        names[#names + 1] = name
+    end
+    table.sort(names)
+    return #names > 0 and table.concat(names, ",") or "none"
+end
+
+-- A line in the log, stamped with the seconds since arming; the same line
+-- again at once counts up instead. The money changes of the last seconds
+-- get it as what came after them.
+local function note(line: string)
+    local s = current
+    if not (s and armed) then
+        return
+    end
+    local now = GetTime()
+    if line == lastLine and #s.log > 0 and #recent > 0 and now - recent[#recent].t < 1 then
+        repeats = repeats + 1
+        s.log[#s.log] = ("%s (x%d, last %.3f)"):format(recent[#recent].text, repeats + 1, now - started)
+        return
+    end
+    lastLine, repeats = line, 0
+    local text = ("%.3f %s"):format(now - started, line)
+    push(s.log, text, LOG_CAP)
+    recent[#recent + 1] = { t = now, text = text }
+    while #recent > 0 and now - recent[1].t > AROUND do
+        table.remove(recent, 1)
+    end
+    local keep: MoneyEntry[] = {}
+    for _, e in ipairs(waiting) do
+        if now - started - e.t <= AROUND then
+            if #e.after < 10 then
+                e.after[#e.after + 1] = text
+            end
+            keep[#keep + 1] = e
+        end
+    end
+    waiting = keep
+end
+
+local function group(): string
+    if IsInRaid() then
+        return "raid"
+    end
+    return IsInGroup() and "party" or "solo"
+end
+
+-- PLAYER_MONEY: the money, the change, the context and the lines before.
+local function onMoney()
+    local s = current
+    if not s then
+        return
+    end
+    local g = get(GetMoney)
+    local money = g.values[1]
+    local delta: unknown = "?"
+    if isSecret(money) then
+        delta = "secret"
+    elseif type(money) == "number" then
+        local before = lastMoney
+        if before then
+            delta = money - before
+        end
+        lastMoney = money
+    end
+    local now = GetTime()
+    local entry: MoneyEntry = {
+        t = now - started,
+        at = date("%H:%M:%S"),
+        money = g.ok and plain(money) or joined(g),
+        delta = delta,
+        open = openNames(),
+        group = group(),
+        onTaxi = call(UnitOnTaxi, "player"),
+        before = {},
+        after = {},
+    }
+    for _, r in ipairs(recent) do
+        if now - r.t <= AROUND then
+            entry.before[#entry.before + 1] = r.text
+        end
+    end
+    while #entry.before > 10 do
+        table.remove(entry.before, 1)
+    end
+    note("PLAYER_MONEY " .. show(delta) .. " (now " .. show(money) .. ")")
+    push(s.money, entry, MONEY_CAP)
+    waiting[#waiting + 1] = entry
+end
+
+--------------------------------------------------------------------------------
+-- System lines
+--------------------------------------------------------------------------------
+
+-- The global a line fits (LINE_GLOBALS, in order), or nil.
+local function lineKind(text: string): string?
+    for _, name in ipairs(LINE_GLOBALS) do
+        local p = pattern(field(_G, name))
+        if p and text:match(p) then
+            return name
+        end
+    end
+    return nil
+end
+
+-- Whether a line names a coin (the words of GOLD_AMOUNT, SILVER_AMOUNT,
+-- COPPER_AMOUNT).
+local function hasCoin(text: string): boolean
+    for _, name in ipairs({ "GOLD_AMOUNT", "SILVER_AMOUNT", "COPPER_AMOUNT" }) do
+        local fmt = field(_G, name)
+        if type(fmt) == "string" then
+            local word = fmt:gsub("%%%d?%$?d", ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if word ~= "" and text:find(word, 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- A CHAT_MSG_SYSTEM or CHAT_MSG_MONEY line: kept when it fits one of the
+-- money and auction strings or names a coin; others only counted.
+local function onLine(event: string, text: unknown)
+    local s = current
+    if not s then
+        return
+    end
+    if isSecret(text) then
+        push(s.system, { t = since(), event = event, kind = "secret" }, SYSTEM_CAP)
+        note(event .. " secret")
+        return
+    end
+    if type(text) ~= "string" then
+        return
+    end
+    local kind = lineKind(text) or (hasCoin(text) and "coins" or nil)
+    if not kind then
+        if event == "CHAT_MSG_SYSTEM" then
+            s.systemOther = s.systemOther + 1
+            return
+        end
+        kind = "other"
+    end
+    local line = clean(text, 160)
+    push(s.system, { t = since(), at = date("%H:%M:%S"), event = event, kind = kind, text = line, group = group() }, SYSTEM_CAP)
+    note(event .. " " .. kind .. ": " .. line)
+end
+
+--------------------------------------------------------------------------------
+-- The mailbox
+--------------------------------------------------------------------------------
+
+-- The auction house subject a letter's fits, or nil.
+local function subjectKind(subject: unknown): string?
+    if type(subject) ~= "string" or isSecret(subject) then
+        return nil
+    end
+    for _, name in ipairs(SUBJECT_GLOBALS) do
+        local p = pattern(field(_G, name))
+        if p and subject:match(p) then
+            return name
+        end
+    end
+    return nil
+end
+
+local function itemIDOf(link: unknown): unknown
+    if isSecret(link) then
+        return "secret"
+    end
+    if type(link) ~= "string" then
+        return link == nil and "nil" or type(link)
+    end
+    return tonumber(link:match("item:(%d+)")) or "no item"
+end
+
+-- Whether a value names someone: "a name", "nil" or "secret".
+local function nameKind(v: unknown): string
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    if type(v) == "string" then
+        return v == "" and "empty" or "a name"
+    end
+    return type(v)
+end
+
+-- Letter i's header: auction mail keeps its sender and subject, a player's
+-- letter reads "player".
+local function header(i: number): (Record, string?, string)
+    local g = get(GetInboxHeaderInfo, i)
+    if not g.ok then
+        return { error = joined(g) }, nil, "?"
+    end
+    local v = g.values
+    local kind = subjectKind(v[4])
+    local h: Record = {
+        returns = g.n,
+        packageIcon = isSecret(v[1]) and "secret" or type(v[1]),
+        sender = kind and clean(v[3], 60) or nameKind(v[3]),
+        subject = kind and clean(v[4], 120) or (isSecret(v[4]) and "secret" or v[4] == nil and "nil" or "<player's subject>"),
+        subjectKind = kind or "none",
+        money = plain(v[5]),
+        COD = plain(v[6]),
+        daysLeft = isSecret(v[7]) and "secret" or
+            (type(v[7]) == "number" and math.floor((v[7] :: number) * 100 + 0.5) / 100 or show(v[7])),
+        itemCount = plain(v[8]),
+        wasRead = plain(v[9]),
+        wasReturned = plain(v[10]),
+        textCreated = plain(v[11]),
+        canReply = plain(v[12]),
+        isGM = plain(v[13]),
+        firstItemQuantity = plain(v[14]),
+        firstItemID = itemIDOf(v[15]),
+        hasMoney = call(field(C_Mail, "HasInboxMoney"), i),
+    }
+    -- a key for the same letter on the next look (never saved)
+    local key = table.concat({
+        show(v[4]),
+        show(v[5]),
+        show(v[6]),
+        show(v[8]),
+        show(v[10]),
+        show(v[15]),
+    }, "|")
+    return h, kind, key
+end
+
+local function invoice(i: number): Record?
+    local g = get(GetInboxInvoiceInfo, i)
+    if not g.ok then
+        return { error = joined(g) }
+    end
+    local v = g.values
+    if isSecret(v[1]) then
+        return { invoiceType = "secret", returns = g.n }
+    end
+    if v[1] == nil then
+        return nil
+    end
+    return {
+        returns = g.n,
+        invoiceType = plain(v[1]),
+        itemName = plain(v[2]),
+        playerName = nameKind(v[3]),
+        bid = plain(v[4]),
+        buyout = plain(v[5]),
+        deposit = plain(v[6]),
+        consignment = plain(v[7]),
+        moneyDelay = plain(v[8]),
+        etaHour = plain(v[9]),
+        etaMin = plain(v[10]),
+        count = plain(v[11]),
+        commerceAuction = plain(v[12]),
+        more = g.n > 12 and show(v[13]) or nil,
+    }
+end
+
+-- this session's letters by key, to update rather than add
+local letterIndex: { [string]: Letter } = {}
+local mailQueued = false
+
+-- The inbox, read a moment after it changes (MAIL_INBOX_UPDATE comes in
+-- bursts): every letter's header and invoice.
+export function readMail()
+    mailQueued = false
+    local s = current
+    if not (s and armed) then
+        return
+    end
+    local m = s.mail
+    m.reads = m.reads + 1
+    m.count = call(GetInboxNumItems)
+    local n = number(GetInboxNumItems) or 0
+    for i = 1, math.min(n, 50) do
+        local h, _, key = header(i)
+        local letter = letterIndex[key]
+        if not letter and #m.letters < LETTER_CAP then
+            letter = { firstSeen = date("%H:%M:%S"), reads = 0, header = h }
+            m.letters[#m.letters + 1] = letter
+            letterIndex[key] = letter
+        end
+        if letter then
+            letter.header = h
+            letter.reads = letter.reads + 1
+            local inv = invoice(i)
+            if inv then
+                letter.invoice = inv
+                letter.noInvoice = nil
+            elseif not letter.invoice then
+                letter.noInvoice = ("nil (read %s, text %s)"):format(show(h.wasRead), show(h.textCreated))
+            end
+        end
+    end
+end
+
+local function queueMail()
+    if mailQueued then
+        return
+    end
+    mailQueued = true
+    after(0.3, readMail)
+end
+
+-- Letter i's money and COD, for the calls that take them.
+local function letterMoney(i: unknown): string
+    if type(i) ~= "number" then
+        return ""
+    end
+    local g = get(GetInboxHeaderInfo, i)
+    if not g.ok then
+        return joined(g)
+    end
+    return ("money=%s cod=%s kind=%s"):format(show(g.values[5]), show(g.values[6]), subjectKind(g.values[4]) or "none")
+end
+
+--------------------------------------------------------------------------------
+-- The trade window
+--------------------------------------------------------------------------------
+
+local function tradeMoney(event: string, ...: unknown)
+    local s = current
+    if not s then
+        return
+    end
+    push(s.trade, {
+        t = since(),
+        event = event,
+        args = args(event, ...),
+        player = call(GetPlayerTradeMoney),
+        target = call(GetTargetTradeMoney),
+        money = call(GetMoney),
+    }, TRADE_CAP)
+end
+
+--------------------------------------------------------------------------------
+-- Watched calls
+--------------------------------------------------------------------------------
+
+-- What a call's hook adds to its log line (each read under pcall).
+const DESCRIBE: { [string]: (...: unknown) -> string } = {
+    RepairAllItems = function(): string
+        return "cost now " .. call(GetRepairAllCost)
+    end,
+    BuyMerchantItem = function(index: unknown): string
+        if field(_G, "GetMerchantItemInfo") then
+            return "item " .. call(field(_G, "GetMerchantItemInfo"), index)
+        end
+        return "item " .. call(field(C_MerchantFrame, "GetItemInfo"), index)
+    end,
+    BuybackItem = function(index: unknown): string
+        return "item " .. call(GetBuybackItemInfo, index)
+    end,
+    ["C_Container.UseContainerItem"] = function(bag: unknown, slot: unknown): string
+        local g = get(field(C_Container, "GetContainerItemInfo"), bag, slot)
+        local info = g.values[1]
+        local id = field(info, "itemID")
+        local count = field(info, "stackCount")
+        local sell = get(field(C_Item, "GetItemInfo") or field(_G, "GetItemInfo"), id)
+        return ("item %s x%s sellPrice %s"):format(show(id), show(count), show(sell.values[11]))
+    end,
+    TakeTaxiNode = function(i: unknown): string
+        return ("cost %s to %s"):format(call(TaxiNodeCost, i), call(TaxiNodeName, i))
+    end,
+    BuyTrainerService = function(i: unknown): string
+        return "cost " .. call(GetTrainerServiceCost, i)
+    end,
+    GetQuestReward = function(): string
+        return "reward money " .. call(GetRewardMoney)
+    end,
+    TakeInboxMoney = function(i: unknown): string
+        return letterMoney(i)
+    end,
+    AutoLootMailItem = function(i: unknown): string
+        return letterMoney(i)
+    end,
+    TakeInboxItem = function(i: unknown): string
+        return letterMoney(i)
+    end,
+    SendMail = function(): string
+        return ("money %s cod %s postage %s"):format(
+            call(GetSendMailMoney),
+            call(GetSendMailCOD),
+            call(GetSendMailPrice)
+        )
+    end,
+    AcceptTrade = function(): string
+        return ("player %s target %s"):format(call(GetPlayerTradeMoney), call(GetTargetTradeMoney))
+    end,
+}
+
+local function installHooks(s: Ledger)
+    s.hooks = hookStatus
+    if hooksInstalled then
+        return
+    end
+    hooksInstalled = true
+    for _, path in ipairs(HOOKED) do
+        local fn, t, name = resolve(path)
+        if type(fn) ~= "function" then
+            hookStatus[path] = "missing"
+        else
+            local function watch(...: unknown)
+                if not armed then
+                    return
+                end
+                local describe = DESCRIBE[path]
+                local extra = ""
+                if path ~= "C_Container.UseContainerItem" or open.merchant then
+                    if describe then
+                        local ok, text = pcall(describe, ...)
+                        extra = ok and text or ("error: " .. clean(text, 120))
+                    end
+                    if path == "AcceptTrade" then
+                        tradeMoney("AcceptTrade()")
+                    end
+                    note(("call %s(%s) money %s %s"):format(path, args("call", ...), call(GetMoney), extra))
+                end
+            end
+            local ok, err = pcall(function()
+                if t then
+                    hook(t, name, watch)
+                else
+                    hook(name, watch)
+                end
+            end)
+            hookStatus[path] = ok and "hooked" or ("error: " .. clean(err, 120))
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Events
+--------------------------------------------------------------------------------
+
+-- Enum.PlayerInteractionType's names by value.
+local function interactionName(v: unknown): string
+    local enum = field(Enum, "PlayerInteractionType")
+    if type(enum) == "table" and not isSecret(v) then
+        for k, x in pairs(enum :: { [unknown]: unknown }) do
+            if x == v then
+                return tostring(k)
+            end
+        end
+    end
+    return show(v)
+end
+
+-- What some events add to their log line.
+local function extraFor(event: string, ...: unknown): string
+    if event == "MERCHANT_SHOW" then
+        return ("repair %s canRepair %s buyback %s"):format(
+            call(GetRepairAllCost),
+            call(CanMerchantRepair),
+            call(GetNumBuybackItems)
+        )
+    elseif event == "TAXIMAP_OPENED" then
+        return "nodes " .. call(NumTaxiNodes)
+    elseif event == "QUEST_COMPLETE" then
+        return "reward money " .. call(GetRewardMoney)
+    elseif event == "LOOT_OPENED" then
+        local parts: string[] = {}
+        local n = number(GetNumLootItems) or 0
+        local moneyType = field(Enum, "LootSlotType", "Money") or 2
+        for i = 1, math.min(n, 10) do
+            local slotType = get(GetLootSlotType, i).values[1]
+            if isSecret(slotType) then
+                parts[#parts + 1] = ("slot %d: type secret"):format(i)
+            elseif slotType == moneyType then
+                parts[#parts + 1] = ("coin slot %d: %s"):format(i, call(GetLootSlotInfo, i))
+            end
+        end
+        return ("%d slots, %s"):format(n, #parts > 0 and table.concat(parts, "; ") or "no coin")
+    elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" or event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
+        return interactionName((...))
+    end
+    return ""
+end
+
+local prices: { [string]: Record } = {}
+
+-- The item info function there is: C_Item.GetItemInfo (the global
+-- GetItemInfo is gone on 12.x clients; both are asked in the snapshot).
+local function itemInfo(): unknown
+    return field(C_Item, "GetItemInfo") or field(_G, "GetItemInfo")
+end
+
+-- What a vendor pays, from one of the item APIs: "nil" while the client
+-- doesn't have the item, else GetItemInfo's 11th value.
+local function sellOf(fn: unknown, id: number): string
+    local g = get(fn, id)
+    if not g.ok then
+        return joined(g)
+    end
+    if isSecret(g.values[1]) then
+        return "secret item info: sellPrice " .. show(g.values[11])
+    end
+    if g.values[1] == nil then
+        return "nil"
+    end
+    return show(g.values[11])
+end
+
+local function onItemData(event: string, id: unknown, success: unknown)
+    if isSecret(id) or type(id) ~= "number" then
+        return
+    end
+    local e = prices[tostring(id)]
+    if not e then
+        return
+    end
+    local list = e.events
+    if type(list) == "table" then
+        local l = list :: string[]
+        l[#l + 1] = ("%s %.2fs success %s"):format(event, since(), show(success))
+    end
+    e.afterEvent = sellOf(itemInfo(), id)
+end
+
+local function onEvent(event: string, ...: unknown)
+    if not armed then
+        return
+    end
+    if event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT" then
+        onItemData(event, ...)
+        return
+    end
+    if event == "PLAYER_MONEY" then
+        onMoney()
+        return
+    end
+    if event == "CHAT_MSG_SYSTEM" or event == "CHAT_MSG_MONEY" then
+        onLine(event, (...))
+        return
+    end
+    local opened, closed = OPENS[event], CLOSES[event]
+    if opened then
+        open[opened] = true
+    elseif closed then
+        open[closed] = nil
+    end
+    if event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
+        open["i:" .. interactionName((...))] = true
+    elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
+        open["i:" .. interactionName((...))] = nil
+    end
+    -- a game error counts only at a window that explains money
+    if event == "UI_ERROR_MESSAGE" and openNames() == "none" then
+        return
+    end
+    if event:find("^TRADE_") or event == "PLAYER_TRADE_MONEY" then
+        tradeMoney(event, ...)
+    end
+    if event == "MAIL_INBOX_UPDATE" or event == "MAIL_SHOW" then
+        queueMail()
+    end
+    local extra = extraFor(event, ...)
+    note(event .. " " .. args(event, ...) .. (extra ~= "" and (" | " .. extra) or ""))
+end
+
+--------------------------------------------------------------------------------
+-- The snapshot
+--------------------------------------------------------------------------------
+
+-- Function names in every C_ namespace and global function whose name
+-- matches one of the words (lower case).
+local function namesMatching(words: string[]): string[]
+    local out: string[] = {}
+    local function fits(k: string): boolean
+        local l = k:lower()
+        for _, w in ipairs(words) do
+            if l:find(w, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+    for k, v in pairs(_G :: unknown :: { [unknown]: unknown }) do
+        if type(k) == "string" and not isSecret(v) then
+            if type(v) == "function" and fits(k) then
+                out[#out + 1] = k
+            elseif type(v) == "table" and k:match("^C_") then
+                for fk, fv in pairs(v :: { [unknown]: unknown }) do
+                    if type(fk) == "string" and type(fv) == "function" and fits(fk) then
+                        out[#out + 1] = k .. "." .. fk
+                    end
+                end
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- Which ruleset this is, every way the client might say it.
+export function ruleset(): Record
+    local r: Record = {}
+    for _, name in ipairs({
+        "GetRealmName",
+        "GetNormalizedRealmName",
+        "GetRealmID",
+        "GetNativeRealmID",
+        "SelectedRealmName",
+        "IsOnTournamentRealm",
+        "GetCurrentRegion",
+        "GetCurrentRegionName",
+    }) do
+        r[name] = call(field(_G, name))
+    end
+    -- the realm parts only, never the name
+    local full = get(UnitFullName, "player")
+    r.unitFullNameRealm = full.ok and show(full.values[2]) or joined(full)
+    local guidGot = get(UnitGUID, "player")
+    local guid = guidGot.values[1]
+    if isSecret(guid) then
+        r.guidServerID = "secret"
+    elseif type(guid) == "string" then
+        r.guidServerID = guid:match("^Player%-(%d+)%-") or "no match"
+        local info = get(GetPlayerInfoByGUID, guid)
+        r.playerInfoRealm = info.ok and show(info.values[7]) or joined(info)
+        local bnet = get(field(C_BattleNet, "GetGameAccountInfoByGUID"), guid)
+        local account = bnet.values[1]
+        r.bnetGameAccount = bnet.ok and
+            ("realmName %s, realmDisplayName %s, realmID %s, wowProjectID %s"):format(
+                show(field(account, "realmName")),
+                show(field(account, "realmDisplayName")),
+                show(field(account, "realmID")),
+                show(field(account, "wowProjectID"))
+            ) or
+            joined(bnet)
+    else
+        r.guidServerID = show(guid)
+    end
+    -- the game rules: the mode, and every rule that is active
+    local rules: Record = {}
+    r.gameRules = rules
+    for _, name in ipairs({
+        "GetActiveGameMode",
+        "GetCurrentGameModeRecordID",
+        "GetForeverExperiencePreset",
+        "IsStandard",
+        "IsHardcoreActive",
+        "IsSelfFoundAllowed",
+        "IsWoWHack",
+        "IsPlunderstorm",
+        "GetCurrentGameModeDisplayInfo",
+    }) do
+        rules[name] = call(field(C_GameRules, name))
+    end
+    local active: string[] = {}
+    local enum = field(Enum, "GameRule")
+    local isActive = field(C_GameRules, "IsGameRuleActive")
+    if type(enum) == "table" then
+        for k, v in pairs(enum :: { [unknown]: unknown }) do
+            local g = get(isActive, v)
+            if g.ok and not isSecret(g.values[1]) and g.values[1] == true then
+                active[#active + 1] = ("%s=%s"):format(
+                    tostring(k),
+                    call(field(C_GameRules, "GetGameRuleAsFloat"), v, 2)
+                )
+            end
+        end
+    end
+    table.sort(active)
+    r.activeGameRules = type(enum) == "table" and active or "no Enum.GameRule"
+    local mode = number(field(C_GameRules, "GetActiveGameMode"))
+    local modes = field(Enum, "GameMode")
+    if mode and type(modes) == "table" then
+        for k, v in pairs(modes :: { [unknown]: unknown }) do
+            if v == mode then
+                rules.gameModeName = tostring(k)
+            end
+        end
+    end
+    r.pvp = {
+        warModeFeature = call(field(C_PvP, "IsWarModeFeatureEnabled")),
+        warModeDesired = call(field(C_PvP, "IsWarModeDesired")),
+        warModeActive = call(field(C_PvP, "IsWarModeActive")),
+        zone = call(field(_G, "GetZonePVPInfo")),
+        zoneC = call(field(C_PvP, "GetZonePVPInfo")),
+        unitIsPVP = call(UnitIsPVP, "player"),
+    }
+    r.cvars = {
+        realmName = call(GetCVar, "realmName"),
+        portal = call(GetCVar, "portal"),
+        realmList = call(GetCVar, "realmList"),
+    }
+    r.C_RealmList = type(field(_G, "C_RealmList"))
+    r.functions = namesMatching({ "realm", "ruleset", "servertype", "server", "gamerule", "gamemode" })
+    return r
+end
+
+-- What a vendor pays for each item, and whether the first ask was empty.
+export function snapshotPrices(s: Ledger, ids: number[])
+    prices = {}
+    s.prices = prices
+    for _, id in ipairs(ids) do
+        local e: Record = {
+            cachedBefore = call(field(C_Item, "IsItemDataCachedByID"), id),
+            instant = call(field(C_Item, "GetItemInfoInstant"), id),
+            events = {} :: string[],
+        }
+        e.GetItemInfo = sellOf(field(_G, "GetItemInfo"), id)
+        e.C_Item = sellOf(field(C_Item, "GetItemInfo"), id)
+        if e.GetItemInfo == "nil" or e.C_Item == "nil" then
+            e.requested = call(field(C_Item, "RequestLoadItemDataByID"), id)
+        end
+        prices[tostring(id)] = e
+    end
+    after(5, function()
+        for _, id in ipairs(ids) do
+            local e = prices[tostring(id)]
+            if e then
+                e.after5s = sellOf(itemInfo(), id)
+            end
+        end
+    end)
+    local apis: { [string]: string[] } = {}
+    for _, ns in ipairs({ "C_Item", "C_MerchantFrame", "C_AuctionHouse", "C_Container", "C_TooltipInfo" }) do
+        local t = field(_G, ns)
+        local names: string[] = {}
+        if type(t) == "table" then
+            for k, v in pairs(t :: { [unknown]: unknown }) do
+                local l = type(k) == "string" and k:lower() or ""
+                if
+                    type(v) == "function" and
+                    (l:find("price") or l:find("sell") or l:find("vendor") or l:find("money") or l:find("cost"))
+                then
+                    names[#names + 1] = tostring(k)
+                end
+            end
+            table.sort(names)
+        else
+            names[1] = "missing"
+        end
+        apis[ns] = names
+    end
+    s.priceApis = apis
+end
+
+-- The clocks: local, UTC, the server's, the calendar's, the game's.
+export function clock(): Record
+    local c: Record = {}
+    local now = time()
+    c.time = now
+    c["local"] = date("%Y-%m-%d %H:%M:%S", now)
+    c.utc = date("!%Y-%m-%d %H:%M:%S", now)
+    c.weekday = date("%A (%w)", now)
+    local server = number(GetServerTime)
+    c.GetServerTime = call(GetServerTime)
+    if server then
+        c.serverMinusLocal = server - now
+        c.serverAsLocal = date("%Y-%m-%d %H:%M:%S", server)
+        c.serverAsUTC = date("!%Y-%m-%d %H:%M:%S", server)
+    end
+    c.GetServerTimeLocal = call(field(C_DateAndTime, "GetServerTimeLocal"))
+    local serverLocal = number(field(C_DateAndTime, "GetServerTimeLocal"))
+    if serverLocal then
+        c.serverLocalMinusLocal = serverLocal - now
+    end
+    local cal = get(field(C_DateAndTime, "GetCurrentCalendarTime"))
+    c.calendar = cal.ok and show(cal.values[1]) or joined(cal)
+    local t = date("*t", now)
+    local calHour, calMinute = field(cal.values[1], "hour"), field(cal.values[1], "minute")
+    if
+        not isSecret(calHour) and not isSecret(calMinute) and type(calHour) == "number" and
+        type(calMinute) == "number" and type(t) == "table"
+    then
+        c.calendarMinusLocalMinutes = calHour * 60 + calMinute - (t.hour * 60 + t.min)
+    end
+    local game = get(GetGameTime)
+    c.GetGameTime = joined(game)
+    local gh, gm = game.values[1], game.values[2]
+    if not isSecret(gh) and not isSecret(gm) and type(gh) == "number" and type(gm) == "number" and type(t) == "table" then
+        c.gameMinusLocalMinutes = gh * 60 + gm - (t.hour * 60 + t.min)
+    end
+    c.dailyReset = call(field(C_DateAndTime, "GetSecondsUntilDailyReset"))
+    c.weeklyReset = call(field(C_DateAndTime, "GetSecondsUntilWeeklyReset"))
+    c.isDST = type(t) == "table" and show(t.isdst) or "?"
+    return c
+end
+
+local function globalStrings(): { [string]: string }
+    local out: { [string]: string } = {}
+    for _, list in ipairs({ LINE_GLOBALS, SUBJECT_GLOBALS, OTHER_GLOBALS }) do
+        for _, name in ipairs(list) do
+            local v = field(_G, name)
+            out[name] = v == nil and "missing" or show(v)
+        end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Arming
+--------------------------------------------------------------------------------
+
+local function arm(s: Ledger)
+    armed = true
+    s.armed = true
+    started = GetTime()
+    recent, waiting, lastLine, repeats = {}, {}, nil, 0
+    lastMoney = number(GetMoney)
+    open = {}
+    -- the windows open already
+    if MerchantFrame and MerchantFrame:IsShown() then
+        open.merchant = true
+    end
+    if MailFrame and MailFrame:IsShown() then
+        open.mail = true
+    end
+    local f = listener or CreateFrame("Frame")
+    listener = f
+    for _, e in ipairs(EVENTS) do
+        if C_EventUtils.IsEventValid(e) then
+            pcall(f.RegisterEvent, f, e)
+        end
+    end
+    f:SetScript("OnEvent", function(_, event: string, ...: unknown)
+        local ok, err = pcall(onEvent, event, ...)
+        if not ok then
+            note("probe error on " .. event .. ": " .. clean(err, 160))
+        end
+    end)
+    installHooks(s)
+    note(("armed: money %s, open %s"):format(call(GetMoney), openNames()))
+    if open.mail then
+        queueMail()
+    end
+end
+
+export function stop()
+    local s = current
+    if s then
+        note("stopped")
+        s.armed = false
+    end
+    armed = false
+    local f = listener
+    if f then
+        f:UnregisterAllEvents()
+    end
+end
+
+export function isArmed(): boolean
+    return armed
+end
+
+local function status()
+    local s = current
+    if not s then
+        print("Ledger probe: nothing yet. /suu probe ledger starts it.")
+        return
+    end
+    print(
+        ("Ledger probe: %s; %d money changes, %d letters, %d money lines, %d trade readings, %d log lines."):format(
+            armed and "listening" or "not listening",
+            #s.money,
+            #s.mail.letters,
+            #s.system,
+            #s.trade,
+            #s.log
+        )
+    )
+end
+
+export function command(arg: string?)
+    if arg == "stop" then
+        stop()
+        print("Ledger probe: stopped. /reload to save it.")
+        return
+    end
+    if arg == "status" then
+        status()
+        return
+    end
+    if arg == "reset" then
+        stop()
+        DB.probe.ledger = nil
+        current = nil
+        letterIndex = {}
+        print("Ledger probe: forgotten.")
+        return
+    end
+    local s = record()
+    s.at = date("%Y-%m-%d %H:%M:%S")
+    s.suuui = version
+    s.build = call(GetBuildInfo)
+    push(s.sessions, s.at, 20)
+    s.ruleset = ruleset()
+    s.clock = clock()
+    snapshotPrices(s, PRICE_ITEMS)
+    s.globals = globalStrings()
+    local valid: { [string]: string } = {}
+    for _, e in ipairs(EVENTS) do
+        valid[e] = C_EventUtils.IsEventValid(e) and "valid" or "invalid"
+    end
+    s.events = valid
+    local lines, err = apiDocs.dump({ "realm", "ruleset", "gamerules", "invoice", "inbox", "repair", "trademoney", "servertime" })
+    s.docs = lines or err
+    local flags, ferr = apiDocs.flags({
+        "GetRealmName",
+        "GetNormalizedRealmName",
+        "GetRealmID",
+        "GetMoney",
+        "GetItemInfo",
+        "GetServerTime",
+        "GetCurrentCalendarTime",
+        "GetGameTime",
+        "GetInboxHeaderInfo",
+        "GetInboxInvoiceInfo",
+        "TakeInboxMoney",
+        "AutoLootMailItem",
+        "SendMail",
+        "GetRepairAllCost",
+        "RepairAllItems",
+        "GetPlayerTradeMoney",
+        "GetTargetTradeMoney",
+        "AcceptTrade",
+        "TakeTaxiNode",
+        "TaxiNodeCost",
+        "UseContainerItem",
+        "PostItem",
+        "PostCommodity",
+        "PlaceBid",
+        "ConfirmCommoditiesPurchase",
+        "CancelAuction",
+        "IsGameRuleActive",
+        "GetActiveGameMode",
+    })
+    s.docFlags = flags or ferr
+    if armed then
+        s.hooks = hookStatus
+    else
+        arm(s)
+    end
+    print(
+        ("Ledger probe: ruleset %s, clock and vendor prices saved; listening until /reload."):format(
+            show(s.ruleset.GetRealmName)
+        )
+    )
+    print(
+        "Now: open the mailbox with auction mail (open each auction letter), sell and buy at a vendor and buy one back, repair, take a flight, trade some money with someone, loot coin alone and in a group, turn in a quest with a money reward, post or buy at the auction house; then /reload. (/suu probe ledger stop ends it.)"
+    )
+end

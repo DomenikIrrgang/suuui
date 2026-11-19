@@ -1,0 +1,285 @@
+-- Units/Ledger/PriceIndex: what the Ledger makes of a ruleset's prices,
+-- kept: every item's summary and deal worked out a slice a frame (ready,
+-- told once), few at once; kept between asks; a look works out its item
+-- again at once and logs it; a new day works out everything again, a deal
+-- setting the deal parts (the summaries kept); an item gone dropped; a
+-- vendor price known later.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import PriceIndex, PASS_ITEMS from "/Units/Ledger/PriceIndex"
+import * as store from "/Core/Prices/Store"
+import type PriceMap from "/Core/Prices/Store"
+import type PriceLook from "/Core/API"
+import * as pack from "/Core/Prices/Pack"
+import * as days from "/Units/Ledger/Days"
+import expectNoErrors from "../../../helpers"
+
+const BASE = 991000
+
+type Rig = {
+    idx: PriceIndex,
+    map: PriceMap,
+    done: number,
+    vendorAsks: number,
+    pct: number,
+    vendorOn: boolean,
+    vendors: { [number]: number },
+}
+
+-- An index over `n` items: each with a usual price of 1000 (a look on each
+-- of the last 5 days) and today's look at 1000, but every tenth at 600 (a
+-- deal, 40 % under).
+local function rig(n: number): Rig
+    local today = days.dayOf()
+    local map: PriceMap = {}
+    for i = 1, n do
+        local id = BASE + i
+        local s: string? = nil
+        for k = 5, 1, -1 do
+            s = pack.record(s, today - k, 3, 1000, 0, 1, 1)
+        end
+        map[id] = pack.record(s, today, 2, i % 10 == 0 and 600 or 1000, 0, 4, 2)
+    end
+    local r: Rig = { map = map, done = 0, vendorAsks = 0, pct = 25, vendorOn = true, vendors = {} } :: Rig
+    -- (over a map of its own, read as the Ledger reads the price store's)
+    r.idx = PriceIndex.new({
+        items = function(): number[]
+            local out: number[] = {}
+            for id in pairs(r.map) do
+                out[#out + 1] = id
+            end
+            return out
+        end,
+        latest = function(itemID: number): PriceLook?
+            return store.latest(r.map[itemID])
+        end,
+        usual = function(itemID: number): number?
+            return store.usualOf(r.map[itemID], days.dayOf())
+        end,
+        settings = function(): (number, boolean)
+            return r.pct, r.vendorOn
+        end,
+        vendor = function(itemID: number): number?
+            r.vendorAsks += 1
+            return r.vendors[itemID]
+        end,
+        every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+            return C_Timer.NewTicker(seconds, fn)
+        end,
+        done = function()
+            r.done += 1
+        end,
+    })
+    return r
+end
+
+@test("a pass: every item worked out a slice a frame, then ready and told once; the deals furthest under first")
+local function pass()
+    local n = PASS_ITEMS * 3 + 7
+    local r = rig(n)
+    local idx = r.idx
+    expect(idx:Ready()).toBe(false)
+    expect(idx:Prepare(0)).toBe(false)
+    expect({ idx:Progress() }).toEqual({ 0, n })
+    mock.advanceFrames(1)
+    expect(idx:Ready()).toBe(false)
+    local done = idx:Progress()
+    expect(done).toBe(PASS_ITEMS)
+    mock.advanceFrames(4)
+    expect(idx:Ready()).toBe(true)
+    expect(r.done).toBe(1)
+    -- (asked again while ready: nothing to do, nothing told)
+    expect(idx:Prepare(0)).toBe(true)
+    mock.advanceFrames(2)
+    expect(r.done).toBe(1)
+    local sm = assert(idx:Get(BASE + 10))
+    expect(sm.usual).toBe(1000)
+    expect(sm.change).toBe(-40)
+    expect(sm.under).toBe(40)
+    expect(sm.underVendor).toBe(false)
+    local deals = idx:Deals()
+    expect(#deals).toBe(math.floor(n / 10))
+    expect(deals[1].itemID).toBe(BASE + 10)
+    expect(deals[1].order).toBe(40)
+    expectNoErrors()
+end
+
+@test("few items left: worked out at once")
+local function few()
+    local r = rig(12)
+    expect(r.idx:Prepare(20)).toBe(true)
+    expect(r.idx:Ready()).toBe(true)
+    -- (nothing ran in the background)
+    expect(r.idx.ticker).toBeNil()
+    expect(#r.idx:Deals()).toBe(1)
+    expectNoErrors()
+end
+
+@test("the items worked out since the pass began (a Scan all's, as it was read) skipped: ready at once when that's all of them; the rest a slice a frame, the skipped not counted")
+local function skipsWorkedOut()
+    local n = PASS_ITEMS * 2 + 50
+    local r = rig(n)
+    local idx = r.idx
+    idx:Check()
+    -- (as the Ledger reads a scan of every item: each one touched)
+    for i = 1, n do
+        idx:Touch(BASE + i, true)
+    end
+    expect(idx:Prepare(0)).toBe(true)
+    expect(idx.ticker).toBeNil()
+    expect(r.done).toBe(0)
+    -- a scan that found only some: those skipped, the others a slice a frame
+    local other = rig(n)
+    local oi = other.idx
+    oi:Check()
+    for i = 1, PASS_ITEMS + 60 do
+        oi:Touch(BASE + i, true)
+    end
+    expect(oi:Prepare(0)).toBe(false)
+    mock.advanceFrames(1)
+    expect(oi:Ready()).toBe(true)
+    expect(other.done).toBe(1)
+    expectNoErrors()
+end
+
+@test("kept between asks: the same summaries and deals, nothing worked out again")
+local function kept()
+    local r = rig(50)
+    local idx = r.idx
+    idx:Prepare(100)
+    local sm = idx:Get(BASE + 3)
+    local deals = idx:Deals()
+    local asks, gen = r.vendorAsks, idx.gen
+    expect(idx:Get(BASE + 3)).toBe(sm)
+    expect(idx:Deals()).toBe(deals)
+    expect(idx:Prepare(0)).toBe(true)
+    expect(r.vendorAsks).toBe(asks)
+    expect(idx.gen).toBe(gen)
+    expectNoErrors()
+end
+
+@test("a look: its item worked out again at once and logged; the deals follow")
+local function touched()
+    local r = rig(50)
+    local idx = r.idx
+    idx:Prepare(100)
+    local before = assert(idx:Get(BASE + 3))
+    local deals = idx:Deals()
+    expect(#deals).toBe(5)
+    -- a search finds it at 500 now
+    r.map[BASE + 3] = pack.record(r.map[BASE + 3], days.dayOf(), 4, 500, 0, 1, 1)
+    local sm = assert(idx:Touch(BASE + 3))
+    expect(sm).never.toBe(before)
+    expect(sm.look.low).toBe(500)
+    expect(sm.under).toBe(50)
+    expect(idx.log[#idx.log]).toBe(BASE + 3)
+    local now = idx:Deals()
+    expect(now).never.toBe(deals)
+    expect(#now).toBe(6)
+    expect(now[1].itemID).toBe(BASE + 3)
+    -- a new item
+    r.map[BASE + 99] = pack.record(nil, days.dayOf(), 1, 70, 0, 1, 1)
+    expect(assert(idx:Touch(BASE + 99)).usual).toBe(70)
+    expectNoErrors()
+end
+
+@test("a new day: everything worked out again; a deal setting: the deal parts again, the summaries kept")
+local function invalidated()
+    local r = rig(PASS_ITEMS + 50)
+    local idx = r.idx
+    idx:Prepare(0)
+    mock.advanceFrames(3)
+    expect(idx:Ready()).toBe(true)
+    local gen = idx.gen
+    local sm = assert(idx:Get(BASE + 10))
+    -- the deal settings: 45 % (the 40 % ones are no deals now; the module
+    -- tells the index, which checks once a frame)
+    r.pct = 45
+    idx:Unchecked()
+    expect(idx:Ready()).toBe(false)
+    expect(idx.gen).toBe(gen + 1)
+    expect(#idx.log).toBe(0)
+    expect(idx:Prepare(0)).toBe(false)
+    mock.advanceFrames(3)
+    expect(idx:Ready()).toBe(true)
+    expect(r.done).toBe(2)
+    expect(idx:Get(BASE + 10)).toBe(sm)
+    expect(sm.under).toBeNil()
+    expect(idx:Deals()).toEqual({})
+    -- the day turned (as it was yesterday's): the summaries too
+    idx.day -= 1
+    idx:Unchecked()
+    expect(idx:Ready()).toBe(false)
+    expect(idx.gen).toBe(gen + 2)
+    expect(next(idx.items)).toBeNil()
+    expect(idx:Prepare(0)).toBe(false)
+    mock.advanceFrames(3)
+    expect(idx:Ready()).toBe(true)
+    expect(idx:Get(BASE + 10)).never.toBe(sm)
+    expectNoErrors()
+end
+
+@test("an item gone (the prune left it no look): dropped, from the deals too")
+local function gone()
+    local r = rig(30)
+    local idx = r.idx
+    idx:Prepare(100)
+    expect(#idx:Deals()).toBe(3)
+    r.map[BASE + 10] = nil
+    idx:Forget(BASE + 10)
+    expect(idx:Ready()).toBe(false)
+    expect(idx:Prepare(10)).toBe(true)
+    expect(idx.items[BASE + 10]).toBeNil()
+    expect(#idx:Deals()).toBe(2)
+    expect(idx:Get(BASE + 10)).toBeNil()
+    -- (an item not worked out yet: nothing to do)
+    idx:Forget(BASE + 500)
+    expect(idx:Ready()).toBe(true)
+    expectNoErrors()
+end
+
+@test("a vendor price known later (the client loaded the item): its deal part again, logged when it changed")
+local function redeal()
+    local r = rig(10)
+    local idx = r.idx
+    idx:Prepare(100)
+    local sm = assert(idx:Get(BASE + 2))
+    expect(sm.underVendor).toBe(false)
+    local logged = #idx.log
+    r.vendors[BASE + 2] = 1200
+    idx:Redeal(BASE + 2)
+    expect(sm.underVendor).toBe(true)
+    expect(sm.vendor).toBe(1200)
+    expect(#idx.log).toBe(logged + 1)
+    local deals = idx:Deals()
+    expect(#deals).toBe(2)
+    expect(deals[2].itemID).toBe(BASE + 2)
+    -- known already: nothing again
+    idx:Redeal(BASE + 2)
+    expect(#idx.log).toBe(logged + 1)
+    expectNoErrors()
+end
+
+@test("the day and the deal settings checked once a frame: a draw of many rows reads the settings once")
+local function checkedOnce()
+    local r = rig(50)
+    local idx = r.idx
+    idx:Prepare(100)
+    mock.advanceFrames(1)
+    local reads = 0
+    local settings = idx.o.settings
+    mock.stub(idx.o, "settings", function(): (number, boolean)
+        reads += 1
+        return settings()
+    end)
+    for i = 1, 50 do
+        idx:Get(BASE + i)
+    end
+    expect(reads).toBe(1)
+    -- the next frame: once more
+    mock.advanceFrames(1)
+    idx:Get(BASE + 1)
+    expect(reads).toBe(2)
+    expectNoErrors()
+end

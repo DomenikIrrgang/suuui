@@ -2,7 +2,8 @@
 -- Your bags (step 2.5a, design board "Bags"): one window, every bag's slots
 -- in one grid (backpack, bags 1-4, the reagent bag; the keyring if you want
 -- it), "18 free of 80", search (the game's own item search) and a sort
--- (SuuUI's own orders or the game's; see Sorting), your money in the foot. It opens and closes with Blizzard's bags
+-- (SuuUI's own orders or the game's; see Sorting), your money in the foot
+-- (a click: the Ledger at Gold, while it is on). It opens and closes with Blizzard's bags
 -- (B, the bag buttons, the mailbox, a vendor, the bank): Blizzard's bag
 -- frames still open and close, under a hidden parent, and SuuUI's window
 -- follows them. Bottom right, movable in edit mode.
@@ -18,10 +19,15 @@
 -- a banker), so the picker in the bags window's header shows another
 -- character's bags or bank from anywhere, read only and dated. "All
 -- characters" turns the search into a list of everything found on every
--- character, and where. Settings › Bags › Characters forgets one.
+-- character, and where (their mail too). Settings › Bags › Characters
+-- forgets one. Each character's bags and bank are SuuUI.Holdings' "bags"
+-- and "bank" while this module is on (each slot saved with whether it is
+-- soulbound, for the Ledger's "What it's worth").
 --
 -- Item counts: an item's tooltip says which of your characters has how
--- many, and where (bags, bank, equipped), from the same saved copies.
+-- many, and where (bags, bank, mail, equipped), from the same saved copies;
+-- the mail's from the mail module (SuuUI.Holdings' "mail": none shown while
+-- that module is off).
 --
 -- Sell junk: at a vendor, with grey items in your bags, a button in the
 -- foot sells them one at a time, each slot read again just before it sells
@@ -46,7 +52,7 @@
 -- Bags/Characters and Bags/Sort are the pure logic under Saved and SortRun.
 
 import SuuUI, Module from "/Core/API"
-import type SettingsSection, Position, Inventory, ItemSlotSkin, SlotSection, ItemSlot from "/Core/API"
+import type SettingsSection, Position, Inventory, ItemSlotSkin, SlotSection, ItemSlot, Holding from "/Core/API"
 import type Overlay from "wowlua:secure"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
@@ -67,6 +73,7 @@ import type SortState, SortCover from "./Bags/SortRun"
 import Windows from "./Bags/Windows"
 
 local BAGS = SuuUI.Services.BAGS
+local LEDGER = SuuUI.Services.LEDGER
 
 local UI = SuuUI.UI
 
@@ -946,6 +953,28 @@ export class BagsModule extends Module<typeof(DEFAULTS)>
         return view
     end
 
+    -- The money in the foot (0.48): a click opens the Ledger at Gold, while
+    -- the Ledger is on (its service there); the tooltip says so.
+    function LedgerMoney()
+        local inv = self.inv
+        if not inv then
+            return
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local open = svc and svc.Open
+        if not open then
+            inv:SetMoneyClick(nil)
+            return
+        end
+        inv:SetMoneyClick(function()
+            local now = SuuUI.UseService(LEDGER)
+            local fn = now and now.Open
+            if fn then
+                fn("gold")
+            end
+        end, { title = "Money", meta = "Click: the Ledger" })
+    end
+
     -- A saved character to forget (Settings › Bags › Characters).
     function ForgetRow(parent: Frame): ForgetRow
         return self.savedBags:ForgetRow(parent)
@@ -964,6 +993,13 @@ export class BagsModule extends Module<typeof(DEFAULTS)>
                 self.windows:Toggle()
             end,
         })
+        -- every character's bags and bank, read only (SuuUI.Holdings: the
+        -- Ledger's "What it's worth"); gone while the module is off
+        for _, place in ipairs({ "bags", "bank" }) do
+            SuuUI.Holdings.Provide(self, place, function(key: string): Holding?
+                return self.savedBags:Holding(key, place)
+            end)
+        end
         self.windows:Build()
         local inv, bank = self.inv, self.bank
         if not (inv and bank) then
@@ -1234,6 +1270,13 @@ export class BagsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
+        -- the money: a way into the Ledger while it is on
+        self:LedgerMoney()
+        self:On("SUUUI_SERVICE_CHANGED", function(_, name)
+            if name == "ledger" then
+                self:LedgerMoney()
+            end
+        end)
         self:OnGameEvent("PLAYER_MONEY", function()
             self:Char().money = GetMoney()
             if inv:IsShown() then

@@ -1,0 +1,78 @@
+-- Core/Prices/Days: the price store's calendar: day numbers and dates both
+-- ways, the weekday, the four periods of a day by the computer's clock,
+-- when a period starts.
+
+import test, expect, cases from "wowlua:test"
+import * as days from "/Core/Prices/Days"
+import expectNoErrors from "../../../helpers"
+
+@test("a date's day number and back")
+@cases({
+    { 1970, 1, 1, 0 },
+    { 1969, 12, 31, -1 },
+    { 2000, 3, 1, 11017 },
+    { 2024, 2, 29, 19782 },
+    { 2026, 11, 18, 20775 },
+})
+local function dayNumbers(y: number, m: number, d: number, n: number)
+    expect(days.dayNumber(y, m, d)).toBe(n)
+    local y2, m2, d2 = days.dateOf(n)
+    expect({ y2, m2, d2 }).toEqual({ y, m, d })
+end
+
+@test("every day of four years goes there and back")
+local function roundTrips()
+    local start = days.dayNumber(2023, 1, 1)
+    for n = start, start + 4 * 366 do
+        local y, m, d = days.dateOf(n)
+        expect(days.dayNumber(y, m, d)).toBe(n)
+    end
+    expectNoErrors()
+end
+
+@test("the weekday: 1 Monday … 7 Sunday")
+local function weekdays()
+    -- 1 January 1970 was a Thursday; 18 November 2026 is a Wednesday
+    expect(days.weekday(0)).toBe(4)
+    expect(days.weekday(days.dayNumber(2026, 11, 18))).toBe(3)
+    expect(days.weekday(days.dayNumber(2026, 11, 22))).toBe(7)
+    expect(days.weekday(days.dayNumber(2026, 11, 23))).toBe(1)
+    expect(days.weekday(-1)).toBe(3)
+    expect(days.WEEKDAYS[days.weekday(days.dayNumber(2026, 11, 17))]).toBe("Tuesday")
+end
+
+@test("the periods: Night 0–6, Morning 6–10, Noon 10–16, Evening 16–24")
+@cases({ { 0, 1 }, { 5, 1 }, { 6, 2 }, { 9, 2 }, { 10, 3 }, { 15, 3 }, { 16, 4 }, { 23, 4 } })
+local function periods(hour: number, period: number)
+    expect(days.periodOfHour(hour)).toBe(period)
+end
+
+@test("a time's day and period, by the computer's clock")
+local function dayOf()
+    local at = time({ year = 2026, month = 11, day = 18, hour = 7, min = 30 })
+    local day, period = days.dayOf(at)
+    expect(day).toBe(days.dayNumber(2026, 11, 18))
+    expect(period).toBe(days.MORNING)
+    expect(days.PERIODS[period]).toBe("Morning")
+    day, period = days.dayOf(time({ year = 2026, month = 11, day = 18, hour = 23, min = 59 }))
+    expect(period).toBe(days.EVENING)
+    -- now
+    local now, nowPeriod = days.dayOf()
+    local t = date("*t") :: { year: number, month: number, day: number, hour: number }
+    expect(now).toBe(days.dayNumber(t.year, t.month, t.day))
+    expect(nowPeriod).toBe(days.periodOfHour(t.hour))
+    expectNoErrors()
+end
+
+@test("when a period of a day starts: its first second, the same day and period back")
+@cases({ { 1, 0 }, { 2, 6 }, { 3, 10 }, { 4, 16 } })
+local function timeOf(period: number, hour: number)
+    local day = days.dayNumber(2026, 11, 18)
+    local at = days.timeOf(day, period)
+    local t = date("*t", at) :: { year: number, month: number, day: number, hour: number, min: number }
+    expect({ t.year, t.month, t.day, t.hour, t.min }).toEqual({ 2026, 11, 18, hour, 0 })
+    local d, p = days.dayOf(at)
+    expect(d).toBe(day)
+    expect(p).toBe(period)
+    expectNoErrors()
+end

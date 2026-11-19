@@ -1,0 +1,62 @@
+-- Core/Rulesets.wowlua
+-- Forever's rulesets (asked 2026-11-18): it has no realms, only four
+-- rulesets (Normal, PvP, Roleplay, PvP Roleplay), and each one has its own
+-- auction house. What SuuUI keeps per house (prices, deals, watches; the
+-- auction house's own price memory) is keyed by `current()`, the one
+-- function that says which ruleset this character plays on, and shown by
+-- `displayName`: "Normal Ruleset", never "Normal house".
+-- The key is GetRealmName(). Probed 2026-11-18: on Forever it is the server
+-- behind the ruleset ("CAMWOW EU5 Realm 3 PvE", realm ID 6945); the ruleset
+-- is the last word of it. Only "PvE" (Normal) was seen; the other words are
+-- the client's usual ones (PvP, RP, RPPvP) and unchecked. A name that ends
+-- in none of them is shown whole: "Somewhere Ruleset".
+
+-- This character's ruleset, as a key ("?" when the client tells nothing).
+export function current(): string
+    local name = GetRealmName()
+    if type(name) ~= "string" or name == "" then
+        return "?"
+    end
+    return name
+end
+
+local KINDS: {[string]: string} = {
+    pve = "Normal",
+    normal = "Normal",
+    pvp = "PvP",
+    rp = "Roleplay",
+    roleplay = "Roleplay",
+    rppvp = "PvP Roleplay",
+    ["rp-pvp"] = "PvP Roleplay",
+    pvprp = "PvP Roleplay",
+}
+
+-- The ruleset a key names ("Normal" for "CAMWOW EU5 Realm 3 PvE"), nil when
+-- its last word isn't one.
+export function kind(key: string): string?
+    local lower = key:lower()
+    local two = lower:match("(%a+ %a+)$")
+    if two == "pvp roleplay" or two == "rp pvp" then
+        return "PvP Roleplay"
+    end
+    local last = lower:match("([%a%-]+)$")
+    return last and KINDS[last] or nil
+end
+
+-- A ruleset's name as SuuUI shows it ("Normal Ruleset"); nil: this one's.
+export function displayName(key: string?): string
+    local k = key or current()
+    local named = kind(k)
+    if named then
+        return named .. " Ruleset"
+    end
+    return k .. " Ruleset"
+end
+
+-- The ruleset of a character's key ("Name - Realm", Core/Settings), for
+-- data kept before it said its ruleset itself: while the key is the realm,
+-- the realm is the ruleset. Nil when the key has no realm part.
+export function ofCharKey(charKey: string): string?
+    local realm = charKey:match("^.- %- (.+)$")
+    return realm
+end

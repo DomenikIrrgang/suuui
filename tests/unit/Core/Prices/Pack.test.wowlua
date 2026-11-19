@@ -1,0 +1,176 @@
+-- Core/Prices/Pack: an item's looks as one string: numbers in printable
+-- characters, a look recorded (the same period merged, a later one in
+-- front, an earlier one put in its place), read back, cut at 60 days.
+
+import test, expect, cases from "wowlua:test"
+import * as pack from "/Core/Prices/Pack"
+import type Points from "/Core/Prices/Pack"
+import expectNoErrors from "../../../helpers"
+
+const DAY = 20775
+
+-- The looks of `s` as rows { day, period, low, most, qty, n }.
+local function rows(s: string?, oldest: number?): number[][]
+    local p: Points = pack.decode(s, pack.newPoints(), oldest)
+    local out: number[][] = {}
+    for k = 1, p.count do
+        out[k] = { p.day[k], p.period[k], p.low[k], p.most[k], p.qty[k], p.n[k] }
+    end
+    return out
+end
+
+@test("a number in characters and back, as short as it can be")
+@cases({
+    { 0, 1 },
+    { 63, 1 },
+    { 64, 2 },
+    { 1791, 2 },
+    { 1792, 3 },
+    { 50175, 3 },
+    { 50176, 4 },
+    { 1404927, 4 },
+    { 1404928, 5 },
+    { 9999999999, 7 },
+})
+local function numbers(value: number, length: number)
+    local s = pack.encodeNumber(value)
+    expect(#s).toBe(length)
+    local back, after = pack.readNumber(s, 1)
+    expect(back).toBe(value)
+    expect(after).toBe(length + 1)
+end
+
+@test("the characters are printable and need no escape in a SavedVariables file")
+local function printable()
+    local all = ""
+    for v = 0, 5000, 7 do
+        all = all .. pack.encodeNumber(v * 997)
+    end
+    expect(all:find('["\\]') == nil).toBe(true)
+    expect(all:find("[^\33-\126]") == nil).toBe(true)
+    -- one after another, read back in order
+    local s = pack.encodeNumber(5) .. pack.encodeNumber(123456) .. pack.encodeNumber(0)
+    local a, i = pack.readNumber(s, 1)
+    local b, j = pack.readNumber(s, i)
+    local c, k = pack.readNumber(s, j)
+    expect({ a, b, c, k }).toEqual({ 5, 123456, 0, #s + 1 })
+    -- past the end: a last digit 0, never a loop
+    expect({ pack.readNumber("", 1) }).toEqual({ 0, 2 })
+    local cut = pack.encodeNumber(5000):sub(1, 1)
+    expect({ pack.readNumber(cut, 1) }).toEqual({ math.floor(5000 / 64 / 28) * 64, 3 })
+end
+
+@test("the first look; the same period again: the lowest kept, the newest look's counts")
+local function samePeriod()
+    local s = pack.record(nil, DAY, 2, 1500, 0, 40, 3)
+    expect(rows(s)).toEqual({ { DAY, 2, 1500, 0, 40, 3 } })
+    -- dearer: the price stays, the counts are the newer look's
+    s = pack.record(s, DAY, 2, 1700, 0, 35, 2)
+    expect(rows(s)).toEqual({ { DAY, 2, 1500, 0, 35, 2 } })
+    -- cheaper, with what most sell it for
+    s = pack.record(s, DAY, 2, 1200, 1600, 50, 4)
+    expect(rows(s)).toEqual({ { DAY, 2, 1200, 1600, 50, 4 } })
+    -- counts not known (a search's row): the earlier ones stay, and so does most
+    s = pack.record(s, DAY, 2, 1300, 0, 0, 0)
+    expect(rows(s)).toEqual({ { DAY, 2, 1200, 1600, 50, 4 } })
+    -- the same look again: the same string
+    local again = pack.record(s, DAY, 2, 1200, 1600, 50, 4)
+    expect(again).toBe(s)
+    -- qty and n the same: n left out (one character shorter)
+    local one = pack.record(nil, DAY, 1, 50000, 0, 1, 1)
+    local two = pack.record(nil, DAY, 1, 50000, 0, 1, 2)
+    expect(#one).toBe(#two - 1)
+    expect(rows(one)).toEqual({ { DAY, 1, 50000, 0, 1, 1 } })
+end
+
+@test("later periods and days go in front; the days between told as a step back")
+local function later()
+    local s = pack.record(nil, DAY, 1, 1000, 0, 10, 2)
+    s = pack.record(s, DAY, 3, 900, 0, 12, 2)
+    s = pack.record(s, DAY + 1, 1, 950, 1200, 8, 1)
+    s = pack.record(s, DAY + 9, 4, 990, 0, 7, 7)
+    expect(rows(s)).toEqual({
+        { DAY + 9, 4, 990, 0, 7, 7 },
+        { DAY + 1, 1, 950, 1200, 8, 1 },
+        { DAY, 3, 900, 0, 12, 2 },
+        { DAY, 1, 1000, 0, 10, 2 },
+    })
+    -- the newest
+    expect({ pack.newest(s) }).toEqual({ DAY + 9, 4, 990, 0, 7, 7 })
+    expect((pack.newest(nil))).toBeNil()
+    expect((pack.newest(""))).toBeNil()
+    -- a day's looks a step back take one character for their head
+    local short = pack.record(nil, DAY, 1, 1000, 0, 10, 10)
+    expect(#pack.record(short, DAY + 1, 1, 1000, 0, 10, 10) - #short).toBe(1 + 2 + 1)
+    -- only those from a day on
+    expect(rows(s, DAY + 1)).toEqual({ { DAY + 9, 4, 990, 0, 7, 7 }, { DAY + 1, 1, 950, 1200, 8, 1 } })
+    local p, stop = pack.decode(s, pack.newPoints(), DAY + 2)
+    expect(p.count).toBe(1)
+    expect(stop > 1 and stop <= #s).toBe(true)
+end
+
+@test("an earlier period than the newest (the clock went back): put in its place, or merged")
+local function earlier()
+    local s = pack.record(nil, DAY, 1, 1000, 0, 10, 2)
+    s = pack.record(s, DAY + 2, 3, 900, 0, 12, 2)
+    -- between the two
+    s = pack.record(s, DAY + 1, 2, 800, 0, 5, 5)
+    -- the same day as the newest, an earlier period
+    s = pack.record(s, DAY + 2, 1, 700, 0, 6, 6)
+    -- older than all
+    s = pack.record(s, DAY - 3, 4, 1100, 0, 1, 1)
+    -- one that is there: merged
+    s = pack.record(s, DAY + 1, 2, 750, 1000, 9, 3)
+    expect(rows(s)).toEqual({
+        { DAY + 2, 3, 900, 0, 12, 2 },
+        { DAY + 2, 1, 700, 0, 6, 6 },
+        { DAY + 1, 2, 750, 1000, 9, 3 },
+        { DAY, 1, 1000, 0, 10, 2 },
+        { DAY - 3, 4, 1100, 0, 1, 1 },
+    })
+    -- what most sell it for under the lowest: dropped
+    local odd = pack.record(nil, DAY, 1, 1000, 500, 10, 2)
+    expect(rows(odd)).toEqual({ { DAY, 1, 1000, 0, 10, 2 } })
+    expectNoErrors()
+end
+
+@test("cut at a day: the older looks go; nothing left is nil")
+local function prune()
+    local s = pack.record(nil, DAY - 70, 1, 1000, 0, 10, 2)
+    s = pack.record(s, DAY - 61, 2, 1000, 0, 10, 2)
+    s = pack.record(s, DAY - 10, 3, 900, 0, 12, 2)
+    s = pack.record(s, DAY, 4, 800, 0, 3, 3)
+    local cut = pack.prune(s, DAY - 59)
+    expect(rows(cut)).toEqual({ { DAY, 4, 800, 0, 3, 3 }, { DAY - 10, 3, 900, 0, 12, 2 } })
+    -- nothing to cut: the same string
+    expect(pack.prune(cut, DAY - 59)).toBe(cut)
+    -- all of it: nil
+    expect(pack.prune(s, DAY + 1)).toBeNil()
+    expect(pack.prune(nil, DAY)).toBeNil()
+    -- written back whole
+    local p = pack.decode(s, pack.newPoints())
+    expect(pack.encodePoints(p)).toBe(s)
+    expect(pack.encodePoints(pack.newPoints())).toBeNil()
+end
+
+@test("the daily lows of the last days that have a look, read from the front only: the lowest of each day, later days skipped, the kept days only, the buffer cleared")
+local function recentLows()
+    local s = pack.record(nil, DAY - 70, 1, 5, 0, 1, 1)
+    for k = 20, 0, -1 do
+        -- two looks a day, the second dearer; what most sell it for on some
+        s = pack.record(s, DAY - k, 1, 100 + k, k % 2 == 0 and 150 or 0, 4, 2)
+        s = pack.record(s, DAY - k, 3, 200 + k, 0, 4, 4)
+    end
+    -- (the clock went back: a look tomorrow)
+    s = pack.record(s, DAY + 1, 1, 1, 0, 1, 1)
+    local out: number[] = { 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9 }
+    expect(pack.recentLows(s, DAY, DAY - 59, 5, out)).toBe(5)
+    expect(out).toEqual({ 100, 101, 102, 103, 104 })
+    -- as many as there are within the kept days
+    expect(pack.recentLows(s, DAY, DAY - 59, 60, out)).toBe(21)
+    expect(out[21]).toBe(120)
+    expect(pack.recentLows(s, DAY, DAY - 3, 60, out)).toBe(4)
+    expect(pack.recentLows(nil, DAY, DAY - 59, 5, out)).toBe(0)
+    expect(out).toEqual({})
+    expectNoErrors()
+end

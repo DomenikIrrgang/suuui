@@ -121,6 +121,12 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V55](#v55) | VM | low | as designed | `mock.advanceTime` runs no `OnUpdate`: a fade stands still while the clock moves |
 | [V56](#v56) | VM | low | open (unverified) | `SetText`'s `OnTextChanged` arrives a frame later |
 | [V57](#v57) | VM | low | open | `SetFontObject` keeps a font string's colour; the game's sets the font object's |
+| [V58](#v58) | VM | low | open | `wowlua screenshot` draws no `Line` regions |
+| [V59](#v59) | VM | low | not a gap (as the game) | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
+| [V60](#v60) | VM | low | open | `/use <bag> <slot>` at a vendor sells nothing |
+| [V61](#v61) | VM | medium | open | A trade has no money and never completes |
+| [V62](#v62) | VM | low | open | `GetSendMailPrice` leaves out the money attached; a send can't fail |
+| [V63](#v63) | VM | low | open | A loot window has no coin |
 
 ## Test runner and mock issues
 
@@ -412,6 +418,14 @@ The engine has no group loot: nothing starts a roll (`START_LOOT_ROLL`), `GetLoo
 *Status: open (0.13.15; SuuUI measures without it, `tools/perf.py`).*
 
 With `"monitor": true` in the profile `wowlua test` builds from (SuuUI's `test` profile since `b9348dff`), every `SetScript`, `HookScript` and timer the addon makes runs inside the monitor's timing wrapper (`wowlua/runtime.lua`, `mon.setScript`: a table lookup, `perf.begin`, `perf.finish`, about 50 instructions a call). The wrapper is a file of the addon's own folder, so in a `--profile-out` profile it is the outermost frame of the addon's on every wrapped script, and whatever runs below it counts as the addon's: the test files' own scripts too (they are built with the monitor as well), and through them the game's handlers for the events they fire. The perf scenarios drive each frame from an `OnUpdate` in `tests/perf/util.wowlua`; with the monitor on, everything that driver fires, Blizzard's UI included, was SuuUI's. `python3 -I tools/perf.py run idle` on `fa15e335`, SuuUI's instructions a frame: 977 with the monitor and runtime checks, 931 with the monitor only, 455 with the checks only, 409 with neither (and a phase driven by events far more: the raid boss fight 9,640 under the `test` profile, 2,064 with neither). Wanted: the wrapper and the code under a test file's scripts kept apart in the profile (the wrapper as wowlua's own, not the addon's), or a way to choose the profile per run (wowlua#266); until then `tools/perf.py run` rewrites the `test` profile for the run (`tests/perf/README.md`). (perf scenarios 2026-11-16)
+
+<a id="r26"></a>
+
+### R26. `GetMouseButtonClicked()` answers nil inside a click
+
+*Status: open (0.13.15; found 2026-11-18, the Ledger's Alt-click).*
+
+Inside a button's `OnClick` that `mock.click(button, "RightButton")` runs, `GetMouseButtonClicked()` answers nil (the handler gets `"RightButton"` as its argument). In the game it names the button that clicked, in any script the click runs (as documented; still to be checked in game on Forever) (the game's `HandleModifiedItemClick`, called from a bag slot's click, has no button argument; SuuUI's Alt-click reads it there to leave Alt-right-click to the game). The Ledger's test (`tests/unit/Units/Ledger/Entry.test.wowlua`) stubs it for the right-click case. Wanted: `mock.click` setting what `GetMouseButtonClicked` answers while the click's scripts run. (units-trade)
 
 ## Compiler and checker issues
 
@@ -1040,6 +1054,54 @@ Since V3's fix, `EditBox:SetText` runs `OnTextChanged` on the next frame, not in
 
 In the game, `FontString:SetFontObject(font)` gives the string the font object's colour (and shadow) as well as its face and size: a text coloured with `SetTextColor` before reads the font object's colour after. The emulator's keeps the colour set before: a `GameFontNormal` string set to red with `SetTextColor(1, 0, 0)`, then `SetFontObject("GameFontHighlightSmall")` (white), still reads `1, 0, 0` (wowlua 0.13.15). Code that reads a text's colour to decide its style must read it before it puts a font object on (`src/UI/Reskin/Pass.wowlua`, `reskinText`), and a test of the game reusing a text in another role sets the game's colour itself after `SetFontObject` (`tests/unit/UI/Reskin/Pass.test.wowlua`, "a text the game gives another font is styled from it again, once": `title:SetTextColor(1, 0.82, 0)` after `SetFontObject("GameFontNormalSmall")`). (reskin text styles 2026-11-16)
 
+<a id="v58"></a>
+
+### V58. `wowlua screenshot` draws no `Line` regions
+
+*Status: open (0.13.15).*
+
+A `Line` (`frame:CreateLine`, `SetStartPoint`/`SetEndPoint`, `SetThickness`, a colour texture) is kept and answers its points, but the screenshot renderer leaves it out: a 6px red line over a blue square renders as the square alone. The Ledger's charts (`src/UI/LineChart.wowlua`: the price history, the gold line, the sparklines) show their gridlines, labels, marks, crosshair and dots in a screenshot but no lines; their tests check the lines' count, points and tokens instead (`tests/unit/UI/LineChart.test.wowlua`). (the Ledger window 2026-11-18)
+
+<a id="v59"></a>
+
+### V59. A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes
+
+*Status: not a gap: the engine does as the game (0.13.15).*
+
+An item defined with `{ cached = false, delay = d }` is cached `d` seconds after `C_Item.RequestLoadItemDataByID`, and the engine answers with `ITEM_DATA_LOAD_RESULT(itemID, true)`, not `GET_ITEM_INFO_RECEIVED`. So does the game: the ledger probe (`/suu probe ledger`, 2026-11-18) saw only `ITEM_DATA_LOAD_RESULT` for requested items, and `GET_ITEM_INFO_RECEIVED` only for a load `GetItemInfo` started (and an item that doesn't exist, with `success` false). The Ledger listened for `GET_ITEM_INFO_RECEIVED` alone, so in game its names never filled in, and its tests hid that by firing the event by hand. It hears both now (Ledger/Names), and the tests wait for the engine's answer (`tests/unit/Units/Ledger/PricesPage.test.wowlua`, `ItemPage.test.wowlua`, `TransactionsPage.test.wowlua`). (the Ledger window 2026-11-18; corrected 2026-11-19)
+
+<a id="v60"></a>
+
+### V60. `/use <bag> <slot>` at a vendor sells nothing
+
+*Status: open (0.13.15).*
+
+In the game a right-click on a bag item at a vendor sells it: the bag slot's secure `/use` runs `C_Container.UseContainerItem(bag, slot)` from Blizzard's code (the Ledger's post-hook on it sees every sale, `/suu probe ledger` 2026-11-18). In the engine `mock.slash("/use 0 1")` with a vendor open changes nothing (no lock, no money, no refusal), and `C_Container.UseContainerItem` from a test is protected (the engine's list of protected globals). The Ledger's vendor test (`tests/unit/Units/Ledger/Recorder.test.wowlua`) calls its hook's handler with the bag slot, then `mock.sell(bag, slot)` for the server's answer. `mock.sell` alone is a sale the hook never saw (another addon's call through a reference taken before the hook): the Ledger's buyback-list tests use it so (2026-11-19). Wanted: the secure `/use` of a bag slot reaching `UseContainerItem` (sold at a vendor), as in the game. (the Ledger's transactions 2026-11-18)
+
+<a id="v61"></a>
+
+### V61. A trade has no money and never completes
+
+*Status: open (0.13.15).*
+
+`unit:openTrade()` opens the trade (`TRADE_SHOW`, `UnitName("NPC")` the other side), but `GetPlayerTradeMoney` and `GetTargetTradeMoney` always answer 0, `SetTradeMoney` doesn't exist (as on Forever), and nothing accepts it: no `TRADE_ACCEPT_UPDATE`, no "Trade complete." (`UI_INFO_MESSAGE` with `ERR_TRADE_COMPLETE`, then `PLAYER_MONEY` about 0.26 s later in the game, `/suu probe ledger` 2026-11-18). The Ledger's trade test stubs the two money functions and plays the completion itself (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Taking a COD item still pays nothing (V51): its test plays the money change. (the Ledger's transactions 2026-11-18)
+
+<a id="v62"></a>
+
+### V62. `GetSendMailPrice` leaves out the money attached; a send can't fail
+
+*Status: open (0.13.15).*
+
+On Forever `GetSendMailPrice()` after `SetSendMailMoney(1)` answers 31 (the 30 copper postage and the copper sent), and the money changes by -31 once the letter is sent; with no money attached it answers 30 (`/suu probe ledger` 2026-11-18). The engine answers 30 either way and takes postage and money (30 + money) after "Mail sent.". The server can also refuse a letter (`MAIL_FAILED`, "Internal mail database error." as `UI_ERROR_MESSAGE` 465, no money changed: three COD letters in the probe); the engine always sends one while the mailbox is open. The Ledger expects either charge (`Recorder.sendExpectation`); its test plays the game's numbers and fires `MAIL_FAILED` itself (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Wanted: the money attached counted in `GetSendMailPrice`, and a way to have the server refuse a letter. (the Ledger's transactions 2026-11-18)
+
+<a id="v63"></a>
+
+### V63. A loot window has no coin
+
+*Status: open (0.13.15).*
+
+`player:loot(corpse)` fills the window with items only. In the game a corpse's coin is slot 1 (`GetLootSlotType` = `Enum.LootSlotType.Money`, `GetLootSlotInfo`'s text "7 Copper", quantity 0); taking it clears the slot (`LOOT_SLOT_CLEARED(1)` twice), the window closes, `PLAYER_MONEY` comes about 0.1 s later and the "You loot 7 Copper" line (`CHAT_MSG_MONEY`) 0.76 s after the money; in a party the share's line came 0.8 s after it (`/suu probe ledger` 2026-11-18). The Ledger's test fakes the three slot functions and plays the events (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Wanted: a corpse's coin in the window, paid when taken, and its chat line. (the Ledger's transactions 2026-11-18)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:
@@ -1062,7 +1124,8 @@ These match the game; the tests follow them:
   hovering it again.
 - A zero-delay timer set while `mock.advanceTime` runs comes due just after
   that advance; `GetScript` gives a script without its `HookScript` hooks;
-  the emulated clock starts at midnight on 1 January.
+  the emulated clock starts on 1 January (2026, about noon UTC by
+  `time()`): a time a few days back is in 2025.
 - Forever's spells window has no tab row (`IsTabSystemAvailable` is false
   on Camelot), and your own health is secret to addons (`UnitHealth`).
 - A party forms a moment after the invite: wait before `joinGroup` and
@@ -1072,3 +1135,9 @@ These match the game; the tests follow them:
   containers never filter a debuff on a friendly unit (or a buff on an
   enemy) by spell ID: test such filters by the group's candidates; on an
   enemy's debuffs they render as in the game.
+- `debugprofilestop()` stands still within a frame (it follows the emulated
+  clock) and `os` isn't there, so a test can't time its own code and a
+  work slice cut by milliseconds never cuts: give each slice a count too
+  (the Ledger's slices), and time with `wowlua test --profile-out` (each
+  frame's instructions, estimated native weight and the emulator's wall
+  time in `<file>.frames.json`). (Ledger, 2026-11-19)

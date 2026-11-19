@@ -12,6 +12,7 @@
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv:SetAction({ text, onClick, tooltip }) or nil: a quiet button in the foot, before the note
 --   inv:SetCurrencies({ { icon, count, tooltip, onClick } }) or nil: currencies by the money (0.33)
+--   inv:SetMoneyClick(onClick, tip) or nil: a click on the money, its tooltip (0.48)
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --   inv.sort.tip = { title, description }: its tooltip, changed any time (0.17)
 --
@@ -154,6 +155,9 @@ local function templateIcon(b: Frame): Texture?
     return nil
 end
 
+-- What a slot's Draw showed (ItemSlotSkin.drawn).
+type SlotLook = { present: boolean, q?: string, dim: boolean, locked: boolean, quest: boolean, hover: boolean }
+
 -- SuuUI's look on a slot button (its state kept here, nothing on the button).
 export class ItemSlotSkin
     readonly well: Texture
@@ -164,6 +168,8 @@ export class ItemSlotSkin
     questMark?: Texture
     hover?: boolean
     item?: SlotItem
+    -- what Draw showed last
+    drawn?: SlotLook
 
     constructor(readonly button: Frame)
         local b = button
@@ -238,6 +244,27 @@ export class ItemSlotSkin
 
     function Draw()
         local item = self.item
+        -- (what it showed last drawn again: nothing to do; a list drawing
+        -- many slots again draws only those that changed. Colours follow a
+        -- theme by themselves.)
+        local q, dim, locked, quest = nil, false, false, false
+        if item then
+            q, dim, locked, quest = item.quality, item.dim == true, item.locked == true, item.questStart == true
+        end
+        local hover = self.hover == true
+        local look = self.drawn
+        if
+            look and look.present == (item ~= nil) and look.q == q and look.dim == dim and look.locked == locked and
+            look.quest == quest and look.hover == hover
+        then
+            return
+        end
+        if not look then
+            look = { present = false, dim = false, locked = false, quest = false, hover = false }
+            self.drawn = look
+        end
+        look.present, look.q, look.dim, look.locked, look.quest, look.hover =
+            item ~= nil, q, dim, locked, quest, hover
         self:ShowQuestStart(item ~= nil and item.questStart == true)
         if not item then
             draw.paintFill(self.well, "surface-sunk")
@@ -318,6 +345,11 @@ end
 export class Money extends Frame
     text: Text
     copper: number? = nil
+    -- 0.48: an amount in or out (SetSigned): its sign, -1, 0 or 1; nil: a
+    -- plain amount (SetCopper)
+    sign: number? = nil
+    -- 0.48: a size of its own in the numeric face (SetFontSize)
+    px: number? = nil
 
     constructor(parent: Frame)
         super(nil, parent)
@@ -329,9 +361,53 @@ export class Money extends Frame
 
     function SetCopper(given: unknown)
         local total = math.max(0, math.floor(tonumber(given) or 0))
-        self.copper = total
-        self.text:SetText(moneyText(total))
-        self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), T.type.numeric.lineHeight)
+        -- (the same amount: nothing to do; a theme draws it again itself)
+        if total == self.copper and self.sign == nil then
+            return
+        end
+        self.copper, self.sign = total, nil
+        self:Redraw()
+    end
+
+    -- 0.48: money in or out: in (above 0) in fel with "+", out (below 0) in
+    -- ember-text with "−", exactly 0 in ink without a sign; the coin letters
+    -- keep their colours.
+    function SetSigned(given: unknown)
+        local v = math.floor(tonumber(given) or 0)
+        local copper, sign = math.abs(v), v > 0 and 1 or v < 0 and -1 or 0
+        if copper == self.copper and sign == self.sign then
+            return
+        end
+        self.copper, self.sign = copper, sign
+        self:Redraw()
+    end
+
+    -- 0.48: the amount at `px` in the numeric face (a figure: 16), growing
+    -- and shrinking with the theme's numeric size; nil: the style's own.
+    function SetFontSize(px: number?)
+        if px == self.px then
+            return
+        end
+        self.px = px
+        if not px then
+            self.text:SetStyle("numeric")
+        end
+        self:Redraw()
+    end
+
+    -- (again when a theme changes the coin colours or the numeric face)
+    function Redraw()
+        local total = self.copper or 0
+        local px = self.px
+        if px then
+            self.text:SetFont(T.type.numeric.file, fonts.size("numeric", px), "")
+        end
+        local sign = self.sign
+        local prefix = sign == 1 and "+" or sign == -1 and "\226\136\146" or ""
+        self.text:SetColor(sign == 1 and "fel" or sign == -1 and "ember-text" or "ink")
+        self.text:SetText(prefix .. moneyText(total))
+        local h = px and math.ceil(fonts.size("numeric", px) * 1.3) or T.type.numeric.lineHeight
+        self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), h)
     end
 end
 
@@ -604,6 +680,10 @@ export class Inventory extends Panel
     currencyTexts: Text[] = {}
     showResults: boolean? = nil
     heads: SectionHead[]? = nil
+    -- (0.48) a click on the money and its tooltip (SetMoneyClick)
+    moneyClick: (() -> ())? = nil
+    moneyTip: tooltip.TooltipSource? = nil
+    moneyHooked: boolean = false
     -- the buttons LayoutSlots last laid out (whoever laid them out knows
     -- whether its layout still shows)
     laidOut: Region[]? = nil
@@ -788,6 +868,35 @@ export class Inventory extends Panel
 
     function SetNote(text: string?)
         self.note:SetValue(text or "")
+    end
+
+    -- (0.48) A click on the money, and its tooltip while hovered (the
+    -- Ledger at Gold); nil: neither, the money as text only.
+    function SetMoneyClick(onClick: (() -> ())?, tip: tooltip.TooltipSource?)
+        self.moneyClick, self.moneyTip = onClick, tip
+        local m = self.money
+        m:EnableMouse(onClick ~= nil)
+        if onClick and not self.moneyHooked then
+            self.moneyHooked = true
+            m:SetScript("OnMouseUp", function(_: Frame, button: string)
+                local fn = self.moneyClick
+                if fn and button == "LeftButton" and m:IsMouseOver() then
+                    fn()
+                end
+            end)
+            m:SetScript("OnEnter", function()
+                local t = self.moneyTip
+                if t and self.moneyClick then
+                    tooltip.showTooltip(m, t)
+                end
+            end)
+            m:SetScript("OnLeave", function()
+                tooltip.hideTooltip()
+            end)
+        end
+        if not onClick and m:IsMouseOver() then
+            tooltip.hideTooltip()
+        end
     end
 
     -- Currencies left of the money, in order (the game's "Show on Backpack"
@@ -1023,7 +1132,7 @@ events.on(
         for f, kind in pairs(live) do
             if kind == "money" then
                 local m = f :: Money
-                m:SetCopper(m.copper)
+                m:Redraw()
             else
                 -- (the widths from the slot size and gap, then the body)
                 local inv = f :: Inventory

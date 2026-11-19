@@ -1,0 +1,172 @@
+-- Units/Ledger/Stats.wowlua
+-- What the Ledger makes of an item's looks (Units/Ledger; decided
+-- 2026-11-18). Pure functions over numbers and looks (SuuUI.Prices: the
+-- usual price, the middle of the lowest buyouts of the last 14 days that
+-- have a look, is the price store's):
+--
+--   change    the lowest now against the usual price, in percent (-26:
+--             26 % under it)
+--   deals     a last look at least "Counts as a deal" percent under its
+--             usual price, or under what a vendor pays for it; the deals
+--             list furthest under first
+--   when it's cheapest   by day of the week and by time of day: each look
+--             set against the middle of its own week (the 7 days around
+--             it), so a price that rises or falls doesn't make one end
+--             look dear; a row is the middle of those, in percent (-11:
+--             11 % under its week). A row needs 3 looks; a cheapest row is
+--             named only when the rows are 4 % or more apart.
+
+import weekday from "./Days"
+import type PriceLook from "/Core/API"
+
+export const WHEN_LOOKS = 3
+export const WHEN_SPREAD = 4
+
+-- The middle of the first `n` values (all: nil n), the mean of the middle
+-- two for an even count; nil when there are none. `values` is left as it
+-- was.
+export function median(values: number[], n: number?): number?
+    local count = n or #values
+    if count <= 0 then
+        return nil
+    end
+    local sorted: number[] = {}
+    for i = 1, count do
+        sorted[i] = values[i]
+    end
+    table.sort(sorted)
+    local mid = math.floor(count / 2)
+    if count % 2 == 1 then
+        return sorted[mid + 1]
+    end
+    return (sorted[mid] + sorted[mid + 1]) / 2
+end
+
+-- The lowest now against the usual price, in percent (negative: under).
+export function change(low: number, usualPrice: number): number
+    if usualPrice <= 0 then
+        return 0
+    end
+    return (low - usualPrice) / usualPrice * 100
+end
+
+-- How far under its usual price a look is, in percent, when that counts as
+-- a deal (at least `threshold` %); nil when it doesn't or there is no usual
+-- price.
+export function dealUnder(low: number, usualPrice: number?, threshold: number): number?
+    if not usualPrice or usualPrice <= 0 or low <= 0 then
+        return nil
+    end
+    local under = (usualPrice - low) / usualPrice * 100
+    return under >= threshold and under or nil
+end
+
+-- Whether a look is under what a vendor pays for the item.
+export function underVendor(low: number, vendor: number?): boolean
+    return vendor ~= nil and vendor > 0 and low > 0 and low < vendor
+end
+
+-- The deals list's order, furthest under first: how far under its usual
+-- price, or for one only under vendor price, how far under that.
+export function dealOrder(under: number?, low: number, vendor: number?): number
+    if under then
+        return under
+    end
+    if vendor and vendor > 0 and low < vendor then
+        return (vendor - low) / vendor * 100
+    end
+    return 0
+end
+
+--------------------------------------------------------------------------------
+-- When it's cheapest
+--------------------------------------------------------------------------------
+
+-- A row: its middle against the week, in percent (-11: 11 % under its
+-- week), and how many looks it has.
+export type WhenRow = { pct: number, looks: number }
+-- A set of rows: whether each has enough looks; whether one stands out
+-- (the rows 4 % or more apart) and then the cheapest and dearest (indexes;
+-- 0 when none stands out).
+export type WhenInfo = { enough: boolean, out: boolean, best: number, worst: number }
+-- By day of the week (1 Monday … 7 Sunday) and by time of day (Days'
+-- periods: 1 Night … 4 Evening).
+export type When = { weekdays: WhenRow[], times: WhenRow[], days: WhenInfo, periods: WhenInfo }
+
+export function whenInfo(rows: WhenRow[]): WhenInfo
+    local best, worst = 1, 1
+    for i, r in ipairs(rows) do
+        if r.looks < WHEN_LOOKS then
+            return { enough = false, out = false, best = 0, worst = 0 }
+        end
+        if r.pct < rows[best].pct then
+            best = i
+        end
+        if r.pct > rows[worst].pct then
+            worst = i
+        end
+    end
+    if #rows == 0 then
+        return { enough = false, out = false, best = 0, worst = 0 }
+    end
+    local out = rows[worst].pct - rows[best].pct >= WHEN_SPREAD
+    return { enough = true, out = out, best = out and best or 0, worst = out and worst or 0 }
+end
+
+local function rows(ratios: number[][]): WhenRow[]
+    local out: WhenRow[] = {}
+    for i, list in ipairs(ratios) do
+        local m = median(list)
+        out[i] = { pct = m and m * 100 or 0, looks = #list }
+    end
+    return out
+end
+
+-- From an item's looks (SuuUI.Prices.Looks: day, period, low each).
+export function whenCheapest(list: PriceLook[]): When
+    local count = #list
+    -- each day's lowest
+    local dayLow: { [number]: number } = {}
+    for k = 1, count do
+        local d, low = list[k].day, list[k].low
+        local was = dayLow[d]
+        if not was or low < was then
+            dayLow[d] = low
+        end
+    end
+    -- the days: each day's lowest against its week's days
+    local byWeekday: number[][] = { {}, {}, {}, {}, {}, {}, {} }
+    for d, low in pairs(dayLow) do
+        local week: number[] = {}
+        for dd = d - 3, d + 3 do
+            local v = dayLow[dd]
+            if v then
+                week[#week + 1] = v
+            end
+        end
+        local mid = median(week)
+        if mid and mid > 0 then
+            local wl = byWeekday[weekday(d)]
+            wl[#wl + 1] = low / mid - 1
+        end
+    end
+    -- the times: each look against its week's looks
+    local byPeriod: number[][] = { {}, {}, {}, {} }
+    for k = 1, count do
+        local d = list[k].day
+        local week: number[] = {}
+        for j = 1, count do
+            local dj = list[j].day
+            if dj >= d - 3 and dj <= d + 3 then
+                week[#week + 1] = list[j].low
+            end
+        end
+        local mid = median(week)
+        local pl = byPeriod[list[k].period]
+        if mid and mid > 0 and pl then
+            pl[#pl + 1] = list[k].low / mid - 1
+        end
+    end
+    local weekdays, times = rows(byWeekday), rows(byPeriod)
+    return { weekdays = weekdays, times = times, days = whenInfo(weekdays), periods = whenInfo(times) }
+end

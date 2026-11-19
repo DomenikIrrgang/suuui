@@ -1,0 +1,289 @@
+-- Units/Ledger/Notes.wowlua
+-- The Ledger's timed notes (spec Deals C and Watch; design board "Ledger"):
+--   - after Scan all, what it found (setting "A note after Scan all", off
+--     by default), category Deals: "The scan found 14 deals" /
+--     "Greater Eternal Essence 31% under, Black Lotus 29% under and 12 more;
+--     2 under vendor price." and Show deals (Prices at Deals). None when it
+--     found none.
+--   - a watched item a scan or a search finds under your price, always,
+--     category Watched item: "Black Lotus under 40g" / "The scan found 2 at
+--     38g 51s 78c (your price: 40g). Usual: 54g 25s." Once per item per
+--     scan; a new watch (or a new price) is no find, the next look is.
+--   - an auction of yours sold (setting "A note when an auction sells", on
+--     by default), category Sold: "Kingsblood ×20" / "For about 2g 96s
+--     40c, after the house's cut. It waits in the mail." From the game's
+--     AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION (AuctionSold, 4, with the
+--     item's name; Blizzard_Game routes it to the chat line wherever you
+--     are, so it should come away from the house too: to be checked in
+--     game), or AUCTION_HOUSE_SHOW_NOTIFICATION (4, no name) when no
+--     formatted one follows. CHAT_MSG_SYSTEM is secret on Forever: the
+--     chat's "A buyer has been found" can't be read. The price is the one
+--     this character posted the item at in the last two days (an item's
+--     auction sells whole; a commodity's may sell in part: no price then);
+--     the cut is 5% (the probe's invoice: 71 of 1432).
+-- Money in SuuUI's one way (UI.MoneyText).
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as itemData from "wowlua:item"
+import type ItemData from "wowlua:item"
+import type NotificationIcon from "/Core/API"
+import type LedgerModule from "../Ledger"
+import * as entry from "./Entry"
+
+local UI = SuuUI.UI
+
+-- An item's name (the Ledger's lookup: the one it kept, else the game's,
+-- kept), or a stand-in while neither knows it.
+local function nameOf(m: LedgerModule, data: ItemData?, itemID: number): string
+    if data then
+        m:KeepName(itemID, data.name, data.quality)
+    end
+    return m:ItemName(itemID) or ("Item " .. itemID)
+end
+
+-- "Black Lotus 29% under", or "Heavy Mithril Axe under vendor price".
+export function dealText(name: string, under: number?): string
+    if under then
+        return ("%s %d%% under"):format(name, math.floor(under + 0.5))
+    end
+    return name .. " under vendor price"
+end
+
+export function scanTitle(deals: number): string
+    return deals == 1 and "The scan found 1 deal" or ("The scan found %d deals"):format(deals)
+end
+
+-- The best (up to two, already worded), how many more, how many under
+-- vendor price (left out when none).
+export function scanBody(best: string[], deals: number, underVendor: number): string
+    local more = deals - #best
+    local list: string
+    if more > 0 then
+        list = ("%s and %d more"):format(table.concat(best, ", "), more)
+    elseif #best == 2 then
+        list = best[1] .. " and " .. best[2]
+    else
+        list = best[1] or ""
+    end
+    if underVendor > 0 then
+        list = ("%s; %d under vendor price"):format(list, underVendor)
+    end
+    return list .. "."
+end
+
+export function watchTitle(name: string, target: number): string
+    return name .. " under " .. UI.MoneyText(target)
+end
+
+-- `scan`: a Scan all found it (else a search); `qty` how many were
+-- offered (0: not known); `usual` nil when it has none.
+export function watchBody(scan: boolean, qty: number, low: number, target: number, usual: number?): string
+    local found = qty > 0 and (qty .. " at ") or "it at "
+    local text = ("%s found %s%s (your price: %s)."):format(
+        scan and "The scan" or "A search",
+        found,
+        UI.MoneyText(low),
+        UI.MoneyText(target)
+    )
+    if usual then
+        text = text .. " Usual: " .. UI.MoneyText(usual) .. "."
+    end
+    return text
+end
+
+-- After a Scan all was read: its deals, the furthest under first.
+export function scanNote(m: LedgerModule)
+    if not m:Get("scanNote") then
+        return
+    end
+    local s = m:LastScan()
+    if not (s and s.deals > 0) then
+        return
+    end
+    -- (the scan's own, as it read them: no walk over every item)
+    local deals = m:ScanDeals()
+    local best: { itemID: number, under?: number }[] = {}
+    for i = 1, math.min(2, #deals, s.deals) do
+        best[i] = { itemID = deals[i].itemID, under = deals[i].under }
+    end
+    -- (the names the Ledger kept at once; the rest waited for)
+    local ids: (number | string)[] = {}
+    for _, b in ipairs(best) do
+        if not m:ItemName(b.itemID) then
+            ids[#ids + 1] = b.itemID
+        end
+    end
+    itemData.loadMany(ids, function(all: { [number]: ItemData? })
+        if not m:IsEnabled() then
+            return
+        end
+        local words: string[] = {}
+        for i, b in ipairs(best) do
+            words[i] = dealText(nameOf(m, all[b.itemID], b.itemID), b.under)
+        end
+        SuuUI.Notify({
+            id = "suu:ledger:scan",
+            kind = "timed",
+            category = "Deals",
+            icon = { glyph = "coin", color = "arcane" },
+            title = scanTitle(s.deals),
+            body = scanBody(words, s.deals, s.underVendor),
+            actions = {
+                {
+                    label = "Show deals",
+                    variant = "primary",
+                    onClick = function()
+                        entry.open("prices", { show = "deals" })
+                    end,
+                },
+            },
+        })
+    end)
+end
+
+-- A watched item found under your price.
+export function watchNote(m: LedgerModule, itemID: number, low: number, target: number, qty: number, scan: boolean)
+    local function show(data: ItemData?)
+        if not m:IsEnabled() then
+            return
+        end
+        local name = nameOf(m, data, itemID)
+        SuuUI.Notify({
+            id = "suu:ledger:watch:" .. itemID,
+            kind = "timed",
+            category = "Watched item",
+            icon = {
+                texture = data and data.icon or C_Item.GetItemIconByID(itemID),
+                tooltip = function(owner: Frame)
+                    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                    GameTooltip:SetItemByID(itemID)
+                    GameTooltip:Show()
+                end,
+            },
+            title = watchTitle(name, target),
+            body = watchBody(scan, qty, low, target, m:Usual(itemID)),
+        })
+    end
+    -- (a name the Ledger kept at once, else waited for)
+    if m:ItemName(itemID) then
+        show(nil)
+    else
+        itemData.load(itemID, show)
+    end
+end
+
+-- The house's cut of a sale, as the probe's invoice had it (71 of 1432).
+export const CUT = 0.05
+
+-- Enum.AuctionHouseNotification.AuctionSold
+export const SOLD = 4
+
+-- "Kingsblood ×20", "Kingsblood", "An auction sold".
+export function soldTitle(name: string?, qty: number?): string
+    if not name then
+        return "An auction sold"
+    end
+    if qty and qty > 1 then
+        return name .. " \195\151" .. qty
+    end
+    return name
+end
+
+-- With the post's buyout per unit and how many (an item's whole auction):
+-- "For about 2g 96s 40c, after the house's cut. It waits in the mail."
+export function soldBody(price: number?, qty: number?): string
+    if price and price > 0 and qty and qty > 0 then
+        local total = price * qty
+        return "For about " .. UI.MoneyText(total - math.floor(total * CUT)) ..
+            ", after the house\226\128\153s cut. It waits in the mail."
+    end
+    return "A buyer was found. The money waits in the mail, the house\226\128\153s cut taken."
+end
+
+-- An auction sold: the note (`name` nil: the game didn't say which).
+export function soldNote(m: LedgerModule, name: string?)
+    if not m:Get("soldNote") then
+        return
+    end
+    local itemID = name and m:ItemByName(name) or nil
+    local post = m:LastPost(itemID, name)
+    local whole = post ~= nil and not post.commodity
+    local qty = whole and post and post.qty or nil
+    local price = whole and post and post.price or nil
+    local icon: NotificationIcon = { glyph = "gavel", color = "fel" }
+    if itemID then
+        icon = {
+            texture = C_Item.GetItemIconByID(itemID),
+            tooltip = function(owner: Frame)
+                GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                GameTooltip:SetItemByID(itemID)
+                GameTooltip:Show()
+            end,
+        }
+    end
+    SuuUI.Notify({
+        id = "suu:ledger:sold:" .. (name or "?") .. ":" .. time(),
+        kind = "timed",
+        category = "Sold",
+        icon = icon,
+        title = soldTitle(name, qty),
+        body = soldBody(price, qty),
+    })
+end
+
+-- The watches' last looks (item → when), to tell a find from a new watch.
+local function looksOf(m: LedgerModule): { [number]: number }
+    local out: { [number]: number } = {}
+    for itemID, w in pairs(m:Watches()) do
+        out[itemID] = w.at or 0
+    end
+    return out
+end
+
+-- The module's part (its listener goes with it).
+export function enable(m: LedgerModule)
+    -- each watch's last look as last told, and the scan each item was told
+    -- for (once per item per scan)
+    local seen = looksOf(m)
+    local told: { [number]: number } = {}
+    -- an auction sold: the named notice; the plain one only when no named
+    -- one comes with it
+    local namedAt = -1
+    m:OnGameEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", function(_, kind, text)
+        if secret.asNumber(kind) == SOLD then
+            namedAt = GetTime()
+            soldNote(m, secret.asString(text))
+        end
+    end)
+    m:OnGameEvent("AUCTION_HOUSE_SHOW_NOTIFICATION", function(_, kind)
+        if secret.asNumber(kind) ~= SOLD then
+            return
+        end
+        local at = GetTime()
+        m:After(0.3, function()
+            if math.abs(namedAt - at) > 0.5 then
+                soldNote(m, nil)
+            end
+        end)
+    end)
+    m:On("SUUUI_LEDGER_CHANGED", function(_, what)
+        if what == "scan" then
+            scanNote(m)
+            return
+        end
+        if what ~= "watches" then
+            return
+        end
+        local last = m:LastScan()
+        local scanAt = last and last.at or 0
+        for _, e in ipairs(entry.watchedUnder(m)) do
+            local before = seen[e.itemID]
+            if before ~= nil and before ~= e.at and told[e.itemID] ~= scanAt then
+                told[e.itemID] = scanAt
+                watchNote(m, e.itemID, e.low, e.target, e.qty, last ~= nil and e.at == last.at)
+            end
+        end
+        seen = looksOf(m)
+    end)
+end

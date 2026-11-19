@@ -1,0 +1,58 @@
+-- Units/Ledger/Gold: your characters' money at each day's end: recorded,
+-- chosen (all, a ruleset, one), as a series that keeps a day without play
+-- at the day before's, and in all now.
+
+import test, expect from "wowlua:test"
+import * as gold from "/Units/Ledger/Gold"
+import type GoldMap from "/Units/Ledger/Gold"
+
+const DAY = 20775
+
+local function sample(): GoldMap
+    local map: GoldMap = {}
+    gold.record(map, "Aster - Normal", "Aster", "MAGE", "Normal", DAY - 5, 1000, 1)
+    gold.record(map, "Aster - Normal", "Aster", "MAGE", "Normal", DAY - 2, 3000, 2)
+    gold.record(map, "Aster - Normal", "Aster", nil, "Normal", DAY - 2, 2500, 3)
+    gold.record(map, "Briar - Normal", "Briar", "ROGUE", "Normal", DAY - 3, 500, 4)
+    gold.record(map, "Corin - PvP", "Corin", "PRIEST", "PvP", DAY - 1, 7000, 5)
+    return map
+end
+
+@test("a character's day: the last money seen that day kept; its name, class, ruleset and when")
+local function record()
+    local map = sample()
+    local a = assert(map["Aster - Normal"])
+    expect(a.days).toEqual({ [DAY - 5] = 1000, [DAY - 2] = 2500 })
+    -- (no class told: the one it had stays)
+    expect(a.class).toBe("MAGE")
+    expect(a.seen).toBe(3)
+    expect(a.ruleset).toBe("Normal")
+    expect(gold.balanceOn(a, DAY - 6)).toBe(0)
+    expect(gold.balanceOn(a, DAY - 4)).toBe(1000)
+    expect(gold.balanceOn(a, DAY)).toBe(2500)
+end
+
+@test("which characters: all, all on a ruleset, one")
+local function chosen()
+    local map = sample()
+    expect(gold.chosen(map, nil)).toEqual({ "Aster - Normal", "Briar - Normal", "Corin - PvP" })
+    expect(gold.chosen(map, {})).toEqual({ "Aster - Normal", "Briar - Normal", "Corin - PvP" })
+    expect(gold.chosen(map, { ruleset = "Normal" })).toEqual({ "Aster - Normal", "Briar - Normal" })
+    expect(gold.chosen(map, { char = "Corin - PvP" })).toEqual({ "Corin - PvP" })
+    expect(gold.chosen(map, { char = "Nobody - PvP" })).toEqual({})
+end
+
+@test("the series: each day's end together, a day without play keeping the day before's")
+local function series()
+    local map = sample()
+    expect(gold.firstDay(map, nil)).toBe(DAY - 5)
+    expect(gold.firstDay(map, { ruleset = "PvP" })).toBe(DAY - 1)
+    expect(gold.firstDay(map, { char = "Nobody" })).toBeNil()
+    expect(gold.series(map, nil, DAY - 6, DAY)).toEqual({ 0, 1000, 1000, 1500, 3000, 10000, 10000 })
+    expect(gold.series(map, { ruleset = "Normal" }, DAY - 4, DAY - 2)).toEqual({ 1000, 1500, 3000 })
+    expect(gold.series(map, { char = "Corin - PvP" }, DAY - 2, DAY)).toEqual({ 0, 7000, 7000 })
+    expect(gold.series(map, nil, DAY, DAY - 1)).toEqual({})
+    expect(gold.total(map, nil)).toBe(10000)
+    expect(gold.total(map, { ruleset = "Normal" })).toBe(3000)
+    expect(gold.total(map, { char = "Nobody" })).toBe(0)
+end

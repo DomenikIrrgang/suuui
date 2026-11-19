@@ -1,0 +1,193 @@
+-- Units/Ledger/Names: names kept in the price store (Core/Prices: the
+-- packing, the prune and their size are tested there), the quality not lost
+-- to a name without one; the lookup (kept, the client's cache, then asked);
+-- the queue (the rows in sight first, a few in flight, both answering
+-- events, asked again without an answer, given up); a name the client
+-- loaded for someone else.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as names from "/Units/Ledger/Names"
+import ItemNames from "/Units/Ledger/Names"
+import * as prices from "/Core/Prices"
+import type PriceData from "/Core/Prices"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
+import expectNoErrors from "../../../helpers"
+
+const CACHED = 990801
+const SLOW = 990802
+const MUTE = 990803
+mock.defineItem(CACHED, { name = "Test Cached Ore", quality = 2 })
+mock.defineItem(SLOW, { name = "Test Slow Ore", quality = 3 }, { cached = false, delay = 0.3 })
+mock.defineItem(MUTE, { name = "Test Mute Ore", quality = 1 }, { cached = false, delay = 600 })
+
+local made: ItemNames[] = {}
+-- (the module hears the client's answers; here a frame does it for each)
+local ears: Frame[] = {}
+
+@afterEach
+local function cleanup()
+    for _, n in ipairs(made) do
+        n:Stop()
+    end
+    made = {}
+    for _, f in ipairs(ears) do
+        f:UnregisterAllEvents()
+    end
+    ears = {}
+    priceStore.wipe()
+    expectNoErrors()
+end
+
+-- Names over the price store's (its data); what arrived; the items it
+-- knows.
+local function make(known: { [number]: boolean }?): (ItemNames, PriceData, number[])
+    local data = prices.data()
+    local arrived: number[] = {}
+    local n = ItemNames.new({
+        kept = function(itemID: number): (string?, number?)
+            return prices.keptName(itemID)
+        end,
+        keep = function(itemID: number, name: string?, quality: number?): boolean
+            return prices.keepName(itemID, name, quality)
+        end,
+        every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+            return C_Timer.NewTicker(seconds, fn)
+        end,
+        arrived = function(itemID: number)
+            arrived[#arrived + 1] = itemID
+        end,
+        known = function(itemID: number): boolean
+            return known ~= nil and known[itemID] == true
+        end,
+    })
+    made[#made + 1] = n
+    local ear = CreateFrame("Frame")
+    ear:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+    ear:SetScript("OnEvent", function(_, _e, itemID, success)
+        n:Loaded(itemID :: number, success)
+    end)
+    ears[#ears + 1] = ear
+    return n, data, arrived
+end
+
+@test("kept: a change only when it differs; a name without a quality keeps the one kept")
+local function keep()
+    local n, data = make()
+    expect(n:Keep(1, "Test One", 2)).toBe(true)
+    expect(n:Keep(1, "Test One", 2)).toBe(false)
+    expect(n:Keep(1, "Test One", nil)).toBe(false)
+    expect(assert(data.names)[1]).toBe("2Test One")
+    expect(n:Keep(1, "Test One Renamed", nil)).toBe(true)
+    expect(assert(data.names)[1]).toBe("2Test One Renamed")
+    expect(n:Keep(2, nil, 1)).toBe(false)
+    expect(n:Keep(2, "", 1)).toBe(false)
+    expect(assert(data.names)[2]).toBeNil()
+end
+
+@test("the lookup: kept first, else the client's cache (kept), else asked for when told to")
+local function lookup()
+    local n, data = make()
+    n:Keep(990899, "Test Kept Only", 4)
+    expect({ n:Get(990899) }).toEqual({ "Test Kept Only", 4 })
+    expect({ n:Get(CACHED) }).toEqual({ "Test Cached Ore", 2 })
+    expect(assert(data.names)[CACHED]).toBe("2Test Cached Ore")
+    expect(n:Get(SLOW)).toBeNil()
+    expect(n:Pending(SLOW)).toBe(false)
+    expect(n:Get(SLOW, true)).toBeNil()
+    expect(n:Pending(SLOW)).toBe(true)
+    -- a kept name without its quality: the cache's when it has it
+    n:Keep(CACHED, "Test Cached Ore", nil)
+    data.names = { [CACHED] = "-Test Cached Ore" }
+    expect({ n:Get(CACHED) }).toEqual({ "Test Cached Ore", 2 })
+end
+
+@test("the queue: the rows in sight first, a few in flight at once, the answers kept and told")
+local function queue()
+    local n, data, arrived = make()
+    local ids: number[] = {}
+    for i = 1, 45 do
+        local id = 990900 + i
+        mock.defineItem(id, { name = "Test Thread " .. i, quality = 1 }, { cached = false, delay = 0.3 })
+        ids[i] = id
+    end
+    n:AskAll(ids)
+    n:Ask(SLOW, true)
+    expect(n:PendingCount()).toBe(46)
+    -- (asked twice: once in the queue)
+    n:Ask(SLOW, true)
+    expect(n:PendingCount()).toBe(46)
+    mock.advanceTime(names.STEP + 0.01)
+    expect(n.flyingCount).toBe(names.FLYING)
+    expect(n.flying[SLOW] ~= nil).toBe(true)
+    -- (a name kept meanwhile isn't asked again)
+    n:Keep(ids[45], "Test Thread 45", 1)
+    for _ = 1, 20 do
+        mock.advanceTime(0.1)
+    end
+    expect(n:PendingCount()).toBe(0)
+    expect(n.ticker).toBeNil()
+    expect(assert(data.names)[SLOW]).toBe("3Test Slow Ore")
+    expect(assert(data.names)[ids[1]]).toBe("1Test Thread 1")
+    expect(#arrived).toBe(45)
+    expect(n.tries[ids[45]]).toBeNil()
+end
+
+@test("an answer: a failed one asked again; a loaded one kept and told")
+local function answers()
+    local n, data, arrived = make()
+    n:Ask(MUTE)
+    mock.advanceTime(names.STEP + 0.01)
+    expect(n.flying[MUTE] ~= nil).toBe(true)
+    -- a failed answer: asked again
+    n:Loaded(MUTE, false)
+    expect(n.flying[MUTE]).toBeNil()
+    expect(n:Pending(MUTE)).toBe(true)
+    mock.advanceTime(names.STEP + 0.01)
+    expect(n.tries[MUTE]).toBe(2)
+    -- it loads
+    mock.defineItem(MUTE, { name = "Test Mute Ore", quality = 1 })
+    n:Loaded(MUTE, true)
+    expect(assert(data.names)[MUTE]).toBe("1Test Mute Ore")
+    expect(arrived).toEqual({ MUTE })
+    expect(n:Pending(MUTE)).toBe(false)
+    mock.defineItem(MUTE, { name = "Test Mute Ore", quality = 1 }, { cached = false, delay = 600 })
+end
+
+@test("no answer: asked again after a while, four times, then given up for the session")
+local function noAnswer()
+    local n, _, arrived = make()
+    mock.defineItem(990811, { name = "Test Silent Ore", quality = 1 }, { cached = false, delay = 600 })
+    n:Ask(990811)
+    mock.advanceTime(names.STEP + 0.01)
+    expect(n.tries[990811]).toBe(1)
+    mock.advanceTime(names.RETRY_AFTER - 1)
+    expect(n.tries[990811]).toBe(1)
+    mock.advanceTime(1.5)
+    expect(n.tries[990811]).toBe(2)
+    for _ = 1, 4 * names.RETRY_AFTER do
+        mock.advanceTime(1)
+    end
+    expect(n.tries[990811]).toBe(names.TRIES)
+    expect(n.gaveUp[990811]).toBe(true)
+    expect(n:Pending(990811)).toBe(false)
+    expect(arrived).toEqual({ 990811 })
+    expect(n.ticker).toBeNil()
+    -- asked again: no more
+    n:Ask(990811, true)
+    expect(n:Pending(990811)).toBe(false)
+end
+
+@test("a name the client loaded for someone else: kept only for an item the Ledger knows")
+local function others()
+    local n, data, arrived = make({ [CACHED] = true })
+    mock.defineItem(990812, { name = "Test Stranger", quality = 1 })
+    n:Loaded(990812, true)
+    expect((data.names or {})[990812]).toBeNil()
+    n:Loaded(CACHED, true)
+    expect(assert(data.names)[CACHED]).toBe("2Test Cached Ore")
+    expect(arrived).toEqual({ CACHED })
+    -- again, nothing new: nothing told
+    n:Loaded(CACHED, true)
+    expect(arrived).toEqual({ CACHED })
+end

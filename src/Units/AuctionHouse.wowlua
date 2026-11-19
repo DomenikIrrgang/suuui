@@ -21,6 +21,15 @@
 -- goes there, as the game does). Chat links and bag items reach the game's
 -- ChatFrameUtil.InsertLink, post-hooked; the Professions window asks the
 -- auctionhouse service.
+-- The Ledger (0.48, while that module is on): its button at the right of
+-- the tab row opens it beside this window; Browse marks a result far under
+-- its usual price ("26% under") or under what a vendor pays ("Under
+-- vendor", with the Ledger's "Mark deals at the auction house"); after Scan
+-- all the foot says how many deals it found; Alt-click on a row's item
+-- opens its price page.
+-- Your auctions kept per character (0.48, AuctionHouse/Auctions keepOwned):
+-- SuuUI.Holdings' "auctions" while this module is on (the Ledger's "What
+-- it's worth"), as the house tells them; ended ones read as gone.
 -- Your searches (asked 2026-11-12): clicking into the search box shows the
 -- last five you ran (Enter or Search) that found something, newest first,
 -- each with the icon of the first item it found; kept per character. A
@@ -42,7 +51,7 @@
 -- Auctions (their pages).
 
 import SuuUI, Module from "/Core/API"
-import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues from "/Core/API"
+import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues, SuuButton, LedgerOpenOptions, Holding from "/Core/API"
 import hook from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -50,7 +59,7 @@ import * as frames from "wowlua:frames"
 import type LoadHandle from "wowlua:item"
 -- the pages and what the module's methods do on them, in modules of their
 -- own beside this one
-import sorts from "./AuctionHouse/Common"
+import sorts, keysMissing from "./AuctionHouse/Common"
 import type AuctionTable, Cell from "./AuctionHouse/Tables"
 import * as ahBuy from "./AuctionHouse/Buy"
 import BuyPage from "./AuctionHouse/Buy"
@@ -72,9 +81,10 @@ import SellPage from "./AuctionHouse/Sell"
 import type Posting from "./AuctionHouse/Sell"
 import * as ahAuctions from "./AuctionHouse/Auctions"
 import AuctionsPage from "./AuctionHouse/Auctions"
-import type AuctionRow, Listed from "./AuctionHouse/Auctions"
+import type AuctionRow, Listed, KeptOwned from "./AuctionHouse/Auctions"
 
 local AUCTION_HOUSE = SuuUI.Services.AUCTION_HOUSE
+local LEDGER = SuuUI.Services.LEDGER
 
 local UI = SuuUI.UI
 local try, field = errors.try, tbl.field
@@ -190,10 +200,15 @@ local WIDTH, HEIGHT = 840, 580
 
 local TONE: { [string]: string } = { info = "ink-muted", ok = "fel", error = "ember-text" }
 
--- What SuuUI remembers per item, per character: what the house showed last,
--- what you posted at; your bids; the last Scan all.
+-- What SuuUI remembers per character: what you posted at; your bids; the
+-- last Scan all. `ruleset`: the character's (SuuUI.Ruleset(), kept since
+-- API 0.48; before, its key's realm says it): each ruleset has its own
+-- house, so posted prices are read only from characters on this one. (What
+-- the house showed is the price store's, one copy per ruleset: Prices.
+-- Until 0.48 each character kept its own `seen`; Core/Prices moved them
+-- in.)
 export type CharStore = {
-    seen?: { [number]: SeenEntry },
+    ruleset?: string,
     posted?: { [number]: PostedEntry },
     bids?: { [number]: number },
     scanAt?: number,
@@ -206,6 +221,9 @@ export type CharStore = {
     history?: HistoryEntry[],
     -- the writs the last Scan all found, by itemID (AuctionHouse/Writs)
     writs?: { [number]: WritEntry },
+    -- your auctions as the house last told them (0.48, AuctionHouse/
+    -- Auctions keepOwned: SuuUI.Holdings' "auctions")
+    owned?: KeptOwned,
 }
 
 --------------------------------------------------------------------------------
@@ -219,7 +237,11 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     sell: SellPage? = nil
     mine: AuctionsPage? = nil
     note: Text? = nil
+    -- the foot's note as last set (Note)
+    noteText: string = ""
     money: Money? = nil
+    -- (0.48) the Ledger's button, right of the tabs
+    ledgerButton: SuuButton? = nil
     -- the house: open; the tab; the Buy page's view and what it searched
     open: boolean = false
     tab: string = "buy"
@@ -265,6 +287,14 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- a note for what the house is asked, cleared when its results come
     waiting: boolean = false
     refreshPending: boolean = false
+    -- the browse results' looks told to the price store since the house last
+    -- sent results, by item (Buy's tellBrowseLooks: told when results come,
+    -- never by a draw); the items told without a name, by their key
+    browseTold: { [number]: string } = {}
+    browseNameless: { [number]: ItemKey } = {}
+    -- the last draw showed an item key the game had no info for yet (drawn
+    -- again when ITEM_KEY_ITEM_INFO_RECEIVED comes, else not)
+    keysWaiting: boolean = false
     placing: boolean = false
     awayHooked: boolean = false
     postHooked: boolean = false
@@ -280,6 +310,13 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     historyPending: string? = nil
     historyOpen: boolean = false
     historyQuery: string = ""
+    -- each character's auctions as a holding (OwnedHolding), until kept
+    -- again or one of them ends
+    ownedHeld: { [string]: { at: number, next?: number, h: Holding } } = {}
+    -- your auctions to be asked for once the house is ready (a query sent
+    -- while it answers another is dropped: AuctionHouse/Auctions askOwned)
+    ownedWanted: boolean = false
+    ownedTimer: boolean = false
 
     constructor()
         super({
@@ -292,9 +329,14 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         })
     end
 
-    -- What SuuUI keeps for this character, and for each of yours.
+    -- What SuuUI keeps for this character (marked with its ruleset), and
+    -- for each of yours: all of them (the game's wait between two Scan alls
+    -- is per account), or those on this character's ruleset (its house's
+    -- prices and scans).
     function Saved(): CharStore
-        return self:CharData() :: unknown :: CharStore
+        local d = self:CharData() :: unknown :: CharStore
+        d.ruleset = SuuUI.Ruleset()
+        return d
     end
     function AllSaved(): CharStore[]
         local out: CharStore[] = {}
@@ -303,11 +345,45 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end
         return out
     end
+    function RulesetSaved(): CharStore[]
+        local out: CharStore[] = {}
+        local here = SuuUI.Ruleset()
+        for key, data in pairs(self:AllCharData()) do
+            local d = data :: unknown :: CharStore
+            if (d.ruleset or SuuUI.RulesetOfCharKey(key)) == here then
+                out[#out + 1] = d
+            end
+        end
+        return out
+    end
+
+    -- A character's auctions as a holding (nil: never kept): made once
+    -- until kept again or one of them ends.
+    function OwnedHolding(key: string): Holding?
+        local d = self:AllCharData()[key] :: unknown :: CharStore?
+        local kept = d and d.owned
+        if not kept then
+            self.ownedHeld[key] = nil
+            return nil
+        end
+        local now = time()
+        local c = self.ownedHeld[key]
+        if c and c.at == kept.at and (not c.next or now < c.next) then
+            return c.h
+        end
+        local h, nextEnd = ahAuctions.ownedHolding(kept, now)
+        if not h then
+            return nil
+        end
+        self.ownedHeld[key] = { at = kept.at, next = nextEnd, h = h }
+        return h
+    end
 
     -- `waiting`: a note for what the house is asked (Searching…), cleared when
     -- its results come; any other stays until the next note.
     function Note(text: string?, tone: string?, waiting: boolean?)
         self.waiting = waiting or false
+        self.noteText = text or ""
         local note = self.note
         if not note then
             return
@@ -375,6 +451,18 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawResults()
         ahBuy.drawResults(self)
+    end
+
+    function DrawResultRows(force: boolean?)
+        ahBuy.drawResultRows(self, force)
+    end
+
+    function TellBrowseLooks()
+        ahBuy.tellBrowseLooks(self)
+    end
+
+    function KeyArrived(itemID: unknown)
+        ahBuy.keyArrived(self, itemID)
     end
 
     -- The Writs (AuctionHouse/Writs): chosen in the categories' list.
@@ -516,8 +604,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- What SuuUI remembers per item, and the item tooltips (AuctionHouse/Prices)
     ----------------------------------------------------------------------------
 
-    function Seen(itemID: number?, m: Market | number | nil, qty: number?)
-        ahPrices.recordSeen(self, itemID, m, qty)
+    -- (the item's name and quality when the house told them)
+    function Seen(itemID: number?, m: Market | number | nil, qty: number?, name: string?, quality: number?)
+        ahPrices.recordSeen(self, itemID, m, qty, name, quality)
     end
 
     function LowestSeen(itemID: number?): SeenEntry?
@@ -675,6 +764,102 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
+    -- The Ledger (0.48): its button, Alt-click, the marks and the scan's deals
+    ----------------------------------------------------------------------------
+
+    -- The Ledger opened (at `view`, its own default when nil) beside this
+    -- window, never over it; whether it could (the Ledger off: no).
+    function OpenLedger(view: string?, opts: LedgerOpenOptions?): boolean
+        local svc = SuuUI.UseService(LEDGER)
+        local open = svc and svc.Open
+        if not open then
+            return false
+        end
+        local o: LedgerOpenOptions = opts or {}
+        o.beside = self.window
+        open(view, o)
+        return true
+    end
+
+    -- A row's item Alt-clicked: its price page in the Ledger; whether it
+    -- was one the Ledger took (else the row's own click goes on).
+    function AltClickItem(itemID: number?): boolean
+        if not (itemID and IsAltKeyDown()) or IsShiftKeyDown() or IsControlKeyDown() then
+            return false
+        end
+        return self:OpenLedger("item", { itemID = itemID })
+    end
+
+    -- Its button shown while the Ledger is on.
+    function DrawLedgerButton()
+        local b = self.ledgerButton
+        if b then
+            local svc = SuuUI.UseService(LEDGER)
+            b:SetShown(svc ~= nil and svc.Open ~= nil)
+        end
+    end
+
+    -- Whether Browse marks deals: the Ledger on, its setting on.
+    function MarksDeals(): boolean
+        local ledger = SuuUI.GetModule("ledger")
+        return ledger ~= nil and ledger:IsEnabled() and ledger:Setting("markDeals") ~= false and
+            SuuUI.UseService(LEDGER) ~= nil
+    end
+
+    -- A result's marks: how far under its usual price it is offered when
+    -- that counts as a deal, and whether it is under what a vendor pays.
+    -- Nothing without a usual price (an item seen too rarely), the Ledger
+    -- off or its marks.
+    function DealOf(itemID: number?, price: number?): (number?, boolean)
+        local deal = self:DealMarks()
+        if not (deal and itemID and price and price > 0) then
+            return nil, false
+        end
+        return deal(itemID, price)
+    end
+
+    -- What gives a result's marks (DealOf's), asked once for a draw of many
+    -- (nil: no marks: the Ledger off, or its marks).
+    function DealMarks(): ((itemID: number, price: number) -> (number?, boolean))?
+        if not self:MarksDeals() then
+            return nil
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local usual, deal = svc and svc.UsualPrice, svc and svc.Deal
+        if not (usual and deal) then
+            return nil
+        end
+        return function(itemID: number, price: number): (number?, boolean)
+            if not usual(itemID) then
+                return nil, false
+            end
+            return deal(itemID, price)
+        end
+    end
+
+    -- After Scan all, once the Ledger read it: the foot's "Scan done" note
+    -- says its deals instead (only while it still shows that note, and
+    -- only when it found some).
+    function ScanDeals()
+        if not self.noteText:find("^Scan done:") then
+            return
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local last = svc and svc.LastScan
+        local s = last and last()
+        if not s then
+            return
+        end
+        -- (none: the house's own note stays, how many auctions and items)
+        if s.deals == 0 then
+            return
+        end
+        self:Note(
+            ("Scan done: %d %s, %d under vendor price."):format(s.deals, s.deals == 1 and "deal" or "deals", s.underVendor)
+        )
+    end
+
+    ----------------------------------------------------------------------------
     -- The window
     ----------------------------------------------------------------------------
 
@@ -715,6 +900,23 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         w.scroll:Hide()
         self.window = w
+        -- (0.48) the Ledger, at the tab row's right: a quiet button
+        local tabRow = w.tabRow
+        if tabRow then
+            local ledger = UI.Button(tabRow, {
+                text = "Ledger",
+                icon = "coin",
+                onClick = function()
+                    self:OpenLedger()
+                end,
+                tooltip = {
+                    title = "Ledger",
+                    description = "Prices of this ruleset's house over 60 days, deals, your gold. Opens beside this window.",
+                },
+            })
+            ledger:SetPoint("RIGHT", tabRow, "RIGHT", 0, 0)
+            self.ledgerButton = ledger
+        end
         local buy, sell, mine = BuyPage.new(w.body, self), SellPage.new(w.body, self), AuctionsPage.new(w.body, self)
         self.buy, self.sell, self.mine = buy, sell, mine
         self.pages.buy, self.pages.sell, self.pages.auctions = buy, sell, mine
@@ -740,6 +942,14 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if money then
             money:SetCopper(GetMoney() or 0)
         end
+        keysMissing()
+        self:DrawTab()
+        self.keysWaiting = keysMissing()
+    end
+
+    -- The tab shown drawn (Refresh).
+    function DrawTab()
+        local buy = assert(self.buy)
         if self.tab == "sell" then
             self:DrawSell()
             return
@@ -845,6 +1055,11 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     end)
                 end
             end)
+            self:DrawLedgerButton()
+            -- your auctions: kept for SuuUI.Holdings as the house tells them
+            -- (a wait from before cancelled with the module's timers)
+            self.ownedTimer = false
+            ahAuctions.askOwned(self)
             window:Show()
             window:SetTab("buy")
             self:Note("")
@@ -855,6 +1070,7 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("AUCTION_HOUSE_CLOSED", function()
             self.open = false
+            self.ownedWanted = false
             self:StopScan()
             -- (no answer comes for a bid or a purchase once the house is closed)
             self:DropBid()
@@ -867,16 +1083,27 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
             self:QueueRefresh()
         end
+        -- (the results' looks told to the price store as they come: a new
+        -- set told anew, more of it what changed)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+            self.browseTold, self.browseNameless = {}, {}
+            self:TellBrowseLooks()
             self:KeepSearch()
             results(true)
         end)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function()
+            self:TellBrowseLooks()
             self:KeepSearch()
             results(true)
         end)
-        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function()
-            results(false)
+        -- a key's info: a result's name kept; drawn again only while what
+        -- shows waits for one (a draw takes the flag, Refresh: the game's
+        -- own hidden frame asks for keys too)
+        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function(_, itemID)
+            self:KeyArrived(itemID)
+            if self.keysWaiting or keysMissing() then
+                results(false)
+            end
         end)
         self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function()
             results(true)
@@ -929,6 +1156,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function()
             self:Posted()
+            -- (your auctions kept again: the house tells the new list)
+            ahAuctions.askOwned(self)
         end)
         -- prices and "Yours" carry colour codes: drawn again
         self:On("SUUUI_THEME_CHANGED", function()
@@ -936,9 +1165,13 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         -- Auctions: the lists as the house sends them; after a change, asked again
         self:OnGameEvent("OWNED_AUCTIONS_UPDATED", function()
+            ahAuctions.keepOwned(self)
             if self.tab == "auctions" then
                 self:QueueRefresh()
             end
+        end)
+        SuuUI.Holdings.Provide(self, "auctions", function(key: string): Holding?
+            return self:OwnedHolding(key)
         end)
         self:OnGameEvent("BIDS_UPDATED", function()
             if self.tab == "auctions" then
@@ -962,13 +1195,36 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("REPLICATE_ITEM_LIST_UPDATE", function()
             self:ReadScan()
         end)
+        -- (0.48) the Ledger: its button, the marks, the scan's deals
+        self:DrawLedgerButton()
+        self:On("SUUUI_SERVICE_CHANGED", function(_, name)
+            if name == "ledger" then
+                self:DrawLedgerButton()
+                self:QueueRefresh()
+            end
+        end)
+        self:On("SUUUI_LEDGER_CHANGED", function(_, what)
+            if what == "scan" then
+                self:ScanDeals()
+            end
+            if (what == "scan" or what == "prices") and self.tab == "buy" and self.view == "browse" then
+                self:QueueRefresh()
+            end
+        end)
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "ledger" and (key == "markDeals" or key == "enabled") then
+                self:QueueRefresh()
+            end
+        end)
         self:HookTooltips()
         self:HookLinks()
         self:ProvideService(AUCTION_HOUSE, {
             SearchItem = function(item: number | string): boolean
                 return self:SearchItem(item)
             end,
-            -- (0.44) the newest price any of your characters saw (crafting costs)
+            -- (0.44) the newest price any of your characters saw (crafting
+            -- costs); 0.48: on this ruleset, from the price store (`at`: the
+            -- start of the time of day it was seen in)
             Price = function(itemID: number): AuctionPrice?
                 local e = self:LowestSeen(itemID)
                 return e and { price = e.price, at = e.at } or nil
@@ -1010,6 +1266,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function()
+            if self.ownedWanted then
+                ahAuctions.askOwned(self)
+            end
             local sell = self.sell
             if sell and sell.resend then
                 sell.resend = false

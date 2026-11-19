@@ -10,7 +10,8 @@
 -- the run itself: Mail/Collect), sending (what Send needs, money
 -- or COD, attachments naming the subject, success, failure, a cancelled
 -- confirmation, never stuck), To's suggestions (your characters, recent,
--- the guild; arrows, Enter, Tab, a click), the Sent list, /suu mailsuggest.
+-- the guild; arrows, Enter, Tab, a click), the Sent list, /suu mailsuggest;
+-- the inbox kept per character (SuuUI.Holdings' "mail"), off and on.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -26,6 +27,11 @@ import type TooltipData from "/UI/Tooltip"
 import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
 import confirm from "/UI/Panel"
+import * as events from "/Core/Events"
+import * as settings from "/Core/Settings"
+import internal ownOf from "/Core/Modules"
+
+const LISTENER = { name = "MailTest" }
 
 local WATER, TOME = 990011, 990012
 mock.defineItem(WATER, { name = "Test Water", quality = 1, stackCount = 20, icon = 134400 }, { cached = true })
@@ -556,6 +562,48 @@ local function collectAll()
     mock.click(row("Tester"))
     expect(pane().slots[1]).toBeShown()
     expect(row("Game Master").right2:GetText() ~= "").toBe(true)
+end
+
+@test("the inbox kept per character: read on a visit and again after Collect all; SuuUI.Holdings' mail, told; the module off: not read, the kept inbox stays")
+local function inboxKept()
+    local key = assert(M:CharKey())
+    M:MailData().inbox = nil
+    M.held = {}
+    expect(SuuUI.Holdings.Of(key, "mail")).toBeNil()
+    local heard: string[] = {}
+    events.on("SUUUI_HOLDINGS_CHANGED", function(_, place: string, who: string)
+        heard[#heard + 1] = place .. " " .. who
+    end, LISTENER)
+    openMailbox()
+    mock.advanceTime(1)
+    expect(heard).toContain("mail " .. key)
+    local h = assert(SuuUI.Holdings.Of(key, "mail"))
+    expect(h.items).toEqual({ [WATER] = 5, [TOME] = 1 })
+    -- Tamsin's, the auction's and the game master's money; the tome's COD
+    expect({ h.money, h.cod }).toEqual({ 5000 + 9000 + 100, 20000 })
+    expect(assert(M:MailData().inbox).at).toBe(h.seen)
+    -- the same holding until the inbox is read again
+    expect(SuuUI.Holdings.Of(key, "mail") == h).toBe(true)
+    -- Collect all: the money and the water taken, kept again
+    mock.click(inbox().collect)
+    mock.advanceTime(10)
+    local after = assert(SuuUI.Holdings.Of(key, "mail"))
+    expect(after.items).toEqual({ [TOME] = 1 })
+    expect({ after.money, after.cod }).toEqual({ 100, 20000 })
+    events.offAll(LISTENER)
+    CloseMail()
+    mock.advanceTime(0.5)
+    -- off: the place isn't read (no mail anywhere), the kept inbox stays
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    settings.set("mail", "enabled", false)
+    expect(SuuUI.Holdings.Kept("mail")).toBe(false)
+    expect(SuuUI.Holdings.Of(key, "mail")).toBeNil()
+    expect(M:MailData().inbox).never.toBeNil()
+    settings.set("mail", "enabled", true)
+    own.reloadToToggle = true
+    expect(assert(SuuUI.Holdings.Of(key, "mail")).items).toEqual({ [TOME] = 1 })
+    M:MailData().inbox = nil
 end
 
 @test("Collect all: what the game refuses is left, the rest collected, and the player told why")

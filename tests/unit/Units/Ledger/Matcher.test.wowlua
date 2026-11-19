@@ -1,0 +1,105 @@
+-- Units/Ledger/Matcher: a change paired with the oldest expectation of
+-- exactly its amount (several on their way at once, in any order), one of
+-- its other amounts, one that knows only its direction after the exact
+-- ones; a change that comes first waits for its expectation; what nothing
+-- explains is Other after a moment; an expectation without its change is
+-- dropped in time.
+
+import test, expect from "wowlua:test"
+import Matcher, GRACE, TTL from "/Units/Ledger/Matcher"
+import type Expectation from "/Units/Ledger/Matcher"
+import expectNoErrors from "../../../helpers"
+
+type Booked = { kind: string, amount: number, at: number }
+
+local function matcher(): (Matcher, Booked[])
+    local out: Booked[] = {}
+    local m = Matcher.new(function(e: Expectation?, amount: number, at: number)
+        out[#out + 1] = { kind = e and e.kind or "other", amount = amount, at = at }
+    end)
+    return m, out
+end
+
+@test("several sales on their way: each change to the oldest of its amount, in the order they come")
+local function exact()
+    local m, out = matcher()
+    m:Expect({ kind = "vendor", amount = 1614, item = 1 }, 0)
+    m:Expect({ kind = "vendor", amount = 900, item = 2 }, 0.05)
+    m:Expect({ kind = "vendor", amount = 1614, item = 3 }, 0.1)
+    m:Money(900, 0.3, 1000)
+    m:Money(1614, 0.32, 1001)
+    m:Money(1614, 0.4, 1002)
+    expect(out).toEqual({
+        { kind = "vendor", amount = 900, at = 1000 },
+        { kind = "vendor", amount = 1614, at = 1001 },
+        { kind = "vendor", amount = 1614, at = 1002 },
+    })
+    expect(m:Waiting()).toBe(false)
+    expectNoErrors()
+end
+
+@test("one of its other amounts; a direction only after the exact ones")
+local function looseAndAlts()
+    local m, out = matcher()
+    m:Expect({ kind = "posted", sign = -1 }, 0)
+    m:Expect({ kind = "mail", amount = -1030, alts = { -1000, -30 } }, 0.1)
+    m:Money(-1000, 0.3, 10)
+    m:Money(-150, 0.4, 11)
+    m:Money(40, 0.5, 12)
+    expect(out[1]).toEqual({ kind = "mail", amount = -1000, at = 10 })
+    expect(out[2]).toEqual({ kind = "posted", amount = -150, at = 11 })
+    -- the +40: nothing explains it (yet)
+    expect(#out).toBe(2)
+    expect(m:Waiting()).toBe(true)
+    expectNoErrors()
+end
+
+@test("a change before its expectation waits; nothing explains it: Other after a moment")
+local function waiting()
+    local m, out = matcher()
+    m:Money(256, 0, 100)
+    m:Expect({ kind = "loot", amount = 256 }, 0.2)
+    expect(out).toEqual({ { kind = "loot", amount = 256, at = 100 } })
+    m:Money(-77, 1, 101)
+    m:Expire(1 + GRACE / 2)
+    expect(#out).toBe(1)
+    m:Expire(1 + GRACE)
+    expect(out[2]).toEqual({ kind = "other", amount = -77, at = 101 })
+    expect(m:Waiting()).toBe(false)
+    expectNoErrors()
+end
+
+@test("an expectation without its change dropped in time; no change of 0")
+local function dropped()
+    local m, out = matcher()
+    m:Expect({ kind = "train", amount = -5000 }, 0)
+    m:Expect({ kind = "quest", amount = 300, ttl = 1 }, 0)
+    m:Money(0, 0.1, 1)
+    m:Expire(1)
+    expect(#m.expects).toBe(1)
+    m:Expire(TTL)
+    expect(m:Waiting()).toBe(false)
+    m:Money(-5000, TTL + 1, 2)
+    m:Expire(TTL + 1 + GRACE)
+    expect(out).toEqual({ { kind = "other", amount = -5000, at = 2 } })
+    m:Expect({ kind = "train", amount = -5000 }, 0)
+    m:Clear()
+    expect(m:Waiting()).toBe(false)
+    expectNoErrors()
+end
+
+@test("an expectation dropped when its call failed: a later change of its amount is Other")
+local function failed()
+    local m, out = matcher()
+    local send: Expectation = { kind = "mail", amount = -30 }
+    m:Expect({ kind = "mail", amount = -30 }, 0)
+    m:Expect(send, 0)
+    expect(m:Drop(send)).toBe(true)
+    expect(m:Drop(send)).toBe(false)
+    expect(#m.expects).toBe(1)
+    m:Money(-30, 1, 1)
+    m:Money(-30, 1, 2)
+    m:Expire(1 + GRACE)
+    expect(out).toEqual({ { kind = "mail", amount = -30, at = 1 }, { kind = "other", amount = -30, at = 2 } })
+    expectNoErrors()
+end

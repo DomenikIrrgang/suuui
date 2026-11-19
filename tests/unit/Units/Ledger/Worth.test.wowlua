@@ -1,0 +1,334 @@
+-- Units/Ledger/Worth: what the chosen characters' places are worth: each
+-- item at the usual price of its character's ruleset times how many;
+-- soulbound items, ones never seen on that ruleset's house, quest items and
+-- the hearthstone left out and counted; the mail's money with its COD taken
+-- off, never under nothing; the places together (read by how many, the
+-- oldest read, live, kept); kept until a place is read again, a price of
+-- an item it holds changes, a Scan all or the prune, a new day; worked out
+-- a slice a frame at size (ten characters' thousands of items), told once.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import type Holding from "/Core/API"
+import Worth, PASS_ITEMS from "/Units/Ledger/Worth"
+import type Chosen from "/Units/Ledger/Worth"
+import expectNoErrors from "../../../helpers"
+
+local ORE, HERB, BLADE, QUEST, HEARTH = 1001, 1002, 1003, 1004, 6948
+const PLACES = { "bags", "bank", "mail", "auctions" }
+
+-- A world of holdings and prices the Worth reads, and what it asked.
+type World = {
+    holdings: { [string]: { [string]: Holding } },
+    kept: { [string]: boolean },
+    prices: { [string]: { [number]: number } },
+    asked: number,
+    done: number,
+    w: Worth,
+}
+
+local function world(): World
+    local t: World = {
+        holdings = {},
+        kept = { bags = true, bank = true, mail = true, auctions = true },
+        prices = { Normal = { [ORE] = 100, [HERB] = 250, [BLADE] = 40000, [QUEST] = 5, [HEARTH] = 1 }, Roleplay = { [ORE] = 300 } },
+        asked = 0,
+        done = 0,
+        w = nil :: unknown :: Worth,
+    }
+    t.w = Worth.new({
+        holding = function(key: string, place: string): Holding?
+            local h = t.holdings[key]
+            return h and h[place]
+        end,
+        kept = function(place: string): boolean
+            return t.kept[place] == true
+        end,
+        usual = function(itemID: number, ruleset: string): number?
+            t.asked += 1
+            local p = t.prices[ruleset]
+            return p and p[itemID]
+        end,
+        never = function(itemID: number): boolean
+            return itemID == QUEST
+        end,
+        every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+            return C_Timer.NewTicker(seconds, fn)
+        end,
+        done = function()
+            t.done += 1
+        end,
+    })
+    return t
+end
+
+local made: Worth[] = {}
+local function fresh(): World
+    local t = world()
+    made[#made + 1] = t.w
+    return t
+end
+
+@afterEach
+local function cleanup()
+    for _, w in ipairs(made) do
+        w:Stop()
+    end
+    made = {}
+    expectNoErrors()
+end
+
+local ANN: Chosen = { key = "Ann - N", ruleset = "Normal" }
+local BO: Chosen = { key = "Bo - N", ruleset = "Normal" }
+local CY: Chosen = { key = "Cy - R", ruleset = "Roleplay" }
+
+@test("a place's worth: each item at its ruleset's usual price times how many; soulbound, unseen, quest items and the hearthstone left out and counted")
+local function values()
+    local t = fresh()
+    t.holdings[ANN.key] = {
+        bags = {
+            items = { [ORE] = 20, [HERB] = 4, [BLADE] = 1, [QUEST] = 2, [HEARTH] = 1, [9999] = 3 },
+            -- 4 of the ore soulbound (a bound stack); the blade bound once worn
+            bound = { [ORE] = 4, [BLADE] = 1, [HEARTH] = 1 },
+            seen = 500,
+            live = true,
+        },
+    }
+    expect(t.w:Prepare({ ANN }, PLACES, 1000)).toBe(true)
+    local sums = t.w:Sum({ ANN }, PLACES)
+    -- 16 ore × 100 + 4 herbs × 250
+    expect(assert(sums.bags).value).toBe(16 * 100 + 4 * 250)
+    -- 4 ore, the blade, the hearthstone (bound); 2 quest items; 3 unseen
+    expect(assert(sums.bags).left).toBe(4 + 1 + 1 + 2 + 3)
+    expect({ assert(sums.bags).known, assert(sums.bags).unknown, assert(sums.bags).live, assert(sums.bags).kept }).toEqual({ 1, 0, true, true })
+    expect(assert(sums.bags).oldest).toBeNil()
+    -- the others never read: unknown
+    expect({ assert(sums.bank).known, assert(sums.bank).unknown, assert(sums.bank).value }).toEqual({ 0, 1, 0 })
+end
+
+@test("each character at its own ruleset's prices; the mail's money less its COD, never under nothing; the places together")
+local function rulesets()
+    local t = fresh()
+    t.holdings[ANN.key] = {
+        bags = { items = { [ORE] = 10 }, seen = 900 },
+        mail = { items = { [HERB] = 2 }, money = 5000, cod = 1000, seen = 700 },
+    }
+    t.holdings[CY.key] = {
+        bags = { items = { [ORE] = 10, [HERB] = 1 }, seen = 800 },
+        -- a COD dearer than what it holds: nothing, not less
+        mail = { items = { [ORE] = 1 }, cod = 90000, seen = 600 },
+    }
+    expect(t.w:Prepare({ ANN, BO, CY }, PLACES, 1000)).toBe(true)
+    local sums = t.w:Sum({ ANN, BO, CY }, PLACES)
+    -- Ann's ore at Normal's 100, Cy's at Roleplay's 300; Cy's herb never seen there
+    expect(assert(sums.bags).value).toBe(10 * 100 + 10 * 300)
+    expect(assert(sums.bags).left).toBe(1)
+    expect({ assert(sums.bags).known, assert(sums.bags).unknown, assert(sums.bags).live, assert(sums.bags).oldest }).toEqual({ 2, 1, false, 800 })
+    expect(assert(sums.mail).value).toBe(2 * 250 + 5000 - 1000)
+    expect(assert(sums.mail).oldest).toBe(600)
+    -- a place no module keeps: not kept, nothing counted
+    t.kept.auctions = false
+    local off = assert(t.w:Sum({ ANN }, PLACES).auctions)
+    expect({ off.kept, off.known, off.value }).toEqual({ false, 0, 0 })
+end
+
+@test("kept: nothing asked again; a place read again only that one; a look of an item held its ruleset again, of another nothing; a Scan all its ruleset; a new day all")
+local function kept()
+    local t = fresh()
+    t.holdings[ANN.key] = { bags = { items = { [ORE] = 10, [HERB] = 1 }, seen = 1 }, bank = { items = { [ORE] = 5 }, seen = 1 } }
+    t.holdings[CY.key] = { bags = { items = { [ORE] = 1 }, seen = 1 } }
+    local all = { ANN, CY }
+    t.w:Prepare(all, PLACES, 1000)
+    -- (Ann's ore asked once for her bags and bank: kept per ruleset)
+    expect(t.asked).toBe(3)
+    t.w:Prepare(all, PLACES, 1000)
+    expect(t.asked).toBe(3)
+    -- Ann's bank read again: only it, its ore's price kept
+    t.holdings[ANN.key].bank = { items = { [ORE] = 6 }, seen = 2 }
+    t.w:HoldingChanged("bank", ANN.key)
+    expect(t.w:Result(ANN.key, "bags")).never.toBeNil()
+    expect(t.w:Result(ANN.key, "bank")).toBeNil()
+    t.w:Prepare(all, PLACES, 1000)
+    expect(t.asked).toBe(3)
+    expect(assert(t.w:Sum({ ANN }, PLACES).bank).value).toBe(600)
+    -- a look of an item nobody holds: nothing
+    expect(t.w:PriceChanged("Normal", BLADE)).toBe(false)
+    expect(t.w:Result(ANN.key, "bags")).never.toBeNil()
+    -- the ore's price on Normal changed: Normal's characters again, Cy's kept
+    t.prices.Normal[ORE] = 120
+    expect(t.w:PriceChanged("Normal", ORE)).toBe(true)
+    expect(t.w:Result(ANN.key, "bags")).toBeNil()
+    expect(t.w:Result(CY.key, "bags")).never.toBeNil()
+    t.w:Prepare(all, PLACES, 1000)
+    expect(t.asked).toBe(4) -- the ore only
+    expect(assert(t.w:Sum({ ANN }, PLACES).bags).value).toBe(10 * 120 + 250)
+    -- a Scan all on Roleplay: its prices all again
+    t.w:PricesChanged("Roleplay")
+    expect(t.w:Result(CY.key, "bags")).toBeNil()
+    t.w:Prepare(all, PLACES, 1000)
+    expect(t.asked).toBe(5)
+    -- every character's place ("": a module started or stopped keeping it)
+    t.w:HoldingChanged("bags", "")
+    expect(t.w:Result(ANN.key, "bags")).toBeNil()
+    expect(t.w:Result(CY.key, "bags")).toBeNil()
+    -- a new day: the usual prices are today's
+    t.w:Prepare(all, PLACES, 1000)
+    local asked = t.asked
+    t.w.day = t.w.day - 1
+    t.w:Prepare(all, PLACES, 1000)
+    expect(t.asked).toBe(asked + 3)
+end
+
+@test("at size: ten characters' bags, banks, mail and auctions worked out a slice a frame, never more than a slice; told once; each price asked once a ruleset")
+local function atSize()
+    local t = fresh()
+    local chosen: Chosen[] = {}
+    for c = 1, 10 do
+        local key = "Char" .. c .. " - " .. (c <= 7 and "N" or "R")
+        chosen[c] = { key = key, ruleset = c <= 7 and "Normal" or "Roleplay" }
+        local places: { [string]: Holding } = {}
+        for p, place in ipairs(PLACES) do
+            local items: { [number]: number } = {}
+            -- 400 kinds of item a place: 16,000 in all
+            for k = 1, 400 do
+                items[20000 + (c * 7 + p * 13 + k) % 1500] = k % 20 + 1
+            end
+            places[place] = { items = items, seen = 1 }
+        end
+        t.holdings[key] = places
+        for k = 0, 1499 do
+            t.prices.Normal[20000 + k] = 10 + k
+        end
+    end
+    local per: number[] = {}
+    local was = t.asked
+    expect(t.w:Prepare(chosen, PLACES, 2000)).toBe(false)
+    -- (nothing done in the asking frame)
+    expect(t.asked).toBe(was)
+    local frames = 0
+    while t.done == 0 and frames < 500 do
+        local before = t.w:Left()
+        mock.advanceFrames(1)
+        frames += 1
+        per[#per + 1] = before - t.w:Left()
+    end
+    expect(t.done).toBe(1)
+    for _, n in ipairs(per) do
+        expect(n <= PASS_ITEMS).toBe(true)
+    end
+    expect(frames >= math.floor(16000 / PASS_ITEMS)).toBe(true)
+    -- at most the 1,500 items on each ruleset asked once
+    expect(t.asked - was <= 3000).toBe(true)
+    expect(t.w:Prepare(chosen, PLACES, 2000)).toBe(true)
+    local sums = t.w:Sum(chosen, PLACES)
+    expect(assert(sums.bags).known).toBe(10)
+    expect(assert(sums.bags).value > 0).toBe(true)
+    -- one place read again: few items, worked out at once
+    t.w:HoldingChanged("mail", chosen[1].key)
+    expect(t.w:Prepare(chosen, PLACES, 2000)).toBe(true)
+    expect(t.done).toBe(1)
+end
+
+@test("a place read again while it is being worked out: that work dropped, the new one counted; stopped: nothing kept")
+local function midway()
+    local t = fresh()
+    local items: { [number]: number } = {}
+    for k = 1, 1000 do
+        items[30000 + k] = 1
+    end
+    for k = 1, 1000 do
+        t.prices.Normal[30000 + k] = 1
+    end
+    t.holdings[ANN.key] = { bags = { items = items, seen = 1 } }
+    expect(t.w:Prepare({ ANN }, PLACES, 10)).toBe(false)
+    mock.advanceFrames(1)
+    t.holdings[ANN.key] = { bags = { items = { [ORE] = 3 }, seen = 2 } }
+    t.w:HoldingChanged("bags", ANN.key)
+    t.w:Prepare({ ANN }, PLACES, 10)
+    local guard = 0
+    while t.done == 0 and guard < 50 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    expect(assert(t.w:Sum({ ANN }, PLACES).bags).value).toBe(300)
+    t.w:Stop()
+    expect(t.w:Result(ANN.key, "bags")).toBeNil()
+    expect(t.w.ticker).toBeNil()
+end
+
+@test("a place's items when asked (the Items tab's): in item order, each with its price or why it was left out, soulbound apart; adding up to its worth; the money's part")
+local function items()
+    local t = fresh()
+    t.holdings[ANN.key] = {
+        bags = {
+            items = { [ORE] = 20, [HERB] = 4, [QUEST] = 2, [HEARTH] = 1, [9999] = 3 },
+            bound = { [ORE] = 4, [HEARTH] = 1 },
+            seen = 500,
+        },
+        mail = { items = { [HERB] = 2 }, money = 5000, cod = 1000, seen = 400 },
+    }
+    t.holdings[CY.key] = { mail = { items = { [ORE] = 1 }, cod = 90000, seen = 300 } }
+    -- the Gold tab's: no items kept
+    expect(t.w:Prepare({ ANN }, PLACES, 1000)).toBe(true)
+    local plain = assert(t.w:Result(ANN.key, "bags"))
+    expect(plain and plain.items).toBeNil()
+    local asked = t.asked
+    -- asked with them: worked out again, the same worth
+    expect(t.w:Prepare({ ANN, CY }, PLACES, 1000, true)).toBe(true)
+    local r = assert(t.w:Result(ANN.key, "bags"))
+    expect(r and r.value).toBe(plain and plain.value)
+    -- (its prices kept: none asked again)
+    expect(t.asked).toBe(asked + 1)
+    expect(r and r.items).toEqual({
+        { itemID = ORE, count = 4, why = "bound" },
+        { itemID = ORE, count = 16, each = 100 },
+        { itemID = HERB, count = 4, each = 250 },
+        { itemID = QUEST, count = 2, why = "quest" },
+        { itemID = HEARTH, count = 1, why = "bound" },
+        { itemID = 9999, count = 3, why = "never" },
+    })
+    -- the items and the money add up to the place's worth
+    local mail = assert(t.w:Result(ANN.key, "mail"))
+    if mail then
+        local sum = mail.money
+        for _, it in ipairs(mail.items or {}) do
+            sum += (it.each or 0) * it.count
+        end
+        expect(sum).toBe(mail.value)
+        expect({ mail.money, mail.cash, mail.cod }).toEqual({ 4000, 5000, 1000 })
+    end
+    -- a COD dearer than the letter (an ore at Roleplay's 300): its money takes the place to nothing
+    local cy = assert(t.w:Result(CY.key, "mail"))
+    expect(cy and { cy.value, cy.money }).toEqual({ 0, -300 })
+    -- the hearthstone with a price, not bound: still left out, as the hearthstone
+    t.holdings[BO.key] = { bags = { items = { [HEARTH] = 1 }, seen = 1 } }
+    t.w:Prepare({ BO }, PLACES, 1000, true)
+    local bo = assert(t.w:Result(BO.key, "bags"))
+    expect(bo and bo.items).toEqual({ { itemID = HEARTH, count = 1, why = "hearth" } })
+    -- the Gold tab asking after: the items stay
+    t.w:Prepare({ ANN }, PLACES, 1000)
+    local again = assert(t.w:Result(ANN.key, "bags"))
+    expect(again and again.items ~= nil).toBe(true)
+end
+
+@test("a place queued without its items, then asked for with them: queued again with them, worked out once")
+local function requeue()
+    local t = fresh()
+    local many: { [number]: number } = {}
+    for k = 1, 600 do
+        many[40000 + k] = 1
+        t.prices.Normal[40000 + k] = 2
+    end
+    t.holdings[ANN.key] = { bags = { items = many, seen = 1 } }
+    expect(t.w:Prepare({ ANN }, PLACES, 10)).toBe(false)
+    expect(t.w:Prepare({ ANN }, PLACES, 10, true)).toBe(false)
+    local guard = 0
+    while t.w.ticker and guard < 50 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    local r = assert(t.w:Result(ANN.key, "bags"))
+    expect(r and #(r.items or {})).toBe(600)
+    expect(r and r.value).toBe(1200)
+    expect(t.done).toBe(1)
+end

@@ -7,10 +7,15 @@
 -- 2026-10-16); sending money goes through the game's own confirmation.
 -- Mail/Inbox reads the inbox and finds a mail again after it moved (nothing
 -- acts on an inbox index kept from before); Mail/Collect is Collect all.
+-- Each character's inbox as last read is kept (its mails' money, COD,
+-- expiry and items) and is SuuUI.Holdings' "mail" while this module is on
+-- (the Ledger's "What it's worth", the bags' item counts). Turned off, the
+-- kept inboxes stay in its data but nobody reads them: no mail shows there
+-- until it is on again (and the inbox is read again on the next visit).
 -- A built-in module written against the public API only.
 
 import SuuUI, Module, ItemSlotClass from "/Core/API"
-import type WindowFrame, ScrollArea, Text, SuuButton, TextField, Segmented, MoneyInput, Color, ItemSlot, ConfirmDialog from "/Core/API"
+import type WindowFrame, ScrollArea, Text, SuuButton, TextField, Segmented, MoneyInput, Color, ItemSlot, ConfirmDialog, Holding from "/Core/API"
 import type AwayHandle from "wowlua:frames"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
@@ -366,6 +371,8 @@ export type SentMail = { to: string, subject: string, items: SentItem[], money: 
 -- characters' suggestions).
 export type MailChar = {
     sent?: SentMail[],
+    -- the inbox as last read (0.48; Mail/Inbox keep)
+    inbox?: mails.KeptInbox,
     name?: string,
     realm?: string,
     level?: number,
@@ -529,6 +536,10 @@ class MailModule extends Module<typeof(DEFAULTS)>
     suggest: SuggestList? = nil
     tab: string? = nil
     window: WindowFrame? = nil
+    -- the inbox kept, once the game's updates settle; each character's as a
+    -- holding (InboxHolding), until read again or a mail expires
+    keepQueued: boolean = false
+    held: { [string]: { at: number, next?: number, h: Holding } } = {}
 
     constructor()
         super({
@@ -558,6 +569,58 @@ class MailModule extends Module<typeof(DEFAULTS)>
     -- What this character keeps (its data, typed).
     function MailData(): MailChar
         return self:CharData() :: unknown :: MailChar
+    end
+
+    ----------------------------------------------------------------------------
+    -- Each character's inbox as last read (SuuUI.Holdings' "mail")
+    ----------------------------------------------------------------------------
+
+    -- The inbox kept now, once the game's updates settle (Collect all
+    -- tells one a take), while the mailbox is open; told to the holdings'
+    -- readers.
+    function QueueKeep()
+        if self.keepQueued then
+            return
+        end
+        self.keepQueued = true
+        self:After(0.3, function()
+            self.keepQueued = false
+            if self.open then
+                self:KeepInbox()
+            end
+        end)
+    end
+
+    function KeepInbox()
+        local key = self:CharKey()
+        if not key then
+            return
+        end
+        self:MailData().inbox = mails.keep(time())
+        self.held[key] = nil
+        SuuUI.Holdings.Changed(self, "mail", key)
+    end
+
+    -- A character's inbox as a holding (nil: never read): made once until
+    -- it is read again or one of its mails expires.
+    function InboxHolding(key: string): Holding?
+        local d = self:AllCharData()[key] :: unknown :: MailChar?
+        local kept = d and d.inbox
+        if not kept then
+            self.held[key] = nil
+            return nil
+        end
+        local now = time()
+        local c = self.held[key]
+        if c and c.at == kept.at and (not c.next or now < c.next) then
+            return c.h
+        end
+        local h, nextEnd = mails.holdingOf(kept, now)
+        if not h then
+            return nil
+        end
+        self.held[key] = { at = kept.at, next = nextEnd, h = h }
+        return h
     end
 
     -- Takes one thing at a time, each once the game has answered the last,
@@ -1712,10 +1775,17 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 self:Closed()
             end
         end)
-        -- the game's answers to Collect all's takes (Mail/Collect)
+        -- the game's answers to Collect all's takes (Mail/Collect); the
+        -- inbox kept (SuuUI.Holdings' "mail")
         self:OnGameEvent("MAIL_INBOX_UPDATE", function()
             self.collector:OnInboxUpdate()
             self:QueueRefresh()
+            if self.open then
+                self:QueueKeep()
+            end
+        end)
+        SuuUI.Holdings.Provide(self, "mail", function(key: string): Holding?
+            return self:InboxHolding(key)
         end)
         self:OnGameEvent("MAIL_SUCCESS", function()
             self.collector:OnSuccess()
