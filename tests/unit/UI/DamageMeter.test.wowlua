@@ -107,29 +107,7 @@ local function meter(opts: DamageMeterOptions?): DamageMeter
     return w
 end
 
--- A source with the fields the game always gives (the window's argument
--- checks want them).
-local REQUIRED: { [string]: unknown } = {
-    name = "",
-    classFilename = "",
-    specIconID = 0,
-    totalAmount = 0,
-    amountPerSecond = 0,
-    isLocalPlayer = false,
-    deathRecapID = 0,
-    deathTimeSeconds = 0,
-    classification = "normal",
-    sourceDisplayType = 0,
-}
-
 local function session(meterType: string, list: Source[], total: number?)
-    for _, src in ipairs(list) do
-        for k, v in pairs(REQUIRED) do
-            if src[k] == nil then
-                src[k] = v
-            end
-        end
-    end
     sessions[typeEnum(meterType)] = { combatSources = list, totalAmount = total }
 end
 
@@ -359,6 +337,34 @@ local function zeroTop()
     w:SetView("damage", "current")
     local _, max = w.rows[1].bar:GetMinMaxValues()
     expect(max).toBe(1)
+end
+
+@test("sources without the fields the game documents: rows show what is there")
+local function sparseSources()
+    local w = meter({ rows = 4 })
+    session("damage", {
+        { name = "P1-Realm", totalAmount = 3000, amountPerSecond = 30 },
+        { name = "P2-Realm", classFilename = "ROGUE" },
+        {},
+    })
+    w:SetView("damage", "current")
+    expect(w.rows[1].name).toHaveText("P1")
+    expect(tokenOf(w.rows[1].name)).toBe("reaction-hostile") -- no class
+    expect(w.rows[1].main).toHaveText("3,000")
+    expect(w.rows[2].name).toHaveText("P2")
+    expect(w.rows[2].main).toHaveText("0")
+    expect(w.rows[3].name).toHaveText("")
+    -- the top without amounts: the bar's max is 1
+    session("dps", { { name = "A" } })
+    w:SetView("dps", "current")
+    local _, max = w.rows[1].bar:GetMinMaxValues()
+    expect(max).toBe(1)
+    -- a death without its recap or time
+    session("deaths", { { name = "B" } })
+    w:SetView("deaths", "current")
+    expect(w.rows[1].name).toHaveText("B")
+    expect(w.rows[1].open).toBeNil()
+    expectNoErrors()
 end
 
 @test("your row past the visible ones is pinned to the last slot")
