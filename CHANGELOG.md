@@ -1,9 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.22.0 (2026-11-19)
+
+### New
+
+- The Ledger: SuuUI's own window for your money, opened from its button on the micro menu, with `/ledger`, a key binding, or a click on the money in your bags. It keeps everything per ruleset, since each ruleset has its own auction house.
+  - **Overview:** your gold across characters, where it came from and went lately, the latest transactions, mail waiting with money, and your last Scan all with its deals.
+  - **Prices:** every item the auction house showed you, kept for 60 days, with its latest and usual price. You can search by name and filter by category, quality, deals or under vendor price. Alt-click any item in the game to open its price page: its price history (7, 30 or 60 days) and when it's cheapest by day of the week and time of day.
+  - **Transactions:** every money change, with what caused it: vendor sales and purchases, repairs, the auction house (sales, buys, deposits), mail, trades, quests, flights, trainers and looted coin, including your share in a group. Income is green, spending red.
+  - **Gold:** each character's gold over time and its change since yesterday, plus what it's worth: what's in your bags, bank, mail and auctions at its usual price.
+  - **Items:** everything your characters hold, valued, with sort and filters by place, category and quality. Hover a row to see where each one is; click it to open its price page.
+- Auction house: deals are marked in Browse ("26% under", "Under vendor"), a Ledger button opens the Ledger beside it, and after Scan all a note can tell you the deals it found. The items you watch tell you when they're offered under your price.
+- Item tooltips: the item's usual price on your ruleset (optional, in the Ledger's settings).
+- Item counts in tooltips and the bags' search now include what's in your mail, not just your bags and bank.
+
+### Changed
+
+- Auction house: the prices it saw are kept once per ruleset instead of per character, shared with the Ledger, which makes SuuUI's saved data smaller. Your existing prices are moved over the first time you log in.
+- Filter menus: a choice too wide for its panel now wraps onto several lines instead of running past the edge.
 
 ### Fixed
 
+- Auction house: results left on screen no longer redraw every frame, which lowered your frame rate while a search's results were showing.
+- World map: the holidays on the map no longer cause an error ("attempt to compare a secret string value") when the game keeps a calendar event's details hidden.
 - Raid frames: when a pet disappears or someone leaves the raid during a fight, the raid frames no longer throw a burst of "Blocked in combat" errors with a stutter. They now follow such changes during the fight.
 - Talents: a talent row now really stays closed until its own tree has the points it needs (5 a row), even when you have points in your other trees, and the talent's tooltip says so ("Requires 10 points in Arms"). Before, points in one tree still opened the next rows of the others, and their tooltips said nothing about points.
 - Raid page: Ready check and a member's Promote, Demote, Make leader and Remove from group use the game's current group functions, so they keep working when the game's backward-compatibility functions are turned off.
