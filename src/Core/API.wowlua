@@ -19,6 +19,8 @@ import * as pixel from "/Core/Pixel"
 import * as rolePresets from "/Core/RolePresets"
 import * as rulesets from "/Core/Rulesets"
 import * as prices from "/Core/Prices"
+import * as holdings from "/Core/Holdings"
+import type Holding as HoldingType, HoldingReader from "/Core/Holdings"
 import * as calendar from "/Core/Prices/Days"
 import * as pack from "/Core/Prices/Pack"
 import type Look as PriceLookType from "/Core/Prices/Store"
@@ -1491,6 +1493,38 @@ API.Prices = {
     end,
 }
 
+-- 0.48: what each of your characters holds, and where (Core/Holdings): per
+-- character key and place ("bags", "bank", "mail", "auctions") the items,
+-- which are soulbound, the money there, when it was read. The modules that
+-- read a place keep it and give a reader (Provide); one turned off
+-- contributes nothing. Anyone reads.
+API.Holdings = {
+    -- the places SuuUI's own modules keep, in the order they are shown
+    PLACES = holdings.PLACES,
+    -- a character's place as last read (nil: never read, or not kept now)
+    Of = function(charKey: string, place: string): HoldingType?
+        return holdings.of(charKey, place)
+    end,
+    -- every place of a character that was read, by place
+    All = function(charKey: string): { [string]: HoldingType }
+        return holdings.all(charKey)
+    end,
+    -- whether a module keeps a place now
+    Kept = function(place: string): boolean
+        return holdings.kept(place)
+    end,
+    -- (a module) reads `place` for any character from now on, until it
+    -- turns off; tells SUUUI_HOLDINGS_CHANGED(place, "")
+    Provide = function(m: modules.AnyModule, place: string, read: HoldingReader)
+        holdings.provide(m, place, read)
+    end,
+    -- (the module reading `place`) a character's place read again:
+    -- SUUUI_HOLDINGS_CHANGED(place, charKey)
+    Changed = function(m: modules.AnyModule, place: string, charKey: string)
+        holdings.changed(m, place, charKey)
+    end,
+}
+
 -- 0.48: the calendar the prices are kept by (Core/Prices/Days): a day as a
 -- number (days since 1 January 1970 by the computer's calendar), the time
 -- of day as one of four periods by the computer's clock.
@@ -1573,6 +1607,8 @@ export type AuctionHouseService = serviceKeys.AuctionHouseService
 export type AuctionPrice = serviceKeys.AuctionPrice
 -- Core/Prices (0.48)
 export type PriceLook = PriceLookType
+-- Core/Holdings (0.48)
+export type Holding = HoldingType
 export type AutoQuestsService = serviceKeys.AutoQuestsService
 export type BagsService = serviceKeys.BagsService
 export type BindSpell = serviceKeys.BindSpell
