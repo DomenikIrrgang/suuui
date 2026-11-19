@@ -84,8 +84,13 @@
 --       store's), else the client's (`ask`: asked for when neither has
 --       it); KeepName(itemID, name, quality); AskNames(itemIDs) (in the
 --       background)
+--   Worth() -> Ledger/Worth: what each character's bags, bank, auctions
+--       and mail are worth at its ruleset's usual prices (SuuUI.Holdings:
+--       the bags, mail and auction house modules keep them), worked out a
+--       slice a frame (Prepare) and kept until they or the prices change
 -- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
--- "watches", "gold", "goal", "books" (a transaction) or "mail".
+-- "watches", "gold", "goal", "books" (a transaction), "mail" or "worth"
+-- (what the characters' things are worth).
 --
 -- The window (step 3, Ledger/Window and its pages: Overview, Prices with an
 -- item's page, Gold; Transactions after the probe): Open(view, opts) and
@@ -98,7 +103,7 @@
 -- price (the auction house's tooltip line) and what an offer is (Deal).
 
 import SuuUI, Module from "/Core/API"
-import type SettingsSection, LedgerUnder from "/Core/API"
+import type SettingsSection, LedgerUnder, Holding from "/Core/API"
 import * as saved from "wowlua:saved"
 import * as secret from "wowlua:secret"
 import * as days from "./Ledger/Days"
@@ -117,6 +122,7 @@ import type BookData, MailInfo from "./Ledger/BookStore"
 import Recorder from "./Ledger/Recorder"
 import ItemNames from "./Ledger/Names"
 import PriceIndex from "./Ledger/PriceIndex"
+import Worth from "./Ledger/Worth"
 import type ItemSummary as IndexedSummary, DealEntry as IndexedDeal from "./Ledger/PriceIndex"
 
 local Prices = SuuUI.Prices
@@ -265,6 +271,8 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     bookStore: BookStore? = nil
     -- the item names (Ledger/Names), made on first use
     itemNames: ItemNames? = nil
+    -- what the characters' things are worth (Ledger/Worth), made on first use
+    worth: Worth? = nil
 
     constructor()
         super({
@@ -586,6 +594,16 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- A ruleset's prices changed all at once (a Scan all, the prune): what
+    -- its characters' things are worth again.
+    function WorthPricesChanged(ruleset: string)
+        local w = self.worth
+        if w then
+            w:PricesChanged(ruleset)
+            self:Changed("worth")
+        end
+    end
+
     -- The price store dropped looks older than 60 days (SUUUI_PRICES_PRUNED):
     -- the items with none left go from the index. (A look older than 60
     -- days counts in no summary: the others stay as they are.)
@@ -594,6 +612,43 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
             self:Forget(ruleset, itemID)
         end
         self:Changed("prices")
+    end
+
+    ----------------------------------------------------------------------------
+    -- What it's worth (Ledger/Worth)
+    ----------------------------------------------------------------------------
+
+    -- What each character's bags, bank, auctions and mail are worth at its
+    -- ruleset's usual prices (SuuUI.Holdings, SuuUI.Prices), kept until
+    -- they or the prices change.
+    function Worth(): Worth
+        local w = self.worth
+        if not w then
+            w = Worth.new({
+                holding = function(key: string, place: string): Holding?
+                    return SuuUI.Holdings.Of(key, place)
+                end,
+                kept = function(place: string): boolean
+                    return SuuUI.Holdings.Kept(place)
+                end,
+                usual = function(itemID: number, ruleset: string): number?
+                    return Prices.Usual(itemID, ruleset)
+                end,
+                -- (Enum.ItemClass.Questitem: the class is known at once)
+                never = function(itemID: number): boolean
+                    local _, _, _, _, _, classID = C_Item.GetItemInfoInstant(itemID)
+                    return secret.asNumber(classID) == 12
+                end,
+                every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+                    return self:Every(seconds, fn)
+                end,
+                done = function()
+                    self:Changed("worth")
+                end,
+            })
+            self.worth = w
+        end
+        return w
     end
 
     ----------------------------------------------------------------------------
@@ -1033,12 +1088,27 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         end)
         self:On("SUUUI_PRICE_CHANGED", function(_, ruleset, itemID)
             self:PriceChanged(ruleset, itemID)
+            local w = self.worth
+            if w and w:PriceChanged(ruleset, itemID) then
+                self:Changed("worth")
+            end
         end)
         self:On("SUUUI_PRICES_SCANNED", function(_, ruleset, looks, items, at)
             self:ReadScan(ruleset, looks, items, at)
+            self:WorthPricesChanged(ruleset)
         end)
         self:On("SUUUI_PRICES_PRUNED", function(_, ruleset, gone)
             self:Pruned(ruleset, gone)
+            self:WorthPricesChanged(ruleset)
+        end)
+        -- what the characters hold (the bags, mail and auction house
+        -- modules' holdings): what it's worth again
+        self:On("SUUUI_HOLDINGS_CHANGED", function(_, place, key)
+            local w = self.worth
+            if w then
+                w:HoldingChanged(place, key)
+                self:Changed("worth")
+            end
         end)
         -- the deals change with their settings
         self:WatchAll({ "dealPercent", "dealVendor" }, function()
@@ -1114,6 +1184,10 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
             names:Stop()
         end
         self:DropIndexes()
+        local worth = self.worth
+        if worth then
+            worth:Stop()
+        end
         self.pendingChanges = {}
         self.scanDeals = {}
         self:Store():Stop()

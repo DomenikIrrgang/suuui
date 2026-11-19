@@ -276,3 +276,30 @@ minutes). The tooltip block reads the latest look and the usual price
 runs an `OnUpdate` every frame while the tracker is started, to look for
 dirty cells (a few hundred instructions; making it wake on demand needs
 the cells to tell the tracker).
+
+## What it's worth, and what your characters hold (2026-11-19, wowlua 0.13.16)
+
+The Gold tab's "What it's worth" values each character's bags, bank, mail
+and auctions (`Core/Holdings`, `SuuUI.Holdings`) at its ruleset's usual
+prices (`Ledger/Worth`). The places are the emulator's own where it has
+them: bags and the bank from `mock.setBag` and `mock.defineBank` (a slot's
+`bound = true` is the client's `isBound`), the inbox from
+`mock.defineMailbox`, your auctions from the house's own post and cancel.
+Other characters' bags and mail are written into SuuUIDB the way that
+character would have saved them, then told (`savedBags:Told`).
+
+| Source | Test file | Tests |
+|---|---|---|
+| Core/Holdings | `Core/Holdings.test.wowlua` | a reader given and read, nil for a character never read; a later one replaces it; only the place's module tells a change; released with its module (each place told); the API; the module lifecycle test counts places (`helpers.holdings` has `places`) |
+| Bags/Characters | `Units/Bags/Characters.test.wowlua` | a saved bags as a holding (soulbound, when, live); the same items; the mail in the counts and in All characters (by its kept name; none without a name or a reader) |
+| Bags/Saved | `Units/Bags/Saved.test.wowlua` | tooltips: "Bags 3 · Mail 2", the total with the mail, an expired letter gone, none with the mail module off; All characters lists the mail; bags and bank as holdings (soulbound, yours live, told only when they change; the bank each visit) |
+| Mail/Inbox, Mail | `Units/Mail/Inbox.test.wowlua`, `Units/Mail.test.wowlua` | the inbox kept (money, COD, expiry, items; more than shown); read back without expired letters; kept on a visit and after Collect all, told; off: not read, kept, back when on |
+| AuctionHouse/Auctions | `Units/AuctionHouse/Auctions.test.wowlua` | kept as the house opens and after a post (any tab), gone after a cancel; sold left out; ends by seconds or the band's longest; ended ones gone |
+| Ledger/Worth | `Units/Ledger/Worth.test.wowlua` | usual price × count; soulbound, unseen, quest items and the hearthstone left out and counted; per ruleset; the mail's money less COD, never under 0; the places together; kept and dropped (a place, a look of an item held or not, a Scan all, a new day); at size (10 characters × 4 places × 400 kinds) a slice a frame, told once; work dropped when its place changes midway |
+| Ledger/GoldPage | `Units/Ledger/GoldPage.test.wowlua` | the rows, "—" with how to count, "as of", "N not counted yet", one character, a ruleset at its prices, all of it, the note's count; following your bags and a price; the mail module off; the loading mark at 1,200 items; the note not cut off (whole, inside the page, the longest too) |
+
+Found: an item the emulator defines without an icon is never saved in the
+bags' copies (the snapshot keeps a slot only with an icon, as the game
+always gives one); the Ledger's test items got icons. A query to the
+house while it answers another is dropped (the emulator's record), so
+`askOwned` waits for `AUCTION_HOUSE_THROTTLED_SYSTEM_READY`.

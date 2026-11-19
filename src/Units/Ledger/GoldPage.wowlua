@@ -4,15 +4,20 @@
 -- · All; the crosshair and its tooltip); your characters by ruleset ("Normal
 -- Ruleset" headings; the class diamond and colour, "you", their gold, its
 -- change since yesterday's end in fel or ember-text, when last seen; a click
--- chooses the character); what it's worth (for now the gold: what's in
--- bags, the bank, the auction house and the mail at usual prices comes
--- later).
+-- chooses the character); what it's worth: the chosen characters' gold,
+-- what's in their bags, their banks, on the auction house (their auctions)
+-- and in their mail, each at its own ruleset's usual prices (Ledger/Worth),
+-- all of it, and a note of what was left out. A place a character never
+-- had read shows "—" with how to count it; one read earlier says "as of"
+-- when; one whose module is off says so. While the worth is worked out (a
+-- slice a frame) the loading mark stands in the note's place.
 
 import SuuUI from "/Core/API"
-import type Text, Money, Segmented, LineChart, ScrollArea, ChartValue from "/Core/API"
+import type Text, Money, Segmented, LineChart, ScrollArea, ChartValue, LoadingMark from "/Core/API"
 import type CharacterInfo from "../Ledger"
 import * as parts from "./Parts"
 import type LedgerWindow from "./Window"
+import type Chosen, PlaceWorth from "./Worth"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -23,6 +28,97 @@ local GROUP_H = 30
 local HEAD_H = 20
 -- the columns right of the name: gold, the change, last seen
 local CHANGE_W, SEEN_W = 96, 80
+
+-- what it's worth: the places, in order (SuuUI.Holdings' keys), their
+-- labels, how to count one never read, the module that keeps it
+export const PLACES: string[] = { "bags", "bank", "auctions", "mail" }
+local PLACE_LABEL: { [string]: string } = {
+    bags = "In bags",
+    bank = "In the bank",
+    auctions = "On the auction house",
+    mail = "In the mail",
+}
+local PLACE_HINT: { [string]: string } = {
+    bags = "Log in to count them",
+    bank = "Visit your bank to count it",
+    auctions = "Visit the auction house to count them",
+    mail = "Open your mailbox to count it",
+}
+local PLACE_OFF: { [string]: string } = {
+    bags = "The Bags module is off",
+    bank = "The Bags module is off",
+    auctions = "The auction house module is off",
+    mail = "The Mail module is off",
+}
+-- items worked out at once before the loading mark shows instead
+export const WORTH_NOW = 300
+
+-- The note under "All of it": what was left out.
+export function worthNote(left: number): string
+    local base = "Items at their own ruleset\226\128\153s usual price; soulbound items and ones never seen on an auction house "
+    if left <= 0 then
+        return base .. "are left out."
+    end
+    return base .. "left out (" .. parts.count(left) .. " of them)."
+end
+
+-- What a place's row says beside its label: how to count it when no chosen
+-- character had it read, else when it was read ("as of …") unless it
+-- follows every change, and how many weren't read yet.
+export function placeMeta(place: string, pw: PlaceWorth): string
+    if not pw.kept then
+        return PLACE_OFF[place] or ""
+    end
+    if pw.known == 0 then
+        return PLACE_HINT[place] or ""
+    end
+    local out: string[] = {}
+    local oldest = pw.oldest
+    if oldest and not pw.live then
+        out[#out + 1] = "as of " .. parts.when(oldest)
+    end
+    if pw.unknown > 0 then
+        out[#out + 1] = pw.unknown .. " not counted yet"
+    end
+    return table.concat(out, " \194\183 ")
+end
+
+-- A row of "What it's worth": the label, what it says of the place (quiet,
+-- micro), the money or "—".
+export class WorthRow extends parts.DefRow
+    readonly meta: Text
+    readonly none: Text
+
+    constructor(parent: Frame, label: string)
+        super(parent, label)
+        self.meta = UI.Text(self, "micro", "ink-faint")
+        self.meta:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+        self.meta:SetPoint("RIGHT", self.money, "LEFT", -S["space-3"], 0)
+        self.meta:SetJustifyH("LEFT")
+        self.meta:SetWordWrap(false)
+        self.none = UI.Text(self, "caption", "ink-muted")
+        self.none:SetPoint("RIGHT")
+        self.none:SetValue("\226\128\148")
+        self.none:Hide()
+    end
+
+    -- The place's worth (nil: still being worked out).
+    function SetPlace(place: string, pw: PlaceWorth?)
+        if not pw then
+            self.money:Hide()
+            self.none:Hide()
+            self.meta:SetValue("")
+            return
+        end
+        local known = pw.kept and pw.known > 0
+        self.money:SetShown(known)
+        self.none:SetShown(not known)
+        if known then
+            self.money:SetCopper(pw.value)
+        end
+        self.meta:SetValue(placeMeta(place, pw))
+    end
+end
 
 local RANGES: { value: number, label: string }[] = {
     { value = 7, label = "7 days" },
@@ -143,8 +239,11 @@ export class GoldPage extends Frame
     readonly rows: CharRow[] = {}
     readonly worth: parts.Section
     readonly worthGold: parts.DefRow
+    readonly worthRows: { [string]: WorthRow } = {}
     readonly worthAll: parts.DefRow
     readonly worthNote: Text
+    readonly worthLoading: Frame
+    readonly worthMark: LoadingMark
     days: number = 30
 
     constructor(parent: Frame, w: LedgerWindow)
@@ -209,14 +308,33 @@ export class GoldPage extends Frame
         self.worthGold = parts.DefRow.new(self, "Gold")
         self.worthGold:SetPoint("TOPLEFT", self.worth, "BOTTOMLEFT", 0, -S["space-3"])
         self.worthGold:SetPoint("RIGHT", self.worth, "RIGHT")
+        local above: Frame = self.worthGold
+        for _, place in ipairs(PLACES) do
+            local r = WorthRow.new(self, PLACE_LABEL[place] or place)
+            r:SetPoint("TOPLEFT", above, "BOTTOMLEFT")
+            r:SetPoint("RIGHT", self.worth, "RIGHT")
+            self.worthRows[place] = r
+            above = r
+        end
         self.worthAll = parts.DefRow.new(self, "All of it", true)
-        self.worthAll:SetPoint("TOPLEFT", self.worthGold, "BOTTOMLEFT", 0, -S["space-2"])
+        self.worthAll:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, -S["space-2"])
         self.worthAll:SetPoint("RIGHT", self.worth, "RIGHT")
         self.worthNote = UI.Text(self, "caption", "ink-muted")
-        self.worthNote:SetPoint("TOPLEFT", self.worthAll, "BOTTOMLEFT", 0, -S["space-4"])
+        self.worthNote:SetPoint("TOPLEFT", self.worthAll, "BOTTOMLEFT", 0, -S["space-3"])
         self.worthNote:SetJustifyH("LEFT")
         self.worthNote:SetWordWrap(true)
-        self.worthNote:SetValue("Gold only, for now: what\226\128\153s in your bags, the bank, your auctions and the mail, at each ruleset\226\128\153s usual prices, comes in a later version.")
+        -- while it is worked out: the mark, "Counting what it's worth…"
+        local wl = CreateFrame("Frame", nil, self)
+        wl:SetPoint("TOPLEFT", self.worthAll, "BOTTOMLEFT", 0, -S["space-3"])
+        wl:SetPoint("RIGHT", self.worth, "RIGHT")
+        wl:SetHeight(24)
+        wl:Hide()
+        self.worthLoading = wl
+        self.worthMark = UI.LoadingMark(wl, { size = 24, wings = false })
+        self.worthMark:SetPoint("LEFT")
+        local counting = UI.Text(wl, "caption", "ink-muted")
+        counting:SetValue("Counting what it\226\128\153s worth\226\128\166")
+        counting:SetPoint("LEFT", self.worthMark, "RIGHT", S["space-4"], 0)
         self:SetScript("OnSizeChanged", function()
             self:Layout()
         end)
@@ -302,9 +420,57 @@ export class GoldPage extends Frame
             self.rows[i]:Hide()
         end
         c:SetHeight(math.max(1, y))
-        -- what it's worth
-        local total = m:GoldTotal(scope)
-        self.worthGold.money:SetCopper(total)
+        self:DrawWorth()
+    end
+
+    -- The chosen characters, with their rulesets (Ledger/Worth).
+    function Chosen(): Chosen[]
+        local scope = self.w:Scope()
+        local out: Chosen[] = {}
+        for _, ch in ipairs(self.w.m:Characters()) do
+            if not scope or (scope.char and scope.char == ch.key) or
+                (not scope.char and scope.ruleset and scope.ruleset == ch.ruleset) then
+                out[#out + 1] = { key = ch.key, ruleset = ch.ruleset }
+            end
+        end
+        return out
+    end
+
+    -- What it's worth: the gold, each place, all of it, the note; the
+    -- loading mark while it is worked out.
+    function DrawWorth()
+        local m = self.w.m
+        local gold = m:GoldTotal(self.w:Scope())
+        self.worthGold.money:SetCopper(gold)
+        local chosen = self:Chosen()
+        local worth = m:Worth()
+        local ready = worth:Prepare(chosen, PLACES, WORTH_NOW)
+        local wasLoading = self.worthLoading:IsShown()
+        self.worthLoading:SetShown(not ready)
+        self.worthNote:SetShown(ready)
+        if not ready and not wasLoading then
+            self.worthMark:Start()
+        elseif wasLoading and ready then
+            self.worthMark:Stop()
+        end
+        if not ready then
+            for _, place in ipairs(PLACES) do
+                assert(self.worthRows[place]):SetPlace(place, nil)
+            end
+            self.worthAll.money:SetCopper(gold)
+            return
+        end
+        local sums = worth:Sum(chosen, PLACES)
+        local total, left = gold, 0
+        for _, place in ipairs(PLACES) do
+            local pw = sums[place]
+            assert(self.worthRows[place]):SetPlace(place, pw)
+            if pw and pw.kept then
+                total += pw.value
+                left += pw.left
+            end
+        end
         self.worthAll.money:SetCopper(total)
+        self.worthNote:SetValue(worthNote(left))
     end
 end
