@@ -29,7 +29,7 @@ local said: { [string]: unknown }[] = {}
 local function cleanup()
     said = {}
     local d = M:Data()
-    d.prices, d.scans, d.watches = nil, nil, nil
+    d.prices, d.scans, d.watches, d.names = nil, nil, nil, nil
     M.cache, M.vendor = {}, {}
     M:Reset("scanNote")
     M:Reset("soldNote")
@@ -178,6 +178,34 @@ local function watchNote()
     M:UnwatchItem(DUST)
 end
 
+
+@test("a name the Ledger kept for an item the client hasn't got: in the notes at once")
+local function keptNames()
+    listen()
+    const ROOT = 990704
+    mock.defineItem(ROOT, { name = "Test Hidden Root", quality = 2, sellPrice = 0, icon = 134122 }, { cached = false, delay = 600 })
+    M:KeepName(ROOT, "Test Hidden Root", 2)
+    history(ROOT, { 1000, 1000, 1000 })
+    M:WatchItem(ROOT, 1200)
+    mock.advanceTime(0.01)
+    M:RecordLook(ROOT, 750, 0, 2, 1)
+    mock.advanceTime(0.01)
+    expect(#said).toBe(1)
+    expect(said[1].title).toBe("Test Hidden Root under " .. money(1200))
+    -- the scan's note too
+    M:Set("scanNote", true)
+    mock.advanceTime(5)
+    scan({ { ROOT, 500 } })
+    local last: { [string]: unknown } = {}
+    for _, n in ipairs(said) do
+        if n.id == "suu:ledger:scan" then
+            last = n
+        end
+    end
+    expect(last.title).toBe("The scan found 1 deal")
+    expect(tostring(last.body)).toContain("Test Hidden Root 50% under")
+    M:UnwatchItem(ROOT)
+end
 
 @test("an auction sold: the item and how many, about what it brings after the cut; without a post or a name")
 local function sold()

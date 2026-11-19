@@ -2,8 +2,11 @@
 -- (the furthest under first); a row's cells (the quality's colour, the
 -- star, one mark, the prices, the sparkline, Change, Cheapest, Offered,
 -- Seen); sorting by a column; the search as you type; Filters (Show, Seen,
--- Category, Quality) and the count; names that arrive later; the ruleset;
--- thousands of items with only the rows in sight; a row opens the item.
+-- Category, Quality) and the count; names: from a scan at once, loaded in
+-- the background (the search says how many it still looks up), a row's
+-- first, asked again without an answer, kept across a /reload; the
+-- ruleset; thousands of items with only the rows in sight; a row opens the
+-- item.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -158,6 +161,8 @@ end
 local function search()
     seed()
     local p = page()
+    -- (the late herb's name in by now)
+    mock.advanceTime(1)
     mock.typeText(p.search.edit, "LOT")
     expect(ids(p)).toEqual({ LOTUS })
     expect(p.countText:GetText()).toBe("1 item")
@@ -228,44 +233,130 @@ local function filters()
     expect(ids(p)).toEqual({ ESSENCE })
 end
 
-@test("a name the client hasn't got: asked for when its row shows, filled in when it arrives")
+@test("a name the client hasn't got: asked for when its row shows, before the rest; filled in when it arrives, and kept")
 local function lateName()
     seed()
-    mock.defineItem(990611, { name = "Test Slow Moss", quality = 1 }, { cached = false, delay = 0.3 })
+    mock.defineItem(990611, { name = "Test Slow Moss", quality = 2 }, { cached = false, delay = 0.3 })
     M:RecordLook(990611, 50, 0, 1, 1)
     mock.advanceFrames(2)
+    local names = M:Names()
+    -- (others waiting already: the row in sight goes first)
+    names:Ask(990699)
     local p = page()
     local late = rowOf(p, 990611)
     expect(late.name:GetText()).toBe("Item 990611")
     expect(tokenOf(late.name)).toBe("ink-muted")
-    expect(p.asked[990611]).toBe(true)
-    -- (the emulator loads it but doesn't tell: the game's event, as it sends it)
-    mock.advanceTime(0.5)
-    mock.fireEvent("GET_ITEM_INFO_RECEIVED", 990611, true)
+    expect(names:Pending(990611)).toBe(true)
+    expect(names.soon[#names.soon]).toBe(990611)
+    -- (the game answers RequestLoadItemDataByID with ITEM_DATA_LOAD_RESULT,
+    -- as the emulator does)
+    mock.advanceTime(0.25)
+    expect(names.flying[990611] ~= nil).toBe(true)
+    mock.advanceTime(0.4)
     mock.advanceTime(0.3)
-    expect(rowOf(p, 990611).name:GetText()).toBe("Test Slow Moss")
+    late = rowOf(p, 990611)
+    expect(late.name:GetText()).toBe("Test Slow Moss")
+    expect(tokenOf(late.name)).toBe("quality-uncommon")
+    expect(assert(M:Data().names)[990611]).toBe("2Test Slow Moss")
+    expect(names:Pending(990611)).toBe(false)
     expect(LATE).toBe(990606)
 end
 
-@test("a search asks for the names still missing, a few at a time; they match once they arrive")
-local function searchAsks()
+@test("a scan of items the client hasn't cached: their names from the scan at once; a search finds them")
+local function scanNames()
     seed()
-    mock.defineItem(990612, { name = "Test Slow Fern", quality = 1 }, { cached = false, delay = 0.3 })
-    M:RecordLook(990612, 50, 0, 1, 1)
-    mock.advanceFrames(2)
+    mock.defineItem(990613, { name = "Test Hidden Bloom", quality = 3 }, { cached = false, delay = 600 })
+    mock.defineItem(990614, { name = "Test Hidden Root", quality = 1 }, { cached = false, delay = 600 })
+    -- (as the auction house tells it: the names it had, by item)
+    M:Emit("SUUUI_AUCTION_SCANNED", { 990613, 500, 0, 3, 1, 990614, 80, 0, 9, 2 }, 2, { [990613] = "Test Hidden Bloom", [990614] = "Test Hidden Root" }, { [990613] = 3, [990614] = 1 })
+    mock.advanceTime(0.05)
+    expect(C_Item.IsItemDataCachedByID(990613)).toBe(false)
     local p = page()
-    -- (its row out of sight: a search that hides it before it's drawn)
-    mock.typeText(p.search.edit, "fern")
-    expect(ids(p)).toEqual({})
-    expect(p.askTicker).toBeTruthy()
-    for _ = 1, 6 do
-        mock.advanceTime(0.3)
-    end
-    expect(p.askTicker).toBeNil()
-    mock.fireEvent("GET_ITEM_INFO_RECEIVED", 990612, true)
-    mock.advanceTime(0.3)
-    expect(ids(p)).toEqual({ 990612 })
+    local bloom = rowOf(p, 990613)
+    expect(bloom.name:GetText()).toBe("Test Hidden Bloom")
+    expect(tokenOf(bloom.name)).toBe("quality-rare")
+    -- the search over every name kept, the rows never drawn too
+    mock.typeText(p.search.edit, "hidden r")
+    expect(ids(p)).toEqual({ 990614 })
+    expect(p.countText:GetText()).toBe("1 item")
+    -- (nothing asked for: the names are there)
+    expect(M:Names():Pending(990613)).toBe(false)
     p.search.edit:ClearFocus()
+end
+
+@test("a scan without names: they load in the background, the search finds them as they come and says how many it still looks up")
+local function backgroundNames()
+    seed()
+    mock.advanceTime(1)
+    local looks: number[] = {}
+    local N = 75
+    for i = 1, N do
+        local id = 990700 + i
+        mock.defineItem(id, { name = "Test Cloth " .. i, quality = 1 }, { cached = false, delay = 0.3 })
+        for _, v in ipairs({ id, 100 + i, 0, 1, 1 }) do
+            looks[#looks + 1] = v
+        end
+    end
+    M:Emit("SUUUI_AUCTION_SCANNED", looks, N)
+    mock.advanceTime(0.05)
+    local names = M:Names()
+    expect(names:PendingCount()).toBe(N)
+    local p = page()
+    mock.typeText(p.search.edit, "cloth 7")
+    -- (none in yet: never thousands asked at once)
+    expect(ids(p)).toEqual({})
+    expect(p.countText:GetText()).toBe("0 items \194\183 Looking up 75 more names\226\128\166")
+    expect(p.empty:GetText()).toBe("Nothing matches yet: looking up the names of 75 more items.")
+    mock.advanceTime(0.25)
+    expect(names.flyingCount <= 30).toBe(true)
+    for _ = 1, 30 do
+        mock.advanceTime(0.1)
+    end
+    -- "cloth 7", "cloth 70" … "cloth 75"
+    expect(#ids(p)).toBe(7)
+    expect(p.countText:GetText()).toBe("7 items")
+    expect(names:PendingCount()).toBe(0)
+    expect(assert(M:Data().names)[990707]).toBe("1Test Cloth 7")
+    p.search.edit:ClearFocus()
+end
+
+@test("an item whose request got no answer is asked again, a few times, then given up")
+local function askedAgain()
+    seed()
+    mock.advanceTime(1)
+    -- (the client never answers in time)
+    mock.defineItem(990615, { name = "Test Mute Leaf", quality = 1 }, { cached = false, delay = 600 })
+    M:RecordLook(990615, 50, 0, 1, 1)
+    mock.advanceFrames(2)
+    local asks = 0
+    hooksecurefunc(C_Item, "RequestLoadItemDataByID", function(id: number)
+        if id == 990615 then
+            asks += 1
+        end
+    end)
+    local p = page()
+    expect(rowOf(p, 990615).name:GetText()).toBe("Item 990615")
+    mock.advanceTime(0.25)
+    expect(asks).toBe(1)
+    mock.advanceTime(4)
+    expect(asks).toBe(1)
+    mock.advanceTime(1.5)
+    expect(asks).toBe(2)
+    -- an answer to the second: kept and shown
+    mock.defineItem(990615, { name = "Test Mute Leaf", quality = 1 })
+    mock.fireEvent("ITEM_DATA_LOAD_RESULT", 990615, true)
+    mock.advanceTime(0.3)
+    expect(rowOf(p, 990615).name:GetText()).toBe("Test Mute Leaf")
+    -- one that never answers: given up after four tries
+    mock.defineItem(990616, { name = "Test Mute Bark", quality = 1 }, { cached = false, delay = 600 })
+    local names = M:Names()
+    names:Ask(990616)
+    for _ = 1, 30 do
+        mock.advanceTime(1)
+    end
+    expect(names.tries[990616]).toBe(4)
+    expect(names.gaveUp[990616]).toBe(true)
+    expect(names:Pending(990616)).toBe(false)
 end
 
 @test("the ruleset: those with prices; another one's prices, its name in the head")
@@ -300,12 +391,11 @@ local function thousands()
     expect(#p.list.items).toBe(3000)
     expect(p.countText:GetText()).toBe("3,000 items")
     expect(#p.list:Rows() <= 20).toBe(true)
-    -- names asked for only for the rows in sight
-    local asked = 0
-    for _ in pairs(p.asked) do
-        asked += 1
-    end
-    expect(asked <= 20).toBe(true)
+    -- the rows in sight asked for first, the rest a few at a time
+    expect(#M:Names().soon <= 20).toBe(true)
+    expect(M:Names().flyingCount).toBe(0)
+    mock.advanceTime(0.25)
+    expect(M:Names().flyingCount <= 30).toBe(true)
     p.list.scroll:SetVerticalScroll(32 * 1500)
     mock.advanceFrames(2)
     local first = rows(p)[1]
@@ -349,4 +439,28 @@ local function modified()
     mock.setModifiers({})
     expect(handled).toHaveBeenCalledTimes(1)
     expect(w.view).toBe("prices")
+end
+
+@test("a name learned is kept across a /reload: shown and found though the client hasn't got it")
+local function keptAcrossReload()
+    mock.defineItem(990617, { name = "Test Kept Moss", quality = 2 }, { cached = false, delay = 600 })
+    if mock.reloads() == 0 then
+        seed()
+        -- (a search's look, with the name the house told)
+        M:Emit("SUUUI_AUCTION_SEEN", 990617, 50, 0, 1, 1, "search", "Test Kept Moss", 2)
+        mock.advanceTime(0.05)
+        expect(assert(M:Data().names)[990617]).toBe("2Test Kept Moss")
+        mock.reloadUI()
+    end
+    -- (a fresh client: only what SuuUILedger kept)
+    expect(mock.reloads()).toBe(1)
+    expect(M.itemNames).toBeNil()
+    expect(C_Item.IsItemDataCachedByID(990617)).toBe(false)
+    local p = page()
+    local row = rowOf(p, 990617)
+    expect(row.name:GetText()).toBe("Test Kept Moss")
+    expect(tokenOf(row.name)).toBe("quality-uncommon")
+    mock.typeText(p.search.edit, "kept moss")
+    expect(ids(p)).toEqual({ 990617 })
+    p.search.edit:ClearFocus()
 end

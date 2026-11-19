@@ -33,9 +33,13 @@ import * as entry from "./Entry"
 
 local UI = SuuUI.UI
 
--- An item's name, or a stand-in while the game doesn't know it.
-local function nameOf(data: ItemData?, itemID: number): string
-    return data and data.name or ("Item " .. itemID)
+-- An item's name (the Ledger's lookup: the one it kept, else the game's,
+-- kept), or a stand-in while neither knows it.
+local function nameOf(m: LedgerModule, data: ItemData?, itemID: number): string
+    if data then
+        m:KeepName(itemID, data.name, data.quality)
+    end
+    return m:ItemName(itemID) or ("Item " .. itemID)
 end
 
 -- "Black Lotus 29% under", or "Heavy Mithril Axe under vendor price".
@@ -102,9 +106,12 @@ export function scanNote(m: LedgerModule)
     for i = 1, math.min(2, #deals, s.deals) do
         best[i] = { itemID = deals[i].itemID, under = deals[i].under }
     end
+    -- (the names the Ledger kept at once; the rest waited for)
     local ids: (number | string)[] = {}
-    for i, b in ipairs(best) do
-        ids[i] = b.itemID
+    for _, b in ipairs(best) do
+        if not m:ItemName(b.itemID) then
+            ids[#ids + 1] = b.itemID
+        end
     end
     itemData.loadMany(ids, function(all: { [number]: ItemData? })
         if not m:IsEnabled() then
@@ -112,7 +119,7 @@ export function scanNote(m: LedgerModule)
         end
         local words: string[] = {}
         for i, b in ipairs(best) do
-            words[i] = dealText(nameOf(all[b.itemID], b.itemID), b.under)
+            words[i] = dealText(nameOf(m, all[b.itemID], b.itemID), b.under)
         end
         SuuUI.Notify({
             id = "suu:ledger:scan",
@@ -136,11 +143,11 @@ end
 
 -- A watched item found under your price.
 export function watchNote(m: LedgerModule, itemID: number, low: number, target: number, qty: number, scan: boolean)
-    itemData.load(itemID, function(data: ItemData?)
+    local function show(data: ItemData?)
         if not m:IsEnabled() then
             return
         end
-        local name = nameOf(data, itemID)
+        local name = nameOf(m, data, itemID)
         SuuUI.Notify({
             id = "suu:ledger:watch:" .. itemID,
             kind = "timed",
@@ -156,7 +163,13 @@ export function watchNote(m: LedgerModule, itemID: number, low: number, target: 
             title = watchTitle(name, target),
             body = watchBody(scan, qty, low, target, m:Usual(itemID)),
         })
-    end)
+    end
+    -- (a name the Ledger kept at once, else waited for)
+    if m:ItemName(itemID) then
+        show(nil)
+    else
+        itemData.load(itemID, show)
+    end
 end
 
 -- The house's cut of a sale, as the probe's invoice had it (71 of 1432).

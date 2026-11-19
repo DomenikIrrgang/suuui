@@ -18,6 +18,7 @@ import * as books from "./Books"
 import type Tx, SourceRow from "./Books"
 import * as parts from "./Parts"
 import textOf from "./TransactionsPage"
+import type ItemNames from "./Names"
 import type LedgerWindow from "./Window"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -117,17 +118,14 @@ class LatestLine extends Button
         end)
     end
 
-    function Set(t: Tx, today: number)
+    function Set(t: Tx, today: number, names: ItemNames)
         self.tx = t
         local day = days.dayOf(t.at)
         self.when:SetValue(day == today and date("%H:%M", t.at) or parts.ago(day, today))
         self.what:SetValue(books.kindOf(t.kind).label)
         local id = t.item
         if id then
-            local name, quality = parts.cachedInfo(id)
-            if not name then
-                C_Item.RequestLoadItemDataByID(id)
-            end
+            local name, quality = names:Get(id, true)
             self.name:SetValue(name or t.text or ("Item " .. id))
             self.name:SetColor(name and parts.qualityToken(quality) or "ink-muted")
         else
@@ -178,12 +176,9 @@ class DealRow extends Button
         end)
     end
 
-    function Set(d: DealEntry)
+    function Set(d: DealEntry, names: ItemNames)
         self.itemID = d.itemID
-        local name, quality = parts.cachedInfo(d.itemID)
-        if not name then
-            C_Item.RequestLoadItemDataByID(d.itemID)
-        end
+        local name, quality = names:Get(d.itemID, true)
         local icon = parts.instantInfo(d.itemID)
         self.slot.skin:SetItem({ icon = icon, quality = parts.QUALITY[quality or 1] or "common" })
         self.name:SetValue(name or ("Item " .. d.itemID))
@@ -572,7 +567,7 @@ export class OverviewPage extends Frame
         for i, row in ipairs(self.latestRows) do
             local t = list[i]
             if t then
-                row:Set(t, today)
+                row:Set(t, today, self.w.m:Names())
             else
                 row:Hide()
             end
@@ -636,7 +631,7 @@ export class OverviewPage extends Frame
         for i, row in ipairs(self.dealRows) do
             local d = deals[i]
             if d and i <= n then
-                row:Set(d)
+                row:Set(d, self.w.m:Names())
                 self.dealIDs[d.itemID] = true
             else
                 row:Hide()

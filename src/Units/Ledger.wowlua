@@ -29,6 +29,12 @@
 --            Other).
 --   mail     per character, the money waiting in its inbox when it last
 --            looked, and how many auction sales of it.
+--   names    per item, its name and quality as the Ledger learned them
+--            (Ledger/Names: from the auction house's scans and searches,
+--            the client's cache and its answers), for every ruleset; the
+--            names of items no longer in any prices or watches dropped
+--            with the prices' prune. (Added after version 1: nothing to
+--            migrate, saved data without it fills in as the pages ask.)
 --
 -- For the window (step 3) and the notes (step 4), the module's methods.
 -- `ruleset` is optional everywhere (nil: this character's); a day is a day
@@ -71,6 +77,9 @@
 --       ItemTransactions(itemID, ruleset) -> those of an item on a ruleset;
 --       SoldItems(ruleset) -> { [itemID] = true }
 --   MailWaiting(scope) -> money, sales, known (any of them looked)
+--   ItemName(itemID, ask) -> name?, quality?: the kept name, else the
+--       client's (`ask`: asked for when neither has it); KeepName(itemID,
+--       name, quality); AskNames(itemIDs) (in the background)
 -- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
 -- "watches", "gold", "goal", "books" (a transaction) or "mail".
 --
@@ -103,6 +112,8 @@ import type Tx, BookMap from "./Ledger/Books"
 import BookStore from "./Ledger/BookStore"
 import type BookData, MailInfo from "./Ledger/BookStore"
 import Recorder from "./Ledger/Recorder"
+import ItemNames from "./Ledger/Names"
+import type NameMap from "./Ledger/Names"
 
 local DEFAULTS = { dealPercent = 25, dealVendor = true, markDeals = true, scanNote = false, tipUsual = true, soldNote = true }
 
@@ -200,6 +211,7 @@ export type LedgerData = {
     books?: BookMap,
     booksPruned?: number,
     mail?: { [string]: MailInfo },
+    names?: NameMap,
 }
 -- How the window opens: on an item's page (its ID), or Prices showing
 -- "deals", "vendor", "watched", "sold", "bags" or "all".
@@ -252,6 +264,8 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     -- the transactions' recorder and store
     recorder: Recorder? = nil
     bookStore: BookStore? = nil
+    -- the item names (Ledger/Names), made on first use
+    itemNames: ItemNames? = nil
 
     constructor()
         super({
@@ -501,9 +515,21 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     -- One look (a search's): on this ruleset, now (or at `at`). -> whether
     -- it changed what is kept.
-    function RecordLook(itemID: number, low: number, most: number, qty: number, n: number, at: number?): boolean
+    function RecordLook(
+        itemID: number,
+        low: number,
+        most: number,
+        qty: number,
+        n: number,
+        at: number?,
+        name: string?,
+        quality: number?
+    ): boolean
         if not (itemID and low and low > 0) then
             return false
+        end
+        if name then
+            self:KeepName(itemID, name, quality)
         end
         local ruleset = SuuUI.Ruleset()
         local t = at or time()
@@ -519,9 +545,18 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         return changed
     end
 
-    -- Scan all's looks (SUUUI_AUCTION_SCANNED: five numbers an item), read
-    -- a slice a frame; then the scan's deals counted and kept.
-    function RecordScan(looks: number[], items: number, at: number?)
+    -- Scan all's looks (SUUUI_AUCTION_SCANNED: five numbers an item, and
+    -- the names the house told), read a slice a frame; then the scan's
+    -- deals counted and kept, and the names still missing asked for in
+    -- the background.
+    function RecordScan(
+        looks: number[],
+        items: number,
+        at: number?,
+        names: { [number]: string }?,
+        qualities: { [number]: number }?
+    )
+        local itemNames = self:Names()
         local ruleset = SuuUI.Ruleset()
         local t = at or time()
         local day, period = days.dayOf(t)
@@ -537,6 +572,10 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
                 local b = k * 5
                 local itemID, low = looks[b + 1], looks[b + 2]
                 if itemID and low and low > 0 then
+                    local name = names and names[itemID]
+                    if name then
+                        itemNames:Keep(itemID, name, qualities and qualities[itemID])
+                    end
                     store.record(map, itemID, day, period, low, looks[b + 3] or 0, looks[b + 4] or 0, looks[b + 5] or 0)
                     self:Forget(ruleset, itemID)
                     local under, uv = self:Deal(itemID, low, ruleset)
@@ -563,6 +602,7 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
             local scans = d.scans or {}
             d.scans = scans
             scans[ruleset] = { at = t, items = items, deals = deals, underVendor = underVendor }
+            self:AskNames(self:Items(ruleset))
             self:Changed("prices")
             self:Changed("scan")
             -- (a watched item missing from the scan is no longer under)
@@ -624,8 +664,76 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
             if i >= #queue then
                 ticker:Cancel()
                 self.pruneTicker = nil
+                self:PruneNames()
                 self:Changed("prices")
             end
+        end)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Item names (Ledger/Names)
+    ----------------------------------------------------------------------------
+
+    function Names(): ItemNames
+        local n = self.itemNames
+        if not n then
+            n = ItemNames.new({
+                data = function(): LedgerData
+                    return self:Data()
+                end,
+                every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+                    return self:Every(seconds, fn)
+                end,
+                arrived = function(itemID: number)
+                    local w = self.window
+                    if w then
+                        w:ItemInfo(itemID)
+                    end
+                end,
+                known = function(itemID: number): boolean
+                    return self:Known(itemID)
+                end,
+            })
+            self.itemNames = n
+        end
+        return n
+    end
+
+    -- Whether an item is in any ruleset's prices or watches.
+    function Known(itemID: number): boolean
+        local d = self:Data()
+        for _, map in pairs(d.prices or {}) do
+            if map[itemID] then
+                return true
+            end
+        end
+        for _, list in pairs(d.watches or {}) do
+            if list[itemID] then
+                return true
+            end
+        end
+        return false
+    end
+
+    function ItemName(itemID: number, ask: boolean?): (string?, number?)
+        return self:Names():Get(itemID, ask)
+    end
+
+    function KeepName(itemID: number, name: string?, quality: number?): boolean
+        return self:Names():Keep(itemID, name, quality)
+    end
+
+    function AskNames(ids: number[])
+        self:Names():AskAll(ids)
+    end
+
+    -- The names of items in no ruleset's prices and no watch dropped (with
+    -- the prices' prune: an item not seen for 60 days). Kept all, they'd
+    -- grow with every item a house ever showed; a transaction's item asks
+    -- for its name again when it shows.
+    function PruneNames()
+        self:Names():Prune(function(itemID: number): boolean
+            return self:Known(itemID)
         end)
     end
 
@@ -941,12 +1049,15 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
                 w:Changed("theme")
             end
         end)
-        self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function(_, itemID)
-            local w = self.window
-            if w and type(itemID) == "number" then
-                w:ItemInfo(itemID)
-            end
-        end)
+        -- (RequestLoadItemDataByID is answered with ITEM_DATA_LOAD_RESULT;
+        -- GET_ITEM_INFO_RECEIVED when GetItemInfo asked: the probe)
+        for _, e in ipairs({ "ITEM_DATA_LOAD_RESULT", "GET_ITEM_INFO_RECEIVED" }) do
+            self:OnGameEvent(e, function(_, itemID, success)
+                if type(itemID) == "number" then
+                    self:Names():Loaded(itemID, success)
+                end
+            end)
+        end
         self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
             self.atHouse = true
             local w = self.window
@@ -979,11 +1090,11 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         self:RegisterSettings(SECTION)
-        self:On("SUUUI_AUCTION_SEEN", function(_, itemID, low, most, qty, n)
-            self:RecordLook(itemID, low, most, qty, n)
+        self:On("SUUUI_AUCTION_SEEN", function(_, itemID, low, most, qty, n, _source, name, quality)
+            self:RecordLook(itemID, low, most, qty, n, nil, name, quality)
         end)
-        self:On("SUUUI_AUCTION_SCANNED", function(_, looks, items)
-            self:RecordScan(looks, items)
+        self:On("SUUUI_AUCTION_SCANNED", function(_, looks, items, names, qualities)
+            self:RecordScan(looks, items, nil, names, qualities)
         end)
         -- the deals change with their settings
         self:WatchAll({ "dealPercent", "dealVendor" }, function()
@@ -1055,6 +1166,10 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     -- (its listeners, timers and the service go with the release)
     override function OnDisable()
         self.scanTicker, self.pruneTicker = nil, nil
+        local names = self.itemNames
+        if names then
+            names:Stop()
+        end
         self.cache, self.pendingChanges = {}, {}
         self:Store().decoded = {}
         local rec = self.recorder

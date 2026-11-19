@@ -143,6 +143,37 @@ local function narrowing()
     p:SetQuery("")
 end
 
+@test("an item the client hasn't got: its row filled in when the name comes; the search finds a kept name")
+local function lateNames()
+    seed()
+    mock.defineItem(990641, { name = "Test Slow Thistle", quality = 1 }, { cached = false, delay = 0.2 })
+    mock.defineItem(990642, { name = "Test Hidden Thistle", quality = 2 }, { cached = false, delay = 600 })
+    M:KeepName(990642, "Test Hidden Thistle", 2)
+    M:BookTx({ at = time() - 60, kind = "vendor", amount = 300, item = 990641, qty = 3 })
+    M:BookTx({ at = time() - 30, kind = "vendor", amount = 500, item = 990642, qty = 1 })
+    mock.advanceTime(0.05)
+    local p = page()
+    local function nameOf(itemID: number): string?
+        for _, r in ipairs(rows(p)) do
+            local t = r.tx
+            if t and t.item == itemID then
+                return r.name:GetText()
+            end
+        end
+        return nil
+    end
+    expect(nameOf(990641)).toBe("Item 990641")
+    expect(nameOf(990642)).toBe("Test Hidden Thistle")
+    -- (the game answers the request with ITEM_DATA_LOAD_RESULT)
+    mock.advanceTime(0.25)
+    mock.advanceTime(0.25)
+    mock.advanceTime(0.25)
+    expect(nameOf(990641)).toBe("Test Slow Thistle")
+    p:SetQuery("hidden this")
+    expect(kinds(p)).toEqual({ "day", "vendor" })
+    p:SetQuery("")
+end
+
 @test("the characters chosen: all on a ruleset, one")
 local function characters()
     seed()
