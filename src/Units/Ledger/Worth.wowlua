@@ -22,6 +22,12 @@
 -- The usual prices are kept per ruleset and item the same way. Working out
 -- runs a slice a frame (at most PASS_MS and PASS_ITEMS items) when the page
 -- asks (Prepare), a few items at once; `done` tells the page.
+--
+-- The Items tab asks for each item too (Prepare's `items`): a result then
+-- keeps its items as worked out (HeldItem: how many, the usual price each,
+-- or why it was left out), soulbound ones apart from the rest of the same
+-- item; the Gold tab's results keep none. One pass makes both, so the tab's
+-- rows add up to the Gold tab's places exactly.
 
 import type Holding from "/Core/API"
 import * as days from "./Days"
@@ -40,10 +46,35 @@ export type WorthOptions = {
     done: () -> (),
 }
 
+-- Why an item is left out: soulbound, never seen on that ruleset's house
+-- (no usual price), a quest item, the hearthstone.
+export const WHY_WORDS: { [string]: string } = {
+    bound = "Soulbound",
+    never = "Never seen",
+    quest = "Quest item",
+    hearth = "Hearthstone",
+}
+
+-- An item of a character's place as worked out (the Items tab's rows): how
+-- many, the usual price each (nil: left out, `why`).
+export type HeldItem = { itemID: number, count: number, each?: number, why?: string }
+
 -- One character's place as worked out: its worth in copper, how many items
 -- were left out, when it was read, whether it follows every change (your
--- bags), the ruleset its prices are.
-export type CharWorth = { value: number, left: number, seen: number, live: boolean, ruleset: string }
+-- bags), the ruleset its prices are; what the place's money adds to its
+-- worth (the mail's: its money less COD, the place never under nothing),
+-- that money and COD; its items when they were asked for (in item order).
+export type CharWorth = {
+    value: number,
+    left: number,
+    seen: number,
+    live: boolean,
+    ruleset: string,
+    money: number,
+    cash: number,
+    cod: number,
+    items?: HeldItem[],
+}
 
 -- A place for the chosen characters together: the worth, the items left
 -- out, how many of them have it read (`known`) and how many not, the
@@ -72,6 +103,7 @@ type Job = {
     value: number,
     left: number,
     gone: boolean,
+    rows?: HeldItem[],
 }
 
 -- A slice: at most this many ms (in game) and items a frame.
@@ -150,11 +182,18 @@ export class Worth
         map[place] = r
     end
 
-    -- A place queued to be worked out (once); one never read is known at once.
-    function Queue(key: string, place: string, ruleset: string)
+    -- A place queued to be worked out (once; again with its items when they
+    -- are asked for and it was queued without); one never read is known at
+    -- once.
+    function Queue(key: string, place: string, ruleset: string, items: boolean?)
         local id = key .. "\0" .. place
-        if self.pending[id] then
-            return
+        local was = self.pending[id]
+        if was then
+            if was.rows or not items then
+                return
+            end
+            was.gone = true
+            self.pending[id] = nil
         end
         local h = self.o.holding(key, place)
         if not h then
@@ -165,7 +204,22 @@ export class Worth
         for itemID in pairs(h.items) do
             ids[#ids + 1] = itemID
         end
-        local job: Job = { key = key, place = place, ruleset = ruleset, h = h, ids = ids, i = 1, value = 0, left = 0, gone = false }
+        if items then
+            -- (in item order: the same rows in the same order each time)
+            table.sort(ids)
+        end
+        local job: Job = {
+            key = key,
+            place = place,
+            ruleset = ruleset,
+            h = h,
+            ids = ids,
+            i = 1,
+            value = 0,
+            left = 0,
+            gone = false,
+            rows = items and {} or nil,
+        }
         self.jobs[#self.jobs + 1] = job
         self.pending[id] = job
     end
@@ -186,6 +240,7 @@ export class Worth
                     self.held[ruleset] = held
                 end
                 local ids = job.ids
+                local rows = job.rows
                 while job.i <= #ids do
                     if done >= n or (deadline and debugprofilestop() > deadline) then
                         return false
@@ -198,23 +253,38 @@ export class Worth
                     local b = math.min(count, bound and bound[itemID] or 0)
                     local free = count - b
                     job.left += b
+                    if rows and b > 0 then
+                        rows[#rows + 1] = { itemID = itemID, count = b, why = "bound" }
+                    end
                     if free > 0 then
                         local u = self:Usual(itemID, ruleset)
                         if u and not (itemID == HEARTHSTONE or self.o.never(itemID)) then
                             job.value += u * free
+                            if rows then
+                                rows[#rows + 1] = { itemID = itemID, count = free, each = u }
+                            end
                         else
                             job.left += free
+                            if rows then
+                                local why = itemID == HEARTHSTONE and "hearth" or (self.o.never(itemID) and "quest") or "never"
+                                rows[#rows + 1] = { itemID = itemID, count = free, why = why }
+                            end
                         end
                     end
                 end
                 local h = job.h
-                local value = math.max(0, job.value + (h.money or 0) - (h.cod or 0))
+                local cash, cod = h.money or 0, h.cod or 0
+                local value = math.max(0, job.value + cash - cod)
                 self:SetResult(job.key, job.place, {
                     value = value,
                     left = job.left,
                     seen = h.seen,
                     live = h.live == true,
                     ruleset = ruleset,
+                    money = value - job.value,
+                    cash = cash,
+                    cod = cod,
+                    items = rows,
                 })
                 self.pending[job.key .. "\0" .. job.place] = nil
             end
@@ -236,15 +306,19 @@ export class Worth
         return n
     end
 
-    -- The chosen characters' places worked out: at once with `now` items or
-    -- fewer to do, else a slice a frame and `done` told at the end.
-    -- -> whether all of it is there now.
-    function Prepare(chosen: Chosen[], places: string[], now: number?): boolean
+    -- The chosen characters' places worked out (`items`: with their items,
+    -- the Items tab's): at once with `now` items or fewer to do, else a
+    -- slice a frame and `done` told at the end. -> whether all of it is
+    -- there now.
+    function Prepare(chosen: Chosen[], places: string[], now: number?, items: boolean?): boolean
         self:Check()
         for _, c in ipairs(chosen) do
             for _, place in ipairs(places) do
-                if self.o.kept(place) and self:Result(c.key, place) == nil then
-                    self:Queue(c.key, place, c.ruleset)
+                if self.o.kept(place) then
+                    local r = self:Result(c.key, place)
+                    if r == nil or (items and r and not r.items) then
+                        self:Queue(c.key, place, c.ruleset, items)
+                    end
                 end
             end
         end

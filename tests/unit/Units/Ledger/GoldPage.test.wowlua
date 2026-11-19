@@ -15,17 +15,13 @@ import internal M from "/Units/Ledger"
 import type GoldPage, WorthRow from "/Units/Ledger/GoldPage"
 import expectNoErrors from "../../../helpers"
 import tokenOf from "../../UI/WindowsHelpers"
-import seed, openLedger, wipe, see, LOTUS, KINGSBLOOD, ESSENCE, ORE from "./LedgerHelpers"
+import seed, openLedger, wipe, see, LOTUS, KINGSBLOOD, ESSENCE, ORE, holdings, cleanHoldings, saved, forget, usual from "./LedgerHelpers"
 import * as parts from "/Units/Ledger/Parts"
 import worthNote from "/Units/Ledger/GoldPage"
 import PASS_ITEMS from "/Units/Ledger/Worth"
 import internal M as Mail from "/Units/Mail"
-import internal M as Bags from "/Units/Bags"
 import internal ownOf from "/Core/Modules"
-import * as DB from "/Core/DB"
 import * as settings from "/Core/Settings"
-import * as prices from "/Core/Prices"
-import * as store from "/Core/Prices/Store"
 
 @afterEach
 local function cleanup()
@@ -134,78 +130,7 @@ local function characters()
     expect(p.w.scope).toBe("c:Kaelith - " .. SuuUI.Ruleset())
 end
 
--- Another character's saved bags or bank (the Bags module's, as saved on
--- that character): item ID -> count, the soulbound ones.
-local function saved(key: string, place: string, items: { { number } }, seen: number)
-    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
-    local entry = all[key] or {}
-    all[key] = entry
-    local bags = (entry.bags or { name = key:match("^(.-) %- ") }) :: { [string]: unknown }
-    entry.bags = bags
-    local slots: unknown[] = {}
-    for i, it in ipairs(items) do
-        slots[i] = { t = 134400, c = it[2], q = 1, l = "|Hitem:" .. it[1] .. "::|h[x]|h", b = it[3] == 1 or nil }
-    end
-    bags[place] = { slots = slots, size = #slots, free = 0, seen = seen }
-    Bags.savedBags:Told(place, key)
-end
-
-local function forget(key: string)
-    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
-    local entry = all[key]
-    if entry then
-        entry.bags = nil
-    end
-    Bags.savedBags:Told("bags", key)
-    Bags.savedBags:Told("bank", key)
-end
-
-local function usual(itemID: number, ruleset: string?): number
-    return assert(SuuUI.Prices.Usual(itemID, ruleset))
-end
-
-local DAY = 86400
-local NOBODY = 990699 -- never seen on any house
-
--- You: 2 lotus and 20 kingsblood in your bags (one ore soulbound), a
--- letter with an essence and 5,000 copper; Kaelith (this ruleset): 10
--- kingsblood and 3 of an item never seen in her bags, a lotus in her bank
--- three days ago; Lum (Roleplay): a lotus at Roleplay's price; Brannoc:
--- nothing counted yet.
-local function holdings(): (string, string)
-    local kaelith, lum = "Kaelith - " .. SuuUI.Ruleset(), "Lum - Roleplay"
-    mock.setBag(0, {
-        slots = 16,
-        items = {
-            [1] = { id = LOTUS, count = 2 },
-            [2] = { id = KINGSBLOOD, count = 20 },
-            [3] = { id = ORE, count = 1, bound = true },
-        },
-    })
-    mock.advanceTime(1.5)
-    local box = mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
-    mock.defineMailbox(box, {
-        letters = { { sender = "Tamsin", subject = "For you", money = 5000, items = { { id = ESSENCE, count = 1 } }, daysLeft = 20 } },
-    })
-    mock.player:interact(box)
-    mock.advanceTime(2)
-    CloseMail()
-    saved(kaelith, "bags", { { KINGSBLOOD, 10 }, { NOBODY, 3 } }, time() - DAY)
-    saved(kaelith, "bank", { { LOTUS, 1 } }, time() - 3 * DAY)
-    saved(lum, "bags", { { LOTUS, 1 } }, time() - 2 * DAY)
-    local day, period = SuuUI.Calendar.DayOf()
-    store.record(assert(prices.map("Roleplay", true)), LOTUS, day, period, 500000, 0, 0, 0)
-    mock.advanceTime(0.1)
-    return kaelith, lum
-end
-
-local function cleanHoldings(kaelith: string, lum: string)
-    forget(kaelith)
-    forget(lum)
-    mock.setBag(0, { slots = 16, items = {} })
-    Mail:MailData().inbox = nil
-    mock.advanceTime(1.5)
-end
+const DAY = 86400
 
 local function row(p: GoldPage, place: string): WorthRow
     return assert(p.worthRows[place])

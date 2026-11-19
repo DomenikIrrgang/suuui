@@ -10,14 +10,15 @@
 -- all of it, and a note of what was left out. A place a character never
 -- had read shows "—" with how to count it; one read earlier says "as of"
 -- when; one whose module is off says so. While the worth is worked out (a
--- slice a frame) the loading mark stands in the note's place.
+-- slice a frame) the loading mark stands in the note's place. A place's row
+-- opens the Items tab at that place.
 
 import SuuUI from "/Core/API"
 import type Text, Money, Segmented, LineChart, ScrollArea, ChartValue, LoadingMark from "/Core/API"
 import type CharacterInfo from "../Ledger"
 import * as parts from "./Parts"
 import type LedgerWindow from "./Window"
-import type Chosen, PlaceWorth from "./Worth"
+import type PlaceWorth from "./Worth"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -32,19 +33,19 @@ local CHANGE_W, SEEN_W = 96, 80
 -- what it's worth: the places, in order (SuuUI.Holdings' keys), their
 -- labels, how to count one never read, the module that keeps it
 export const PLACES: string[] = { "bags", "bank", "auctions", "mail" }
-local PLACE_LABEL: { [string]: string } = {
+export const PLACE_LABEL: { [string]: string } = {
     bags = "In bags",
     bank = "In the bank",
     auctions = "On the auction house",
     mail = "In the mail",
 }
-local PLACE_HINT: { [string]: string } = {
+export const PLACE_HINT: { [string]: string } = {
     bags = "Log in to count them",
     bank = "Visit your bank to count it",
     auctions = "Visit the auction house to count them",
     mail = "Open your mailbox to count it",
 }
-local PLACE_OFF: { [string]: string } = {
+export const PLACE_OFF: { [string]: string } = {
     bags = "The Bags module is off",
     bank = "The Bags module is off",
     auctions = "The auction house module is off",
@@ -84,13 +85,34 @@ export function placeMeta(place: string, pw: PlaceWorth): string
 end
 
 -- A row of "What it's worth": the label, what it says of the place (quiet,
--- micro), the money or "—".
+-- micro), the money or "—". A click shows its items (the Items tab at that
+-- place); hovering it lights it and says so.
 export class WorthRow extends parts.DefRow
     readonly meta: Text
     readonly none: Text
+    readonly hover: Texture
 
-    constructor(parent: Frame, label: string)
+    constructor(parent: Frame, label: string, onClick: () -> ())
         super(parent, label)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self:EnableMouse(true)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            self.label:SetColor("ink")
+            UI.ShowTooltip(self, { title = "Show these items" })
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            self.label:SetColor("ink-muted")
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnMouseUp", function(_, button: string)
+            if button == "LeftButton" then
+                onClick()
+            end
+        end)
         self.meta = UI.Text(self, "micro", "ink-faint")
         self.meta:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
         self.meta:SetPoint("RIGHT", self.money, "LEFT", -S["space-3"], 0)
@@ -310,7 +332,9 @@ export class GoldPage extends Frame
         self.worthGold:SetPoint("RIGHT", self.worth, "RIGHT")
         local above: Frame = self.worthGold
         for _, place in ipairs(PLACES) do
-            local r = WorthRow.new(self, PLACE_LABEL[place] or place)
+            local r = WorthRow.new(self, PLACE_LABEL[place] or place, function()
+                self.w:ShowItems(place)
+            end)
             r:SetPoint("TOPLEFT", above, "BOTTOMLEFT")
             r:SetPoint("RIGHT", self.worth, "RIGHT")
             self.worthRows[place] = r
@@ -423,26 +447,13 @@ export class GoldPage extends Frame
         self:DrawWorth()
     end
 
-    -- The chosen characters, with their rulesets (Ledger/Worth).
-    function Chosen(): Chosen[]
-        local scope = self.w:Scope()
-        local out: Chosen[] = {}
-        for _, ch in ipairs(self.w.m:Characters()) do
-            if not scope or (scope.char and scope.char == ch.key) or
-                (not scope.char and scope.ruleset and scope.ruleset == ch.ruleset) then
-                out[#out + 1] = { key = ch.key, ruleset = ch.ruleset }
-            end
-        end
-        return out
-    end
-
     -- What it's worth: the gold, each place, all of it, the note; the
     -- loading mark while it is worked out.
     function DrawWorth()
         local m = self.w.m
         local gold = m:GoldTotal(self.w:Scope())
         self.worthGold.money:SetCopper(gold)
-        local chosen = self:Chosen()
+        local chosen = self.w:Chosen()
         local worth = m:Worth()
         local ready = worth:Prepare(chosen, PLACES, WORTH_NOW)
         local wasLoading = self.worthLoading:IsShown()

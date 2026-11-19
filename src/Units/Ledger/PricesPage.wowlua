@@ -18,7 +18,7 @@
 -- is still looking up.
 
 import SuuUI from "/Core/API"
-import type DealMark, Text, TextField, FilterMenu, FilterValues, FilterValue, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline, LoadingMark from "/Core/API"
+import type DealMark, Text, TextField, FilterMenu, FilterValues, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline, LoadingMark from "/Core/API"
 import type ItemSummary from "./PriceIndex"
 import type Watch from "../Ledger"
 import * as days from "./Days"
@@ -77,9 +77,6 @@ export const COLS: Col[] = {
 }
 type Place = { x: number, w: number }
 
--- the item classes the Category filter knows (the rest: Miscellaneous)
-local CATEGORY: { [number]: string } = { [2] = "w", [4] = "a", [0] = "c", [7] = "t", [9] = "r" }
-
 export const SHOWS: { [string]: boolean } = {
     all = true,
     deals = true,
@@ -105,14 +102,7 @@ local function placesFor(w: number): Place[]
     return out
 end
 
-local function has(list: FilterValue[], v: FilterValue): boolean
-    for _, x in ipairs(list) do
-        if x == v then
-            return true
-        end
-    end
-    return false
-end
+local has = parts.holds
 
 -- An entry's value in a sortable column (nil: none; Seen and Deals the
 -- newest and the furthest under first).
@@ -286,8 +276,9 @@ export class PriceRow extends Button
     end
 end
 
--- The header: a caption per column; a click on a sortable one sorts by it.
-class HeadCell extends Button
+-- The header: a caption per column; a click on a sortable one sorts by it
+-- (Items' too).
+export class HeadCell extends Button
     readonly label: Text
     readonly arrow: Texture
 
@@ -400,31 +391,8 @@ export class PricesPage extends Frame
                         { value = "week", label = "This week" },
                     },
                 },
-                {
-                    key = "cat",
-                    label = "Category",
-                    kind = "many",
-                    options = {
-                        { value = "w", label = "Weapons" },
-                        { value = "a", label = "Armor" },
-                        { value = "c", label = "Consumables" },
-                        { value = "t", label = "Trade Goods" },
-                        { value = "r", label = "Recipes" },
-                        { value = "m", label = "Miscellaneous" },
-                    },
-                },
-                {
-                    key = "q",
-                    label = "Quality",
-                    kind = "many",
-                    options = {
-                        { value = "poor", label = "Poor", color = "quality-poor" },
-                        { value = "common", label = "Common", color = "quality-common" },
-                        { value = "uncommon", label = "Uncommon", color = "quality-uncommon" },
-                        { value = "rare", label = "Rare", color = "quality-rare" },
-                        { value = "epic", label = "Epic", color = "quality-epic" },
-                    },
-                },
+                parts.categoryGroup(),
+                parts.qualityGroup(),
             },
             defaults = { show = "all", seen = "any", cat = {}, q = {} },
             placeholder = "Filters",
@@ -892,7 +860,7 @@ export class PricesPage extends Frame
                 keep = e.day >= today - 6
             end
             if keep and #cats > 0 then
-                keep = has(cats, e.classID and CATEGORY[e.classID] or "m")
+                keep = has(cats, parts.categoryOf(e.classID))
             end
             if keep and #qs > 0 then
                 keep = e.quality ~= nil and has(qs, parts.QUALITY[e.quality] or "")

@@ -8,7 +8,7 @@
 -- dialog that asks for a price (Watch) or a goal.
 
 import SuuUI from "/Core/API"
-import type Text, Money, SuuButton, MoneyInput, TextField, Panel, Border, DealMark from "/Core/API"
+import type Text, Money, SuuButton, MoneyInput, TextField, Panel, Border, DealMark, FilterGroup, FilterValue from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as days from "./Days"
 import WHEN_SPREAD from "./Stats"
@@ -35,6 +35,56 @@ export function qualityToken(quality: number?): string
         return "ink"
     end
     return "quality-" .. (QUALITY[quality] or "common")
+end
+
+-- The Category filter (Prices, Items): an item class's key ("w" weapons,
+-- "a" armor, "c" consumables, "t" trade goods, "r" recipes; the rest "m"
+-- miscellaneous), and the Category and Quality groups of a FilterMenu.
+local CATEGORY: { [number]: string } = { [2] = "w", [4] = "a", [0] = "c", [7] = "t", [9] = "r" }
+
+export function categoryOf(classID: number?): string
+    return classID and CATEGORY[classID] or "m"
+end
+
+export function categoryGroup(): FilterGroup
+    return {
+        key = "cat",
+        label = "Category",
+        kind = "many",
+        options = {
+            { value = "w", label = "Weapons" },
+            { value = "a", label = "Armor" },
+            { value = "c", label = "Consumables" },
+            { value = "t", label = "Trade Goods" },
+            { value = "r", label = "Recipes" },
+            { value = "m", label = "Miscellaneous" },
+        },
+    }
+end
+
+export function qualityGroup(): FilterGroup
+    return {
+        key = "q",
+        label = "Quality",
+        kind = "many",
+        options = {
+            { value = "poor", label = "Poor", color = "quality-poor" },
+            { value = "common", label = "Common", color = "quality-common" },
+            { value = "uncommon", label = "Uncommon", color = "quality-uncommon" },
+            { value = "rare", label = "Rare", color = "quality-rare" },
+            { value = "epic", label = "Epic", color = "quality-epic" },
+        },
+    }
+end
+
+-- Whether a FilterMenu choice's list holds `v`.
+export function holds(list: FilterValue[], v: FilterValue): boolean
+    for _, x in ipairs(list) do
+        if x == v then
+            return true
+        end
+    end
+    return false
 end
 
 -- 6412 -> "6,412"
@@ -435,9 +485,12 @@ end
 export class IconButton extends Button
     readonly edge: Border
     readonly glyph: Texture
+    -- what its tooltip says (changed any time)
+    tip: string
 
     constructor(parent: Frame, glyph: string, tip: string, onClick: () -> ())
         super(nil, parent)
+        self.tip = tip
         self:SetSize(30, 30)
         UI.Fill(self, "surface-raised"):SetAllPoints()
         self.edge = UI.Border(self, "gilt-line")
@@ -449,7 +502,7 @@ export class IconButton extends Button
         self:SetScript("OnEnter", function()
             self.edge:SetColor("gilt")
             UI.Paint(self.glyph, "ink")
-            UI.ShowTooltip(self, { title = tip })
+            UI.ShowTooltip(self, { title = self.tip })
         end)
         self:SetScript("OnLeave", function()
             self.edge:SetColor("gilt-line")

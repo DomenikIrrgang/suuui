@@ -255,3 +255,80 @@ local function midway()
     expect(t.w:Result(ANN.key, "bags")).toBeNil()
     expect(t.w.ticker).toBeNil()
 end
+
+@test("a place's items when asked (the Items tab's): in item order, each with its price or why it was left out, soulbound apart; adding up to its worth; the money's part")
+local function items()
+    local t = fresh()
+    t.holdings[ANN.key] = {
+        bags = {
+            items = { [ORE] = 20, [HERB] = 4, [QUEST] = 2, [HEARTH] = 1, [9999] = 3 },
+            bound = { [ORE] = 4, [HEARTH] = 1 },
+            seen = 500,
+        },
+        mail = { items = { [HERB] = 2 }, money = 5000, cod = 1000, seen = 400 },
+    }
+    t.holdings[CY.key] = { mail = { items = { [ORE] = 1 }, cod = 90000, seen = 300 } }
+    -- the Gold tab's: no items kept
+    expect(t.w:Prepare({ ANN }, PLACES, 1000)).toBe(true)
+    local plain = assert(t.w:Result(ANN.key, "bags"))
+    expect(plain and plain.items).toBeNil()
+    local asked = t.asked
+    -- asked with them: worked out again, the same worth
+    expect(t.w:Prepare({ ANN, CY }, PLACES, 1000, true)).toBe(true)
+    local r = assert(t.w:Result(ANN.key, "bags"))
+    expect(r and r.value).toBe(plain and plain.value)
+    -- (its prices kept: none asked again)
+    expect(t.asked).toBe(asked + 1)
+    expect(r and r.items).toEqual({
+        { itemID = ORE, count = 4, why = "bound" },
+        { itemID = ORE, count = 16, each = 100 },
+        { itemID = HERB, count = 4, each = 250 },
+        { itemID = QUEST, count = 2, why = "quest" },
+        { itemID = HEARTH, count = 1, why = "bound" },
+        { itemID = 9999, count = 3, why = "never" },
+    })
+    -- the items and the money add up to the place's worth
+    local mail = assert(t.w:Result(ANN.key, "mail"))
+    if mail then
+        local sum = mail.money
+        for _, it in ipairs(mail.items or {}) do
+            sum += (it.each or 0) * it.count
+        end
+        expect(sum).toBe(mail.value)
+        expect({ mail.money, mail.cash, mail.cod }).toEqual({ 4000, 5000, 1000 })
+    end
+    -- a COD dearer than the letter (an ore at Roleplay's 300): its money takes the place to nothing
+    local cy = assert(t.w:Result(CY.key, "mail"))
+    expect(cy and { cy.value, cy.money }).toEqual({ 0, -300 })
+    -- the hearthstone with a price, not bound: still left out, as the hearthstone
+    t.holdings[BO.key] = { bags = { items = { [HEARTH] = 1 }, seen = 1 } }
+    t.w:Prepare({ BO }, PLACES, 1000, true)
+    local bo = assert(t.w:Result(BO.key, "bags"))
+    expect(bo and bo.items).toEqual({ { itemID = HEARTH, count = 1, why = "hearth" } })
+    -- the Gold tab asking after: the items stay
+    t.w:Prepare({ ANN }, PLACES, 1000)
+    local again = assert(t.w:Result(ANN.key, "bags"))
+    expect(again and again.items ~= nil).toBe(true)
+end
+
+@test("a place queued without its items, then asked for with them: queued again with them, worked out once")
+local function requeue()
+    local t = fresh()
+    local many: { [number]: number } = {}
+    for k = 1, 600 do
+        many[40000 + k] = 1
+        t.prices.Normal[40000 + k] = 2
+    end
+    t.holdings[ANN.key] = { bags = { items = many, seen = 1 } }
+    expect(t.w:Prepare({ ANN }, PLACES, 10)).toBe(false)
+    expect(t.w:Prepare({ ANN }, PLACES, 10, true)).toBe(false)
+    local guard = 0
+    while t.w.ticker and guard < 50 do
+        mock.advanceFrames(1)
+        guard += 1
+    end
+    local r = assert(t.w:Result(ANN.key, "bags"))
+    expect(r and #(r.items or {})).toBe(600)
+    expect(r and r.value).toBe(1200)
+    expect(t.done).toBe(1)
+end

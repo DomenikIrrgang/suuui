@@ -14,6 +14,10 @@
 --   seed()           the looks, the scan and the characters
 --   seedBooks()      transactions of this week (yours and Kaelith's)
 --   openLedger(view?, opts?)   the window opened (through the service)
+--   holdings()       your bags and a letter, Kaelith's bags and bank, Lum's
+--                    bags (Roleplay, a price there); cleanHoldings() after
+--   saved(key, place, items, seen) / forget(key)
+--                    another character's bags or bank as saved / gone
 --   wipe()           the Ledger's data, the price store (the names too) and
 --                    the window's state cleared
 
@@ -27,6 +31,10 @@ import * as days from "/Units/Ledger/Days"
 import * as books from "/Units/Ledger/Books"
 import * as priceStore from "../../Core/Prices/PricesHelpers"
 import * as prices from "/Core/Prices"
+import * as store from "/Core/Prices/Store"
+import * as DB from "/Core/DB"
+import internal M as Mail from "/Units/Mail"
+import internal M as Bags from "/Units/Bags"
 
 export const LOTUS = 990601
 export const KINGSBLOOD = 990602
@@ -178,6 +186,78 @@ export function seedBooks()
     mock.advanceTime(0.05)
 end
 
+-- Another character's saved bags or bank (the Bags module's, as saved on
+-- that character): item ID -> count, the soulbound ones.
+export function saved(key: string, place: string, items: { { number } }, seen: number)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    local entry = all[key] or {}
+    all[key] = entry
+    local bags = (entry.bags or { name = key:match("^(.-) %- ") }) :: { [string]: unknown }
+    entry.bags = bags
+    local slots: unknown[] = {}
+    for i, it in ipairs(items) do
+        slots[i] = { t = 134400, c = it[2], q = 1, l = "|Hitem:" .. it[1] .. "::|h[x]|h", b = it[3] == 1 or nil }
+    end
+    bags[place] = { slots = slots, size = #slots, free = 0, seen = seen }
+    Bags.savedBags:Told(place, key)
+end
+
+export function forget(key: string)
+    local all = DB.db.charData :: { [string]: { [string]: unknown }? }
+    local entry = all[key]
+    if entry then
+        entry.bags = nil
+    end
+    Bags.savedBags:Told("bags", key)
+    Bags.savedBags:Told("bank", key)
+end
+
+export function usual(itemID: number, ruleset: string?): number
+    return assert(SuuUI.Prices.Usual(itemID, ruleset))
+end
+
+export const NOBODY = 990699 -- never seen on any house
+
+-- You: 2 lotus and 20 kingsblood in your bags (one ore soulbound), a
+-- letter with an essence and 5,000 copper; Kaelith (this ruleset): 10
+-- kingsblood and 3 of an item never seen in her bags, a lotus in her bank
+-- three days ago; Lum (Roleplay): a lotus at Roleplay's price; Brannoc:
+-- nothing counted yet.
+export function holdings(): (string, string)
+    local kaelith, lum = "Kaelith - " .. SuuUI.Ruleset(), "Lum - Roleplay"
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = LOTUS, count = 2 },
+            [2] = { id = KINGSBLOOD, count = 20 },
+            [3] = { id = ORE, count = 1, bound = true },
+        },
+    })
+    mock.advanceTime(1.5)
+    local box = mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    mock.defineMailbox(box, {
+        letters = { { sender = "Tamsin", subject = "For you", money = 5000, items = { { id = ESSENCE, count = 1 } }, daysLeft = 20 } },
+    })
+    mock.player:interact(box)
+    mock.advanceTime(2)
+    CloseMail()
+    saved(kaelith, "bags", { { KINGSBLOOD, 10 }, { NOBODY, 3 } }, time() - DAY)
+    saved(kaelith, "bank", { { LOTUS, 1 } }, time() - 3 * DAY)
+    saved(lum, "bags", { { LOTUS, 1 } }, time() - 2 * DAY)
+    local day, period = SuuUI.Calendar.DayOf()
+    store.record(assert(prices.map("Roleplay", true)), LOTUS, day, period, 500000, 0, 0, 0)
+    mock.advanceTime(0.1)
+    return kaelith, lum
+end
+
+export function cleanHoldings(kaelith: string, lum: string)
+    forget(kaelith)
+    forget(lum)
+    mock.setBag(0, { slots = 16, items = {} })
+    Mail:MailData().inbox = nil
+    mock.advanceTime(1.5)
+end
+
 export function window(): LedgerWindow
     return M:Window()
 end
@@ -213,6 +293,16 @@ export function wipe()
         t:SetQuery("")
         t.range:SetValue("week")
         t.rangeKey = "week"
+        local it = w.items
+        it.filter:SetValue(nil)
+        it:SetFilters(it.filter:GetValue())
+        it.sortKey, it.sortReverse = "value", false
+        it.search.edit:ClearFocus()
+        it.search:SetValue("")
+        it:SetQuery("")
+        it:SetPlace("all")
+        it:Forget()
+        w.item.from = "prices"
     end
     local d = M:Data()
     d.scans, d.watches, d.gold, d.goal = nil, nil, nil, nil

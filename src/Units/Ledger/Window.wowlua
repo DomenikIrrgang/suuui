@@ -1,8 +1,9 @@
 -- Units/Ledger/Window.wowlua
 -- The Ledger window (design board "Ledger"; spec 2026-11-18): a
 -- WindowFrame 880 x 600, the coin, "Ledger", whose prices it shows ("Prices:
--- Normal Ruleset"); the tabs Overview · Prices · Transactions · Gold (an
--- item's page under Prices); at the tab
+-- Normal Ruleset"); the tabs Overview · Prices · Transactions · Gold ·
+-- Items (an item's page under Prices, or under Items opened from there);
+-- at the tab
 -- row's right a bare Select of characters (all, all on a ruleset, one); the
 -- foot: what the prices come from at the left, the chosen characters' money
 -- at the right. It opens centred (beside the auction house while that is
@@ -13,6 +14,7 @@
 import SuuUI from "/Core/API"
 import type WindowFrame, Select, Text, Money, SelectOption from "/Core/API"
 import type GoldScope from "./Gold"
+import type Chosen from "./Worth"
 import type LedgerModule, OpenOptions from "../Ledger"
 import * as parts from "./Parts"
 import OverviewPage from "./OverviewPage"
@@ -20,6 +22,7 @@ import PricesPage from "./PricesPage"
 import ItemPage from "./ItemPage"
 import GoldPage from "./GoldPage"
 import TransactionsPage from "./TransactionsPage"
+import ItemsPage from "./ItemsPage"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -34,6 +37,7 @@ local TAB_OF: { [string]: string } = {
     item = "prices",
     transactions = "transactions",
     gold = "gold",
+    items = "items",
 }
 
 export class LedgerWindow
@@ -47,8 +51,10 @@ export class LedgerWindow
     readonly item: ItemPage
     readonly gold: GoldPage
     readonly transactions: TransactionsPage
+    readonly items: ItemsPage
     readonly pages: { [string]: Frame } = {}
-    -- the view shown: "overview", "prices", "item", "transactions", "gold"
+    -- the view shown: "overview", "prices", "item", "transactions", "gold",
+    -- "items"
     view: string = "overview"
     -- the characters chosen: "all", "rs:<ruleset>" or "c:<character key>"
     scope: string = "all"
@@ -78,6 +84,7 @@ export class LedgerWindow
                 { key = "prices", label = "Prices" },
                 { key = "transactions", label = "Transactions" },
                 { key = "gold", label = "Gold" },
+                { key = "items", label = "Items" },
             },
             onTab = function(key: string)
                 if not self.going then
@@ -121,8 +128,10 @@ export class LedgerWindow
         self.item = ItemPage.new(w.body, self)
         self.gold = GoldPage.new(w.body, self)
         self.transactions = TransactionsPage.new(w.body, self)
+        self.items = ItemsPage.new(w.body, self)
         self.pages.overview, self.pages.prices, self.pages.item, self.pages.gold, self.pages.transactions =
             self.overview, self.prices, self.item, self.gold, self.transactions
+        self.pages.items = self.items
         w:SetTab("overview")
     end
 
@@ -143,6 +152,20 @@ export class LedgerWindow
             return { char = char }
         end
         return nil
+    end
+
+    -- The chosen characters, with their rulesets (Ledger/Worth: the Gold
+    -- tab's what it's worth, the Items tab).
+    function Chosen(): Chosen[]
+        local scope = self:Scope()
+        local out: Chosen[] = {}
+        for _, ch in ipairs(self.m:Characters()) do
+            if not scope or (scope.char and scope.char == ch.key) or
+                (not scope.char and scope.ruleset and scope.ruleset == ch.ruleset) then
+                out[#out + 1] = { key = ch.key, ruleset = ch.ruleset }
+            end
+        end
+        return out
     end
 
     -- The chosen characters in words: "all characters", "Normal Ruleset",
@@ -215,19 +238,28 @@ export class LedgerWindow
         f:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
     end
 
-    -- Shows a view: "overview", "prices", "item", "transactions", "gold".
+    -- Shows a view: "overview", "prices", "item", "transactions", "gold",
+    -- "items".
     function Go(view: string)
         self.view = view
         for key, page in pairs(self.pages) do
             page:SetShown(key == view)
         end
-        local tab = TAB_OF[view] or "overview"
+        -- (an item's page under the tab it was opened from)
+        local tab = TAB_OF[view == "item" and self.item.from or view] or "overview"
         if self.frame.tab ~= tab then
             self.going = true
             self.frame:SetTab(tab)
             self.going = false
         end
         self:Refresh()
+    end
+
+    -- Items at a place ("bags", "bank", "auctions", "mail"; the Gold tab's
+    -- rows of what it's worth).
+    function ShowItems(place: string)
+        self.items:SetPlace(place)
+        self:Go("items")
     end
 
     -- Something it reads changed: drawn again now (next frame, once) while
@@ -238,8 +270,8 @@ export class LedgerWindow
             self.item:DrawButtons()
             return
         end
-        -- (what it's worth shows only on Gold: drawn as it opens)
-        if what == "worth" and self.view ~= "gold" then
+        -- (what it's worth shows only on Gold and Items: drawn as they open)
+        if what == "worth" and self.view ~= "gold" and self.view ~= "items" then
             return
         end
         -- (the prices' rows follow the index's log themselves: PricesPage.Sync)
@@ -264,6 +296,8 @@ export class LedgerWindow
         self.prices:Forget()
         self.prices.ticker = nil
         self.transactions.hayTicker, self.transactions.hayJob = nil, nil
+        self.items:Forget()
+        self.items.ticker = nil
         self.dirty = true
     end
 
@@ -271,6 +305,7 @@ export class LedgerWindow
     function ItemInfo(itemID: number)
         self.prices:ItemInfo(itemID)
         self.transactions:ItemInfo(itemID)
+        self.items:ItemInfo(itemID)
         if self.frame:IsShown() then
             if self.view == "item" and self.item.itemID == itemID then
                 self.item:Draw()
@@ -350,6 +385,8 @@ export class LedgerWindow
             self.transactions:Draw()
         elseif view == "gold" then
             self.gold:Draw()
+        elseif view == "items" then
+            self.items:Draw()
         end
     end
 end
