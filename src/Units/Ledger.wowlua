@@ -704,7 +704,7 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         return map
     end
 
-    -- This character's money today (at login, on each change, at logout;
+    -- This character's money today (at login and on each change;
     -- `quiet`: nothing told, as when the module starts).
     function RecordMoney(quiet: boolean?)
         local key = self:CharKey()
@@ -994,8 +994,15 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("PLAYER_MONEY", function()
             self:RecordMoney()
         end)
+        -- at logout only when it was seen: on Forever a logout (not a
+        -- /reload) tells 0 money (seen in game 2026-11-19), and every change
+        -- was kept as it came
         self:OnGameEvent("PLAYER_LOGOUT", function()
-            self:RecordMoney()
+            local key = self:CharKey()
+            local c = key and self:GoldMap()[key]
+            if c then
+                c.seen = time()
+            end
         end)
         self:ListenForWindow()
         self:ProvideService(SuuUI.Services.LEDGER, {
