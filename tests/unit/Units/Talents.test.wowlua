@@ -248,7 +248,8 @@ local function ownTree()
     -- (found in game: points in Arms opened Fury's next row)
     local p = fakePage(true)
     M.windowPage, M.page = fakePage(false).page, p.page
-    w.conditions[9] = { isMet = true, spentAmountRequired = 3 }
+    -- (the game met it: by its count nothing is missing, as it answers)
+    w.conditions[9] = { isMet = true, spentAmountRequired = 0 }
     local furyTwo = wt().nodes[5]
     furyTwo.available, furyTwo.meetsEdges, furyTwo.canPurchase = true, true, true
     furyTwo.conditions = { 9 }
@@ -256,11 +257,17 @@ local function ownTree()
     wt().nodes[3].rank = 2
     M:Render()
     local two = nodeIn(M.data, 22)
+    expect(two.gate).toBe(5)
     expect(two.locked).toBe(true)
     expect(two.canSpend).toBe(false)
-    -- 3 points in Fury: open
+    -- 3 points in Fury: its second row still waits for 5
     wt().nodes[4].rank = 1
     wt().nodes[6].rank = 2
+    M:Render()
+    two = nodeIn(M.data, 22)
+    expect(two.locked).toBe(true)
+    -- 5 points in Fury (the game's count of the tree): open
+    wt().spent = { [502] = 5 }
     M:Render()
     two = nodeIn(M.data, 22)
     expect(two.locked).toBe(false)
@@ -407,6 +414,20 @@ local function showTip()
     expect(seen().opts.needs).toEqual({ "Requires 1 point in Arms One" })
     expect(seen().opts.treeName).toBe("Arms")
     expect(seen().opts.blocked).toBeNil()
+    -- a row its own tree hasn't opened, which the game counts as met (points
+    -- spent in Fury): the row's points said; the game's points line left
+    -- out (it counts every tree's), its level line kept
+    w.conditions[7] = { isMet = true, spentAmountRequired = 0 }
+    w.conditions[8] = { isMet = false, playerLevel = 20, tooltipText = "Requires level 20" }
+    wt().nodes[2].conditions = { 7, 8 }
+    local gated = assert(M:Collect())
+    M:ShowTip(UIParent, nodeIn(gated, 12), gated)
+    expect(seen().opts.needs).toEqual({ "Requires 5 points in Arms", "Requires 1 point in Arms One" })
+    expect(seen().opts.conditions).toEqual({ 8 })
+    -- 5 points in Arms: only the talent above
+    gated.trees[1].points = 5
+    M:ShowTip(UIParent, nodeIn(gated, 12), gated)
+    expect(seen().opts.needs).toEqual({ "Requires 1 point in Arms One" })
     mock.player:enterCombat()
     M:ShowTip(UIParent, nodeIn(d, 11), d)
     expect(seen().opts.blocked).toBe("Talents can't change in combat.")

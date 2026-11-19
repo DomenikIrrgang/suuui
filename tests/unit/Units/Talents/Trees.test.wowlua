@@ -163,28 +163,52 @@ local function collectSpellName()
     expect(nodeIn(d, 11).icon).toBe(777)
 end
 
-@test("Requires: the tree's points, else the talent above it")
+@test("Collect: a talent's gate is its row's points when a condition asks for points")
+local function gates()
+    -- the client's answers: what is still missing by its own count (every
+    -- tree's points), 0 once met; a level condition asks no points
+    w.conditions[7] = { isMet = true, spentAmountRequired = 0 }
+    w.conditions[8] = { isMet = false, spentAmountRequired = 3, tooltipText = "Spend 3 more points in Arms Talents" }
+    w.conditions[9] = { isMet = false, playerLevel = 20 }
+    wt().nodes[2].conditions = { 7 }
+    -- Arms Three two rows down
+    wt().nodes[3].y = 1200
+    wt().nodes[3].conditions = { 9, 8 }
+    wt().nodes[5].conditions = { 9 }
+    local d = assert(M:Collect())
+    expect(nodeIn(d, 12).gate).toBe(5)
+    expect(nodeIn(d, 13).gate).toBe(10)
+    expect(nodeIn(d, 22).gate).toBe(0)
+    expect(nodeIn(d, 11).gate).toBe(0)
+    expect(talentTrees.otherConditions(CONFIG, { 9, 8, 7 })).toEqual({ 9 })
+    expect(talentTrees.otherConditions(CONFIG, {})).toEqual({})
+end
+
+@test("Requires: the row's points in its own tree, else the talent above it")
 local function requires()
-    w.conditions[7] = { isMet = false, spentAmountRequired = 5 }
-    w.conditions[8] = { isMet = true, spentAmountRequired = 10 }
-    wt().nodes[2].conditions = { 8, 7 }
+    -- met by the game's count (every tree's points): nothing missing
+    w.conditions[7] = { isMet = true, spentAmountRequired = 0 }
+    wt().nodes[2].conditions = { 7 }
     local d = assert(M:Collect())
     local two = nodeIn(d, 12)
-    -- (Arms with its 10 points: only the game's unmet one)
-    d.trees[1].points = 10
+    -- its own tree short of the row's 5
+    d.trees[1].points = 3
     expect(M:Requires(d.configID, two)).toBe("Requires 5 points in Arms")
-    w.conditions[7].isMet = true
+    expect(talentTrees.gateNeed(two)).toBe("Requires 5 points in Arms")
+    d.trees[1].points = 5
+    expect(talentTrees.gateNeed(two)).toBeNil()
     expect(M:Requires(d.configID, two)).toBe("Requires 1 point in Arms One")
     nodeIn(d, 11).rank = 1
     expect(M:Requires(d.configID, two)).toBeNil()
-    -- the game met (it counts every tree's points), its own tree short
-    d.trees[1].points = 3
-    expect(M:Requires(d.configID, two)).toBe("Requires 10 points in Arms")
-    d.trees[1].points = 10
     -- a two-rank talent above
     two.requires = { nodeIn(d, 13) }
     expect(M:Requires(d.configID, two)).toBe("Requires 2 points in Arms Three")
     expect(M:Requires(d.configID, nodeIn(d, 11))).toBeNil()
+    -- not met by the game either (2 still missing by its count): the row's 5
+    w.conditions[7] = { isMet = false, spentAmountRequired = 2 }
+    d = assert(M:Collect())
+    d.trees[1].points = 3
+    expect(M:Requires(d.configID, nodeIn(d, 12))).toBe("Requires 5 points in Arms")
 end
 
 --------------------------------------------------------------------------------
