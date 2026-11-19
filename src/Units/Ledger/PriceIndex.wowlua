@@ -1,0 +1,337 @@
+-- Units/Ledger/PriceIndex.wowlua
+-- What the Ledger makes of one ruleset's prices (Units/Ledger), kept so no
+-- page works it out again: per item its summary (the latest look, the
+-- usual price, the change) and what that look is by the deal settings
+-- (how far under, under vendor price, the deals' order), and the items
+-- that are deals. A summary holds for the day, its deal part for the deal
+-- settings; one look recorded (a search's, each of a Scan all's) works out
+-- that item again at once.
+--
+-- Measured 2026-11-19 at 7,000 items: working out every summary took about
+-- a second of one frame in game (the Overview's deals, the Prices list:
+-- each opened it again when the day, a look or a setting had changed).
+-- Now the whole set is worked out a slice a frame (a few milliseconds of
+-- work at most, PASS_MS, and at most PASS_ITEMS items), once a day and
+-- after the deal settings change; a page that needs all of it asks for it
+-- (Prepare) and shows SuuUI's loading mark until it's there (Ready, the
+-- `done` callback). What changed since is logged (Log: the items, in
+-- order), so a page that keeps rows of its own updates only those.
+
+import * as store from "./Store"
+import type Look, PriceMap from "./Store"
+import * as stats from "./Stats"
+import * as days from "./Days"
+
+-- An item's summary: its latest look, the usual price and the change
+-- (percent, negative under), and by the deal settings `dk` how far under
+-- it is when that's a deal, whether it's under what a vendor pays (and
+-- that price), the deals' order (the furthest under first).
+export type ItemSummary = {
+    itemID: number,
+    look: Look,
+    usual?: number,
+    change?: number,
+    under?: number,
+    underVendor: boolean,
+    vendor?: number,
+    order: number,
+    dk: string,
+}
+
+-- A deal in the deals list (Ledger:Deals).
+export type DealEntry = {
+    itemID: number,
+    low: number,
+    usual?: number,
+    under?: number,
+    underVendor: boolean,
+    vendor?: number,
+    order: number,
+}
+
+export type PriceIndexOptions = {
+    -- the ruleset's prices (nil: none)
+    map: () -> PriceMap?,
+    -- the deal settings: how far under counts, whether under vendor
+    -- price does (a change redoes the deal parts)
+    settings: () -> (number, boolean),
+    -- what a vendor pays for an item (nil: nothing, or not known yet)
+    vendor: (itemID: number) -> number?,
+    every: (seconds: number, fn: (ticker: TickerHandle) -> ()) -> TickerHandle,
+    -- a pass came to its end (pages waiting draw)
+    done: () -> (),
+}
+
+-- A slice of a pass: at most this many ms (in game) and items a frame.
+export const PASS_MS = 4
+export const PASS_ITEMS = 200
+-- the log is let go past this many entries (a page then builds anew)
+local LOG_MAX = 50000
+
+export class PriceIndex
+    readonly o: PriceIndexOptions
+    -- the summaries worked out, by item; the deals among them
+    items: { [number]: ItemSummary } = {}
+    dealSet: { [number]: ItemSummary } = {}
+    dealList?: DealEntry[] = nil
+    -- what they hold for: the day, the deal settings
+    day: number = -1
+    dk: string = ""
+    pct: number = 0
+    vendorOn: boolean = false
+    -- each time every item is worked out again (a new day, other deal
+    -- settings) gen counts up and the log starts over: the items changed
+    -- since, in order
+    gen: number = 0
+    log: number[] = {}
+    -- the items still to work out (queue[qi] on), and the slices' ticker
+    queue: number[] = {}
+    qi: number = 1
+    ticker: TickerHandle? = nil
+    -- how many items the map had when the pass began (Progress)
+    total: number = 0
+
+    constructor(o: PriceIndexOptions)
+        self.o = o
+    end
+
+    -- The day turned or the deal settings changed: everything again (a
+    -- new day: the summaries too). -> whether it started over.
+    function Check(): boolean
+        local today = days.dayOf()
+        local pct, vendorOn = self.o.settings()
+        local dk = pct .. (vendorOn and "v" or "")
+        if today ~= self.day then
+            self.items, self.dealSet = {}, {}
+        elseif dk == self.dk then
+            return false
+        end
+        self.pct, self.vendorOn = pct, vendorOn
+        self:Restart(today, dk)
+        return true
+    end
+
+    -- Every item queued again for `day` and the deal settings `dk`.
+    function Restart(day: number, dk: string)
+        self.day, self.dk = day, dk
+        self.gen += 1
+        self.log = {}
+        self.dealList = nil
+        local queue: number[] = {}
+        for itemID in pairs(self.o.map() or {}) do
+            queue[#queue + 1] = itemID
+        end
+        -- (in item order: the same for every pass)
+        table.sort(queue)
+        self.queue, self.qi, self.total = queue, 1, #queue
+    end
+
+    -- An item worked out (its summary when the day's isn't there, its deal
+    -- part when the settings' isn't); dropped when it has no looks.
+    -- -> its summary.
+    function Fill(itemID: number, s: string?): ItemSummary?
+        if not s then
+            self.items[itemID] = nil
+            if self.dealSet[itemID] then
+                self.dealSet[itemID] = nil
+                self.dealList = nil
+            end
+            return nil
+        end
+        local sm = self.items[itemID]
+        if not sm then
+            local look = store.latest(s)
+            if not look then
+                return nil
+            end
+            local usual = store.usualOf(s, self.day)
+            sm = {
+                itemID = itemID,
+                look = look,
+                usual = usual,
+                change = usual and stats.change(look.low, usual) or nil,
+                underVendor = false,
+                order = 0,
+                dk = "",
+            }
+            self.items[itemID] = sm
+        end
+        if sm.dk ~= self.dk then
+            local low = sm.look.low
+            local under = stats.dealUnder(low, sm.usual, self.pct)
+            local vendor = self.o.vendor(itemID)
+            local uv = self.vendorOn and stats.underVendor(low, vendor)
+            sm.under, sm.underVendor, sm.vendor, sm.dk = under, uv, vendor, self.dk
+            sm.order = stats.dealOrder(under, sm.look.low, uv and vendor or nil)
+            local isDeal = under ~= nil or uv
+            if isDeal or self.dealSet[itemID] then
+                self.dealSet[itemID] = isDeal and sm or nil
+                self.dealList = nil
+            end
+        end
+        return sm
+    end
+
+    -- Whether every item is worked out (for today and the settings).
+    function Ready(): boolean
+        self:Check()
+        return self.qi > #self.queue
+    end
+
+    -- How far a pass is: items worked out, of how many.
+    function Progress(): (number, number)
+        return math.min(self.qi - 1, self.total), self.total
+    end
+
+    -- Up to `n` items of the queue worked out now (a ms budget too, when
+    -- given). -> whether the queue is done.
+    function Run(n: number, ms: number?): boolean
+        local map = self.o.map() or {}
+        local queue = self.queue
+        local stop = math.min(#queue, self.qi + n - 1)
+        local deadline = ms and (debugprofilestop() + ms) or nil
+        local i = self.qi
+        while i <= stop do
+            local id = queue[i]
+            self:Fill(id, map[id])
+            i += 1
+            if deadline and debugprofilestop() > deadline then
+                break
+            end
+        end
+        self.qi = i
+        if i > #queue then
+            self.queue, self.qi = {}, 1
+            return true
+        end
+        return false
+    end
+
+    -- Every item worked out: at once with `now` or fewer left, else a slice
+    -- a frame and `done` told at the end. -> whether it's ready now.
+    function Prepare(now: number?): boolean
+        self:Check()
+        local left = #self.queue - self.qi + 1
+        if left <= 0 or (left <= (now or 0) and self:Run(left)) then
+            return true
+        end
+        if not self.ticker then
+            self.ticker = self.o.every(0, function(ticker: TickerHandle)
+                self:Check()
+                if self:Run(PASS_ITEMS, PASS_MS) then
+                    ticker:Cancel()
+                    self.ticker = nil
+                    self.o.done()
+                end
+            end)
+        end
+        return false
+    end
+
+    -- Every item worked out now (the deals list asked for at once).
+    function Finish()
+        self:Check()
+        self:Run(math.huge)
+    end
+
+    -- An item's summary (nil: no look), worked out now when it isn't yet.
+    function Get(itemID: number): ItemSummary?
+        self:Check()
+        local sm = self.items[itemID]
+        if sm and sm.dk == self.dk then
+            return sm
+        end
+        local map = self.o.map()
+        return self:Fill(itemID, map and map[itemID])
+    end
+
+    -- A look changed an item: worked out again now, and logged (`checked`:
+    -- the caller checked the day and the settings for a slice of them).
+    -- -> its summary.
+    function Touch(itemID: number, checked: boolean?): ItemSummary?
+        if not checked then
+            self:Check()
+        end
+        self.items[itemID] = nil
+        local map = self.o.map()
+        local sm = self:Fill(itemID, map and map[itemID])
+        self:Log(itemID)
+        return sm
+    end
+
+    -- An item's deal part worked out again (its vendor price may be known
+    -- now: the client loaded the item); logged when that changed it.
+    function Redeal(itemID: number)
+        local sm = self.items[itemID]
+        if not sm or sm.dk ~= self.dk or sm.vendor ~= nil then
+            return
+        end
+        local was = sm.underVendor
+        sm.dk = ""
+        local map = self.o.map()
+        self:Fill(itemID, map and map[itemID])
+        if sm.underVendor ~= was then
+            self:Log(itemID)
+        end
+    end
+
+    -- An item's looks changed where its summary doesn't show (the prune):
+    -- worked out again with the next slice.
+    function Forget(itemID: number)
+        local had = self.items[itemID] ~= nil
+        self.items[itemID] = nil
+        if had then
+            self.queue[#self.queue + 1] = itemID
+            self:Log(itemID)
+        end
+    end
+
+    function Log(itemID: number)
+        local log = self.log
+        if #log >= LOG_MAX then
+            -- (a page that kept rows builds them anew)
+            self.gen += 1
+            self.log = {}
+            log = self.log
+        end
+        log[#log + 1] = itemID
+    end
+
+    -- The deals, the furthest under first (every item worked out first).
+    function Deals(): DealEntry[]
+        self:Finish()
+        local list = self.dealList
+        if list then
+            return list
+        end
+        local out: DealEntry[] = {}
+        for itemID, sm in pairs(self.dealSet) do
+            out[#out + 1] = {
+                itemID = itemID,
+                low = sm.look.low,
+                usual = sm.usual,
+                under = sm.under,
+                underVendor = sm.underVendor,
+                vendor = sm.vendor,
+                order = sm.order,
+            }
+        end
+        table.sort(out, function(a: DealEntry, b: DealEntry): boolean
+            if a.order ~= b.order then
+                return a.order > b.order
+            end
+            return a.itemID < b.itemID
+        end)
+        self.dealList = out
+        return out
+    end
+
+    -- Nothing worked out any more (the module turned off).
+    function Stop()
+        local t = self.ticker
+        if t then
+            t:Cancel()
+        end
+        self.ticker = nil
+    end
+end

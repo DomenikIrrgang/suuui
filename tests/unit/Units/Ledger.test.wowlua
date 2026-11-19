@@ -7,7 +7,7 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
-import internal M, SECTION from "/Units/Ledger"
+import internal M, SECTION, SCAN_SLICE from "/Units/Ledger"
 import internal M as AH from "/Units/AuctionHouse"
 import * as events from "/Core/Events"
 import * as modules from "/Core/Modules"
@@ -40,7 +40,8 @@ local function cleanup()
         names:Stop()
         names.tries, names.gaveUp = {}, {}
     end
-    M.cache, M.vendor = {}, {}
+    M:DropIndexes()
+    M.vendor = {}
     M:Reset("dealPercent")
     M:Reset("dealVendor")
     M:Reset("tipUsual")
@@ -205,7 +206,8 @@ local function scan()
     expect(M:LastScan()).toBeNil()
     expect(assert(M:Latest(SHARD)).low).toBe(700)
     expect(M:Latest(1000000 + 1998)).toBeNil()
-    for _ = 1, 4 do
+    -- (the rest: a slice a frame)
+    for _ = 1, math.ceil(2000 / SCAN_SLICE) do
         mock.advanceTime(0.01)
     end
     local s = assert(M:LastScan())
@@ -215,6 +217,13 @@ local function scan()
     expect(math.abs(s.at - time()) <= 1).toBe(true)
     expect(assert(M:Latest(1000000 + 1998)).low).toBe(2098)
     expect(assert(M:Latest(SHARD)).most).toBe(900)
+    -- the scan's deals as it read them (its note's), furthest under first;
+    -- the index worked them out on the way
+    local found = M:ScanDeals()
+    expect(#found).toBe(2)
+    expect({ found[1].itemID, found[2].itemID }).toEqual({ SHARD, HIDE })
+    expect(found[2].underVendor).toBe(true)
+    expect(M:Index().items[SHARD]).toBe(M:Summary(SHARD))
     mock.advanceTime(0.01)
     expect(told).toEqual({ "prices", "scan" })
     -- a small one at once, through the auction house module's message
@@ -384,6 +393,27 @@ local function prune()
     -- once a day
     M:Prune()
     expect(M.pruneTicker).toBeNil()
+end
+
+@test("the prune keeps the summaries (a look older than 60 days counts in none); an item with no look left goes from the index and the deals")
+local function pruneKeepsSummaries()
+    history(SHARD, { 1000, 1000, 1000 })
+    M:RecordLook(SHARD, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
+    M:RecordLook(HIDE, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
+    M:RecordLook(SHARD, 600, 0, 5, 1)
+    local sm = assert(M:Summary(SHARD))
+    -- (the hide: its old look under vendor price)
+    expect(#M:Deals()).toBe(2)
+    expect(M:Summary(HIDE)).never.toBeNil()
+    M:Data().pruned = nil
+    M:Prune()
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+    expect(M.pruneTicker).toBeNil()
+    expect(M:Summary(SHARD)).toBe(sm)
+    expect(M:Summary(HIDE)).toBeNil()
+    expect(M:Index().items[HIDE]).toBeNil()
+    expect(#M:Deals()).toBe(1)
 end
 
 @test("item names: told with a search's look and a scan's, kept for every ruleset; the client's answers kept for the Ledger's items")
@@ -575,7 +605,7 @@ end
 local function transactions()
     local d = M:Data()
     d.books, d.booksPruned = nil, nil
-    M:Store().decoded = {}
+    M:Store():Reset()
     local told = heard()
     local me = assert(M:CharKey())
     local now = time()
@@ -590,7 +620,7 @@ local function transactions()
     gm[other] = { name = "Lum", ruleset = "Roleplay", seen = now, days = { [days.dayOf()] = 5 } }
     local map = M:BookMap()
     map[other] = {}
-    M:Store().decoded[other] = nil
+    M:Store():ForgetChar(other)
     books.add(assert(map[other]), { at = now - 30, kind = "quest", amount = 400 })
     local all = M:Transactions(nil, nil)
     expect(#all).toBe(4)
@@ -626,7 +656,7 @@ local function transactions()
     expect(#M:Transactions({ char = me }, nil)).toBe(4)
     gm[other] = nil
     d.books, d.booksPruned = nil, nil
-    M:Store().decoded = {}
+    M:Store():Reset()
 end
 
 @test("the mail waiting: per character as its inbox was read, told as 'mail' when it changes; the chosen characters'")

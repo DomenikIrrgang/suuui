@@ -18,9 +18,10 @@
 -- is still looking up.
 
 import SuuUI from "/Core/API"
-import type DealMark, Text, TextField, FilterMenu, FilterValues, FilterValue, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline from "/Core/API"
+import type DealMark, Text, TextField, FilterMenu, FilterValues, FilterValue, Select, SelectOption, VirtualList, ItemSlot, Money, Sparkline, LoadingMark from "/Core/API"
+import type ItemSummary from "./PriceIndex"
+import type Watch from "../Ledger"
 import * as days from "./Days"
-import * as stats from "./Stats"
 import * as parts from "./Parts"
 import type LedgerWindow from "./Window"
 
@@ -29,12 +30,19 @@ local S = T.space
 
 export const ROW_H = 32
 export const TOOL_H = 26
+-- rows built at once on a draw (a search's look, a few items), and a
+-- slice a frame beyond that: at most this many items and ms
+export const NOW_ITEMS = 300
+export const BUILD_ITEMS = 600
+export const BUILD_MS = 4
 local HEAD_H = 20
 
 -- A row: the item and what the table shows of it.
 export type PriceEntry = {
     itemID: number,
     name?: string,
+    -- the name in lower case (the search, the order by name)
+    lname?: string,
     quality?: number,
     icon?: number,
     classID?: number,
@@ -104,6 +112,25 @@ local function has(list: FilterValue[], v: FilterValue): boolean
         end
     end
     return false
+end
+
+-- An entry's value in a sortable column (nil: none; Seen and Deals the
+-- newest and the furthest under first).
+local function sortValue(e: PriceEntry, key: string): number?
+    if key == "low" then
+        return e.low
+    elseif key == "usual" then
+        return e.usual
+    elseif key == "change" then
+        return e.change
+    elseif key == "offered" then
+        return e.qty
+    elseif key == "seen" then
+        return -(e.day * 4 + e.period)
+    elseif key == "deal" then
+        return -e.order
+    end
+    return nil
 end
 
 export class PriceRow extends Button
@@ -292,17 +319,33 @@ export class PricesPage extends Frame
     readonly heads: HeadCell[] = {}
     readonly list: VirtualList<PriceEntry>
     readonly empty: Text
+    readonly loadingView: Frame
+    readonly loadingMark: LoadingMark
+    readonly loadingCaption: Text
     -- what it shows: Show, Seen, Category, Quality; the search; the order
     show: string = "all"
     filters: FilterValues = {}
     query: string = ""
     sortKey: string = "change"
     sortReverse: boolean = false
-    -- every item of the ruleset (nil: built again on the next draw), and
-    -- the ruleset they are of
+    -- every item of the ruleset in item order (nil: built again on the
+    -- next draw), and what they are of: the ruleset, the index's pass
+    -- (PriceIndex.gen) and how much of its log they took in
     entries?: PriceEntry[]
     byID: { [number]: PriceEntry } = {}
     builtFor?: string
+    builtGen: number = -1
+    logSeen: number = 0
+    -- rows being built a slice a frame (the items, the next), and its
+    -- ticker; whether it added or removed one; the names it lacked
+    job?: { ids: number[], i: number, fresh: boolean } = nil
+    ticker: TickerHandle? = nil
+    added: boolean = false
+    removed: boolean = false
+    missing: number[] = {}
+    watchesDirty: boolean = false
+    -- the entries in each order ("change+", "name-" …), until they change
+    orders: { [string]: PriceEntry[] } = {}
     extras: { [number]: Extra } = {}
     places: Place[] = {}
     today: number = 0
@@ -453,6 +496,18 @@ export class PricesPage extends Frame
         self.empty = UI.Text(self, "body", "ink-muted")
         self.empty:SetPoint("TOP", self.list, "TOP", 0, -60)
         self.empty:Hide()
+        -- while the rows are built: the mark, "Reading prices", how far
+        local lv = CreateFrame("Frame", nil, self)
+        lv:SetAllPoints(self.list)
+        lv:Hide()
+        self.loadingView = lv
+        self.loadingMark = UI.LoadingMark(lv, { size = 60 })
+        self.loadingMark:SetPoint("CENTER", 0, 40)
+        local title = UI.Text(lv, "header", "gilt-text")
+        title:SetValue("Reading prices")
+        title:SetPoint("TOP", self.loadingMark, "BOTTOM", 0, -S["space-4"])
+        self.loadingCaption = UI.Text(lv, "caption", "ink-muted")
+        self.loadingCaption:SetPoint("TOP", title, "BOTTOM", 0, -S["space-2"])
     end
 
     ----------------------------------------------------------------------------
@@ -512,63 +567,243 @@ export class PricesPage extends Frame
         self.w:Go("item")
     end
 
-    -- The prices changed: the entries built again on the next draw.
+    -- Every row built again on the next draw (another ruleset).
     function Forget()
         self.entries = nil
+        self.builtGen = -1
         self.extras = {}
+        self.orders = {}
+        self.job = nil
+    end
+
+    -- The watches changed: the stars set again on the next draw.
+    function WatchesChanged()
+        self.watchesDirty = true
     end
 
     ----------------------------------------------------------------------------
     -- The entries
     ----------------------------------------------------------------------------
 
-    -- Every item with a look on the ruleset.
-    function Build(): PriceEntry[]
+    -- An item's row made or brought up to date from its summary (nil: it
+    -- has none any more). -> the entry.
+    function Fill(itemID: number, sm: ItemSummary?, watches: { [number]: Watch }): PriceEntry?
+        local e = self.byID[itemID]
+        if not sm then
+            if e then
+                self.byID[itemID] = nil
+                self.removed = true
+            end
+            return nil
+        end
+        if not e then
+            local m = self.w.m
+            local name, quality = m:ItemName(itemID)
+            if not name then
+                self.missing[#self.missing + 1] = itemID
+            end
+            local icon, classID = parts.instantInfo(itemID)
+            e = {
+                itemID = itemID,
+                name = name,
+                lname = name and name:lower() or nil,
+                quality = quality,
+                icon = icon,
+                classID = classID,
+                low = 0,
+                qty = 0,
+                day = 0,
+                period = 0,
+                watched = false,
+                underVendor = false,
+                order = 0,
+            }
+            self.byID[itemID] = e
+            self.added = true
+        end
+        local look = sm.look
+        e.low, e.qty, e.day, e.period = look.low, look.qty, look.day, look.period
+        e.usual, e.change = sm.usual, sm.change
+        e.under, e.underVendor, e.order = sm.under, sm.underVendor, sm.order
+        e.watched = watches[itemID] ~= nil
+        return e
+    end
+
+    -- Whether the rows are there for the ruleset's prices as they are now:
+    -- built a slice a frame the first time (after a scan, a new day, other
+    -- deal settings: what the index works out first, the same way), only
+    -- the items changed since after that. While they aren't, the loading
+    -- mark shows; the page draws again when they are.
+    function Sync(): boolean
         local m = self.w.m
         local ruleset = self.w:Ruleset()
-        local known = self.entries
-        if known and self.builtFor == ruleset then
-            return known
+        local idx = m:Index(ruleset)
+        if not idx:Prepare(NOW_ITEMS) then
+            -- (the window draws again when the index is done)
+            local done, total = idx:Progress()
+            self:Loading(true, done, total)
+            return false
         end
-        local watches = m:Watches(ruleset)
-        local out: PriceEntry[] = {}
-        local byID: { [number]: PriceEntry } = {}
-        local missing: number[] = {}
-        for _, itemID in ipairs(m:Items(ruleset)) do
-            local sm = m:Summary(itemID, ruleset)
-            if sm then
-                local look = sm.look
-                local name, quality = m:ItemName(itemID)
-                if not name then
-                    missing[#missing + 1] = itemID
+        if self.builtFor ~= ruleset or self.builtGen ~= idx.gen or not self.entries then
+            -- every item: in item order
+            local ids: number[] = {}
+            for itemID in pairs(idx.items) do
+                ids[#ids + 1] = itemID
+            end
+            table.sort(ids)
+            self.entries, self.byID = {}, {}
+            self.builtFor, self.builtGen = ruleset, idx.gen
+            self.logSeen = #idx.log
+            self.extras, self.orders = {}, {}
+            self.watchesDirty = false
+            self.job = { ids = ids, i = 1, fresh = true }
+        elseif self.logSeen < #idx.log then
+            local ids: number[] = {}
+            local seen: { [number]: boolean } = {}
+            for k = self.logSeen + 1, #idx.log do
+                local id = idx.log[k]
+                if not seen[id] then
+                    seen[id] = true
+                    ids[#ids + 1] = id
                 end
-                local icon, classID = parts.instantInfo(itemID)
-                local under, uv = m:Deal(itemID, look.low, ruleset)
-                local e: PriceEntry = {
-                    itemID = itemID,
-                    name = name,
-                    quality = quality,
-                    icon = icon,
-                    classID = classID,
-                    low = look.low,
-                    usual = sm.usual,
-                    change = sm.change,
-                    qty = look.qty,
-                    day = look.day,
-                    period = look.period,
-                    watched = watches[itemID] ~= nil,
-                    under = under,
-                    underVendor = uv,
-                    order = stats.dealOrder(under, look.low, uv and m:VendorPrice(itemID) or nil),
-                }
-                out[#out + 1] = e
-                byID[itemID] = e
+            end
+            self.logSeen = #idx.log
+            local job = self.job
+            if job then
+                for _, id in ipairs(ids) do
+                    job.ids[#job.ids + 1] = id
+                end
+            else
+                self.job = { ids = ids, i = 1, fresh = false }
             end
         end
-        self.entries, self.byID, self.builtFor = out, byID, ruleset
+        if self.watchesDirty then
+            self.watchesDirty = false
+            local watches = m:Watches(ruleset)
+            for _, e in ipairs(self.entries or {}) do
+                e.watched = watches[e.itemID] ~= nil
+            end
+        end
+        local job = self.job
+        if not job then
+            return true
+        end
+        -- (a few at once; more a slice a frame)
+        if #job.ids - job.i + 1 <= NOW_ITEMS then
+            return self:RunJob(NOW_ITEMS)
+        end
+        self:Loading(true, job.i - 1, #job.ids)
+        if not self.ticker then
+            local built = false
+            self.ticker = m:Every(0, function(ticker: TickerHandle)
+                -- (the list drawn the frame after the last slice: the rows
+                -- in sight are made and bound then)
+                if built or not self.job then
+                    ticker:Cancel()
+                    self.ticker = nil
+                    if self:IsVisible() then
+                        self:DrawList()
+                    end
+                    return
+                end
+                if self:RunJob(BUILD_ITEMS, BUILD_MS) then
+                    built = true
+                    -- (the chosen order with the last slice)
+                    self:Ordered()
+                    return
+                end
+                local j = self.job
+                if j and self:IsVisible() then
+                    self:Loading(true, j.i - 1, #j.ids)
+                end
+            end)
+        end
+        return false
+    end
+
+    -- Up to `n` rows of the job built (`ms`: a budget too). -> whether it's
+    -- done (the rows then in item order, the orders made again).
+    function RunJob(n: number, ms: number?): boolean
+        local job = self.job
+        if not job then
+            return true
+        end
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local idx = m:Index(ruleset)
+        local watches = m:Watches(ruleset)
+        local ids = job.ids
+        local stop = math.min(#ids, job.i + n - 1)
+        local deadline = ms and (debugprofilestop() + ms) or nil
+        local i = job.i
+        while i <= stop do
+            local id = ids[i]
+            self:Fill(id, idx.items[id], watches)
+            i += 1
+            if deadline and debugprofilestop() > deadline then
+                break
+            end
+        end
+        job.i = i
+        if i <= #ids then
+            return false
+        end
+        self.job = nil
+        local entries = self.entries or {}
+        if job.fresh or self.added or self.removed then
+            -- (in item order: the orders' ties, and the same order for the
+            -- same prices)
+            local all: number[] = {}
+            for id in pairs(self.byID) do
+                all[#all + 1] = id
+            end
+            table.sort(all)
+            entries = {}
+            for k, id in ipairs(all) do
+                entries[k] = self.byID[id]
+            end
+            self.entries = entries
+        end
+        self.added, self.removed = false, false
+        self.orders = {}
+        if not job.fresh then
+            -- (the rows of the items that changed work out their sparkline
+            -- and Cheapest again)
+            for _, id in ipairs(ids) do
+                self.extras[id] = nil
+            end
+        end
         -- (in the background: the search finds them as they come)
-        m:AskNames(missing)
-        return out
+        if #self.missing > 0 then
+            m:AskNames(self.missing)
+            self.missing = {}
+        end
+        return true
+    end
+
+    -- The loading mark (`on`), how far it is.
+    function Loading(on: boolean, done: number?, total: number?)
+        local was = self.loadingView:IsShown()
+        self.loadingView:SetShown(on)
+        if on then
+            if not was then
+                self.loadingMark:Start()
+            end
+            self.loadingCaption:SetValue(total and total > 0 and (parts.count(done or 0) .. " of " .. parts.count(total) .. " items") or "")
+            self.list:SetItems({})
+            self.empty:Hide()
+            self.countText:SetValue("Reading prices\226\128\166")
+        elseif was then
+            self.loadingMark:Stop()
+        end
+    end
+
+    -- Every item with a look on the ruleset (nil: being built).
+    function Build(): PriceEntry[]?
+        if not self:Sync() then
+            return nil
+        end
+        return self.entries
     end
 
     -- A row's sparkline and Cheapest, worked out when it first shows.
@@ -601,21 +836,38 @@ export class PricesPage extends Frame
         return out
     end
 
-    -- The entries the filters and the search keep, in the chosen order.
-    function Shown(): PriceEntry[]
-        local all = self:Build()
+    -- The entries the filters and the search keep, in the chosen order (nil:
+    -- being built).
+    function Shown(): PriceEntry[]?
+        if not self:Build() then
+            return nil
+        end
+        local all = self:Ordered()
         local f = self.filters
         local show, seen = self.show, type(f.seen) == "string" and f.seen :: string or "any"
         local cats, qs = UI.FilterList(f.cat), UI.FilterList(f.q)
         local q = self.query
         local bags = show == "bags" and self:InBags() or nil
-        local sold = show == "sold" and self.w.m:SoldItems(self.w:Ruleset()) or nil
+        local sold: { [number]: boolean }? = nil
+        if show == "sold" then
+            -- (a year of transactions: read a slice a frame first)
+            if not self.w.m:BooksReady({ ruleset = self.w:Ruleset() }) then
+                self:Loading(true)
+                return nil
+            end
+            sold = self.w.m:SoldItems(self.w:Ruleset())
+        end
         local scanDay, scanPeriod = -1, -1
         if seen == "scan" then
             local scan = self.w.m:LastScan(self.w:Ruleset())
             if scan then
                 scanDay, scanPeriod = days.dayOf(scan.at)
             end
+        end
+        if show == "all" and seen == "any" and #cats == 0 and #qs == 0 and q == "" then
+            -- (every entry: the kept order itself, it isn't changed)
+            self.lookingUp = 0
+            return all
         end
         local today = self.today
         local names = self.w.m:Names()
@@ -646,8 +898,8 @@ export class PricesPage extends Frame
                 keep = e.quality ~= nil and has(qs, parts.QUALITY[e.quality] or "")
             end
             if keep and q ~= "" then
-                local name = e.name
-                keep = name ~= nil and name:lower():find(q, 1, true) ~= nil
+                local name = e.lname
+                keep = name ~= nil and name:find(q, 1, true) ~= nil
                 if not name and names:Pending(e.itemID) then
                     lookingUp += 1
                 end
@@ -657,49 +909,76 @@ export class PricesPage extends Frame
             end
         end
         self.lookingUp = lookingUp
-        self:Sort(out)
         return out
     end
 
-    -- The order: by the chosen column (Change: the furthest under first;
-    -- one without a usual price last), Deals by how far under.
-    function Sort(list: PriceEntry[])
+    -- Every entry in the chosen order (Change: the furthest under first;
+    -- one without the column's value last; ties by item), kept until the
+    -- entries change. Sorted as numbers (or strings, by name) without a
+    -- comparator: each entry's value and its place in item order as one
+    -- number, so 7,000 entries sort in the game's own code, not 90,000
+    -- calls of a Lua function (about 25 ms in game, measured 2026-11-19).
+    function Ordered(): PriceEntry[]
         local key, reverse = self.sortKey, self.sortReverse
-        local function value(e: PriceEntry): (number | string)?
-            if key == "name" then
-                return e.name and e.name:lower() or nil
-            elseif key == "low" then
-                return e.low
-            elseif key == "usual" then
-                return e.usual
-            elseif key == "change" then
-                return e.change
-            elseif key == "offered" then
-                return e.qty
-            elseif key == "seen" then
-                -- the newest first
-                return -(e.day * 4 + e.period)
-            elseif key == "deal" then
-                return -e.order
-            end
-            return nil
+        local ck = key .. (reverse and "-" or "+")
+        local known = self.orders[ck]
+        if known then
+            return known
         end
-        table.sort(list, function(a: PriceEntry, b: PriceEntry): boolean
-            local va, vb = value(a), value(b)
-            if va == nil or vb == nil then
-                if va ~= vb then
-                    return vb == nil
+        local list = self.entries or {}
+        local n = #list
+        local tail: PriceEntry[] = {}
+        local out: PriceEntry[] = {}
+        if key == "name" then
+            local keys: string[] = {}
+            local of: { [string]: PriceEntry } = {}
+            for r, e in ipairs(list) do
+                local name = e.lname
+                if name then
+                    -- (reversed: sorted up, then turned round, ties by item)
+                    local k = name .. "\1" .. string.format("%06d", reverse and (n - r) or r)
+                    keys[#keys + 1] = k
+                    of[k] = e
+                else
+                    tail[#tail + 1] = e
                 end
-                return a.itemID < b.itemID
             end
-            if va ~= vb then
-                if reverse then
-                    return (va :: any) > (vb :: any)
+            table.sort(keys)
+            local c = #keys
+            for i = 1, c do
+                out[i] = assert(of[keys[reverse and (c - i + 1) or i]])
+            end
+        else
+            local span = 1
+            while span <= n do
+                span *= 2
+            end
+            local limit = math.floor(9007199254740992 / span) - 1
+            local scale = (key == "change" or key == "deal") and 1000 or 1
+            local nums: number[] = {}
+            local of: { [number]: PriceEntry } = {}
+            for r, e in ipairs(list) do
+                local v = sortValue(e, key)
+                if v == nil then
+                    tail[#tail + 1] = e
+                else
+                    local q = math.floor((reverse and -v or v) * scale + 0.5)
+                    q = math.max(-limit, math.min(limit, q))
+                    local c = q * span + (r - 1)
+                    nums[#nums + 1] = c
+                    of[c] = e
                 end
-                return (va :: any) < (vb :: any)
             end
-            return a.itemID < b.itemID
-        end)
+            table.sort(nums)
+            for i, c in ipairs(nums) do
+                out[i] = assert(of[c])
+            end
+        end
+        for _, e in ipairs(tail) do
+            out[#out + 1] = e
+        end
+        self.orders[ck] = out
+        return out
     end
 
     ----------------------------------------------------------------------------
@@ -743,7 +1022,8 @@ export class PricesPage extends Frame
         end
         local name, quality = self.w.m:ItemName(itemID)
         if name then
-            e.name, e.quality = name, quality
+            e.name, e.lname, e.quality = name, name:lower(), quality
+            self.orders["name+"], self.orders["name-"] = nil, nil
         end
         if self.namesPending or not self:IsVisible() or not self:Waits(itemID, name ~= nil) then
             return
@@ -811,6 +1091,10 @@ export class PricesPage extends Frame
     function DrawList(names: boolean?)
         self:DrawHead()
         local shown = self:Shown()
+        if not shown then
+            return
+        end
+        self:Loading(false)
         if names then
             self.list:Invalidate()
         end

@@ -12,6 +12,8 @@ import SuuUI from "/Core/API"
 import internal M from "/Units/Ledger"
 import type OverviewPage from "/Units/Ledger/OverviewPage"
 import * as parts from "/Units/Ledger/Parts"
+import * as store from "/Units/Ledger/Store"
+import PASS_ITEMS from "/Units/Ledger/PriceIndex"
 import expectNoErrors from "../../../helpers"
 import seed, seedBooks, openLedger, wipe, AXE, ESSENCE, KINGSBLOOD from "./LedgerHelpers"
 
@@ -238,6 +240,31 @@ local function deals()
     mock.click(p.allDeals)
     expect(p.w.view).toBe("prices")
     expect(p.w.prices.show).toBe("deals")
+end
+
+@test("the deals while the prices are worked out (after a /reload, a new day): the loading mark, then the top ones; kept for the next open")
+local function dealsLoading()
+    seed()
+    -- (hundreds of items more, and nothing worked out yet: as after a /reload)
+    local map = assert(M:PriceMap())
+    local today = M:Today()
+    for i = 1, 700 do
+        store.record(map, 3200000 + i, today, 1, 100 + i, 0, 1, 1)
+    end
+    M:DropIndexes()
+    local p = page()
+    expect(p.dealsLoading).toBeShown()
+    expect(p.dealRows[1]).never.toBeShown()
+    expect(p.allDeals.label:GetText()).toBe("All prices")
+    mock.advanceFrames(math.ceil(706 / PASS_ITEMS) + 2)
+    expect(p.dealsLoading).never.toBeShown()
+    expect(p.dealRows[1]).toBeShown()
+    expect(p.dealRows[1].itemID).toBe(M:Deals()[1].itemID)
+    -- opened again: at once
+    p.w.frame:Hide()
+    p = page()
+    expect(p.dealsLoading).never.toBeShown()
+    expect(p.dealRows[1]).toBeShown()
 end
 
 @test("a deal and a latest row: the names the Ledger kept, though the client hasn't got them")

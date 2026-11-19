@@ -152,3 +152,25 @@ local function prune()
     expect(pack.encodePoints(p)).toBe(s)
     expect(pack.encodePoints(pack.newPoints())).toBeNil()
 end
+
+@test("the daily lows of the last days that have a look, read from the front only: the lowest of each day, later days skipped, the kept days only, the buffer cleared")
+local function recentLows()
+    local s = pack.record(nil, DAY - 70, 1, 5, 0, 1, 1)
+    for k = 20, 0, -1 do
+        -- two looks a day, the second dearer; what most sell it for on some
+        s = pack.record(s, DAY - k, 1, 100 + k, k % 2 == 0 and 150 or 0, 4, 2)
+        s = pack.record(s, DAY - k, 3, 200 + k, 0, 4, 4)
+    end
+    -- (the clock went back: a look tomorrow)
+    s = pack.record(s, DAY + 1, 1, 1, 0, 1, 1)
+    local out: number[] = { 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9 }
+    expect(pack.recentLows(s, DAY, DAY - 59, 5, out)).toBe(5)
+    expect(out).toEqual({ 100, 101, 102, 103, 104 })
+    -- as many as there are within the kept days
+    expect(pack.recentLows(s, DAY, DAY - 59, 60, out)).toBe(21)
+    expect(out[21]).toBe(120)
+    expect(pack.recentLows(s, DAY, DAY - 3, 60, out)).toBe(4)
+    expect(pack.recentLows(nil, DAY, DAY - 59, 5, out)).toBe(0)
+    expect(out).toEqual({})
+    expectNoErrors()
+end

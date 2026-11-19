@@ -177,6 +177,8 @@ export class ItemPage extends Frame
     readonly txRows: ItemTxLine[] = {}
     -- the item's transactions on the ruleset (the chart's marks read them)
     itemTx: Tx[] = {}
+    -- its transactions being read (BookStore.Prepare)
+    reading: boolean = false
     itemID: number? = nil
     days: number = 30
     -- what the charts' tooltips read: the usual price, the rows
@@ -529,7 +531,10 @@ export class ItemPage extends Frame
             sub:SetPoint("RIGHT", self.vendor, "RIGHT")
             self.vendor:SetSub(look and vendor and look.low < vendor * 1.05 and "The house barely beats it." or nil)
         end
-        self.itemTx = m:ItemTransactions(id, ruleset)
+        -- (a year of transactions: read a slice a frame first, the window
+        -- draws again after)
+        self.reading = not m:BooksReady({ ruleset = ruleset })
+        self.itemTx = self.reading and {} or m:ItemTransactions(id, ruleset)
         self:DrawHistory()
         self:DrawWhen()
         self:DrawSales()
@@ -542,6 +547,8 @@ export class ItemPage extends Frame
         local s = books.itemSales(list)
         local any = s.posted > 0 or s.sales > 0 or s.expired > 0
         self.salesNote:SetShown(not any)
+        self.salesNote:SetValue(self.reading and "Reading your transactions\226\128\166" or
+            "No sales of it yet: one shows here once you collect its money from the mail.")
         for _, r in ipairs({ self.soldRow, self.avgRow, self.depositRow, self.earnedRow }) do
             r:SetShown(any)
         end
@@ -573,6 +580,7 @@ export class ItemPage extends Frame
             end
         end
         self.txNote:SetShown(list[1] == nil)
+        self.txNote:SetValue(self.reading and "Reading your transactions\226\128\166" or "Nothing recorded for it yet.")
     end
 
     -- The price history over the chosen range.

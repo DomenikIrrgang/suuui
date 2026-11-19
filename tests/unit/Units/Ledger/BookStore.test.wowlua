@@ -7,7 +7,7 @@
 
 import test, expect from "wowlua:test"
 import * as mock from "wowlua:mock"
-import BookStore from "/Units/Ledger/BookStore"
+import BookStore, READ_DAYS from "/Units/Ledger/BookStore"
 import type BookData from "/Units/Ledger/BookStore"
 import type GoldScope from "/Units/Ledger/Gold"
 import * as days from "/Units/Ledger/Days"
@@ -50,6 +50,12 @@ local function store(): (BookStore, BookData, string[])
         changed = function(what: string)
             told[#told + 1] = what
         end,
+        every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
+            return C_Timer.NewTicker(seconds, fn)
+        end,
+        ready = function()
+            told[#told + 1] = "read"
+        end,
     })
     return s, data, told
 end
@@ -86,6 +92,65 @@ local function keeping()
     expect(s:Update(now, "quest", function(_) end)).toBe(false)
     expect(s:DayRows("Me", mine, day) ~= first).toBe(true)
     expect(s:Transactions({ char = "Me" }, nil)[1].amount).toBe(-1000)
+    expectNoErrors()
+end
+
+@test("a year of days: read and merged a slice a frame (told when they are), a few at once; the lists kept until a change, then only the changed day again")
+local function reading()
+    local s, data, told = store()
+    local now = time()
+    local today = days.dayOf(now)
+    -- 200 days of two characters, the same seconds on both (merged by
+    -- time, then by character)
+    local bm: { [string]: { [number]: string } } = { Me = {}, Alt = {} }
+    for k = 0, 199 do
+        local at = now - k * DAY
+        for _, char in ipairs({ "Me", "Alt" }) do
+            books.add(assert(bm[char]), { at = at, kind = "vendor", amount = k + 1, item = DUST, qty = 1 })
+            books.add(assert(bm[char]), { at = at - 5, kind = "loot", amount = 3, text = "Somewhere", n = 1 })
+        end
+    end
+    data.books = bm
+    -- a week: at once
+    expect(s:Prepare(nil, today - 6)).toBe(true)
+    -- every day: more than NOW_DAYS, a slice a frame
+    expect(s:Prepare(nil, nil)).toBe(false)
+    expect(s.readTicker ~= nil).toBe(true)
+    mock.advanceFrames(math.ceil(200 / READ_DAYS) + 1)
+    expect(s.readTicker).toBeNil()
+    expect(told[#told]).toBe("read")
+    expect(s:Prepare(nil, nil)).toBe(true)
+    local all = s:Transactions(nil, nil)
+    expect(#all).toBe(800)
+    -- the newest first; the same second: Alt before Me
+    expect({ all[1].char, all[2].char, all[3].char }).toEqual({ "Alt", "Me", "Alt" })
+    expect(all[1].kind).toBe("vendor")
+    expect(all[3].kind).toBe("loot")
+    for i = 2, #all do
+        expect(all[i].at <= all[i - 1].at).toBe(true)
+    end
+    -- kept: the same list until the books change
+    expect(s:Transactions(nil, nil)).toBe(all)
+    local daysList, rows = s:DayLists(nil, nil)
+    expect(#daysList).toBe(200)
+    expect(daysList[1]).toBe(today)
+    -- a new row today: only today's list made again
+    s:Add({ at = now + 1, kind = "repair", amount = -50, text = "Smith" })
+    local now2 = s:Transactions(nil, nil)
+    expect(now2).never.toBe(all)
+    expect(#now2).toBe(801)
+    expect(now2[1].kind).toBe("repair")
+    local _, rows2 = s:DayLists(nil, nil)
+    expect(rows2[1]).never.toBe(rows[1])
+    expect(rows2[2]).toBe(rows[2])
+    expect(rows2[200]).toBe(rows[200])
+    -- what was sold and an item's rows: kept too
+    expect(#s:ItemTransactions(DUST, "Normal")).toBe(400)
+    expect(s:ItemTransactions(DUST, "Normal")).toBe(s:ItemTransactions(DUST, "Normal"))
+    expect(s:SoldItems("Normal")).toBe(s:SoldItems("Normal"))
+    expect(s:HasAny({ ruleset = "Roleplay" })).toBe(false)
+    expect(s:HasAny(nil)).toBe(true)
+    s:Stop()
     expectNoErrors()
 end
 

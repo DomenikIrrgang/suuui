@@ -11,7 +11,7 @@
 -- transactions ("All transactions" opens them).
 
 import SuuUI from "/Core/API"
-import type DealMark, Text, ItemSlot, Money, SuuButton, Bar from "/Core/API"
+import type DealMark, Text, ItemSlot, Money, SuuButton, Bar, LoadingMark from "/Core/API"
 import * as days from "./Days"
 import type DealEntry from "../Ledger"
 import * as books from "./Books"
@@ -25,6 +25,9 @@ local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
 local DEAL_H = 30
+-- the deals at once when the index has this many items or fewer left to
+-- work out (else its slices run, the loading mark in their place)
+local NOW_ITEMS = 300
 local GOAL_H = 76
 local TOP_DEALS = 3
 local SOURCE_H = 24
@@ -234,6 +237,8 @@ export class OverviewPage extends Frame
     readonly allDeals: parts.Link
     readonly dealRows: DealRow[] = {}
     readonly dealsNone: Text
+    readonly dealsLoading: Frame
+    readonly dealsMark: LoadingMark
     readonly latest: parts.Section
     readonly allTx: parts.Link
     readonly latestNote: Text
@@ -343,6 +348,18 @@ export class OverviewPage extends Frame
         self.dealsNone:SetPoint("RIGHT", self.right, "RIGHT")
         self.dealsNone:SetJustifyH("LEFT")
         self.dealsNone:SetWordWrap(true)
+        -- while the prices are worked out: the mark, "Reading prices"
+        local dl = CreateFrame("Frame", nil, self.right)
+        dl:SetPoint("TOPLEFT", self.deals, "BOTTOMLEFT", 0, -S["space-2"])
+        dl:SetPoint("RIGHT", self.right, "RIGHT")
+        dl:SetHeight(DEAL_H)
+        dl:Hide()
+        self.dealsLoading = dl
+        self.dealsMark = UI.LoadingMark(dl, { size = 24, wings = false })
+        self.dealsMark:SetPoint("LEFT", S["space-3"], 0)
+        local reading = UI.Text(dl, "caption", "ink-muted")
+        reading:SetValue("Reading prices\226\128\166")
+        reading:SetPoint("LEFT", self.dealsMark, "RIGHT", S["space-4"], 0)
         -- the latest transactions
         self.latest = parts.Section.new(self.right, "Latest")
         self.allTx = parts.Link.new(self.latest, "All transactions", function()
@@ -425,7 +442,9 @@ export class OverviewPage extends Frame
     end
 
     function AllDeals()
-        self.w.prices:SetShow(#self.w.m:Deals(self.w:Ruleset()) > 0 and "deals" or "all")
+        local idx = self.w.m:Index(self.w:Ruleset())
+        -- (while the prices are worked out: Deals, which shows them coming)
+        self.w.prices:SetShow((not idx:Ready() or #idx:Deals() > 0) and "deals" or "all")
         self.w:Go("prices")
     end
 
@@ -621,9 +640,33 @@ export class OverviewPage extends Frame
     function DrawDeals()
         local m = self.w.m
         local ruleset = self.w:Ruleset()
-        local deals = m:Deals(ruleset)
         local scan = m:LastScan(ruleset)
         self.deals:SetLabel("Deals in the last scan", scan and parts.when(scan.at) or nil)
+        -- (the index works them out a slice a frame first: it tells the
+        -- window when it's done)
+        local idx = m:Index(ruleset)
+        local loading = not idx:Prepare(NOW_ITEMS)
+        local wasLoading = self.dealsLoading:IsShown()
+        self.dealsLoading:SetShown(loading)
+        if loading and not wasLoading then
+            self.dealsMark:Start()
+        elseif wasLoading and not loading then
+            self.dealsMark:Stop()
+        end
+        if loading then
+            self.allDeals:SetLabel("All prices")
+            self.deals:SetAside(self.allDeals)
+            self.dealIDs = {}
+            for _, row in ipairs(self.dealRows) do
+                row:Hide()
+            end
+            self.dealsNone:Hide()
+            self.latest:ClearAllPoints()
+            self.latest:SetPoint("TOPLEFT", self.dealsLoading, "BOTTOMLEFT", 0, -S["space-5"])
+            self.latest:SetPoint("RIGHT", self.right, "RIGHT")
+            return
+        end
+        local deals = idx:Deals()
         self.allDeals:SetLabel(#deals > 0 and ("All " .. #deals .. (#deals == 1 and " deal" or " deals")) or "All prices")
         self.deals:SetAside(self.allDeals)
         self.dealIDs = {}

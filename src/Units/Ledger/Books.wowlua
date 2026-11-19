@@ -338,15 +338,19 @@ end
 
 -- The days of a book, the newest first, from `fromDay` on (nil: all).
 export function daysOf(book: Book, fromDay: number?): number[]
-    local out: number[] = {}
+    local up: number[] = {}
     for day in pairs(book) do
         if not fromDay or day >= fromDay then
-            out[#out + 1] = day
+            up[#up + 1] = day
         end
     end
-    table.sort(out, function(a: number, b: number): boolean
-        return a > b
-    end)
+    -- (sorted up as numbers, then turned round: no comparator)
+    table.sort(up)
+    local out: number[] = {}
+    local n = #up
+    for i = 1, n do
+        out[i] = up[n - i + 1]
+    end
     return out
 end
 
@@ -375,6 +379,32 @@ export function merge(lists: Tx[][]): Tx[]
         return (rank[a] or 0) < (rank[b] or 0)
     end)
     return out
+end
+
+-- Lists of one day's rows (each newest first, one a character, by
+-- character) appended to `out` as one, the newest first: as merge orders
+-- them (a time, then the character, then each list's own order), without
+-- sorting them all.
+export function mergeInto(out: Tx[], lists: Tx[][])
+    local at: number[] = {}
+    local k = #lists
+    for j = 1, k do
+        at[j] = 1
+    end
+    while true do
+        local best, bestAt = 0, -math.huge
+        for j = 1, k do
+            local t = lists[j][at[j]]
+            if t and t.at > bestAt then
+                best, bestAt = j, t.at
+            end
+        end
+        if best == 0 then
+            return
+        end
+        out[#out + 1] = lists[best][at[best]]
+        at[best] += 1
+    end
 end
 
 -- In and out of a list: the sums (out as a positive number) and the net.

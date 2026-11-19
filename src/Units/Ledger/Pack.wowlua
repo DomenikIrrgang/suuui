@@ -73,7 +73,9 @@ end
 -- The number that starts at `i`, and where the next one starts. (Past the
 -- end it reads a last digit 0: a cut string gives odd looks, never a
 -- loop.)
-export function readNumber(s: string, i: number): (number, number)
+-- (local: the reads below call it for every number of every look, and an
+-- exported function's arguments are checked on each call in dev builds)
+local function num(s: string, i: number): (number, number)
     local acc = 0
     local v = CODE[byte(s, i) or 0] or 0
     while v >= 64 do
@@ -83,7 +85,18 @@ export function readNumber(s: string, i: number): (number, number)
     end
     return acc * 64 + v, i + 1
 end
-local num = readNumber
+
+-- Where the number after the one at `i` starts.
+local function skip(s: string, i: number): number
+    while (CODE[byte(s, i) or 0] or 0) >= 64 do
+        i += 1
+    end
+    return i + 1
+end
+
+export function readNumber(s: string, i: number): (number, number)
+    return num(s, i)
+end
 
 -- One look: `head` the day field (the day for the newest, the days back
 -- for the others).
@@ -187,6 +200,56 @@ export function newest(s: string?): (number?, number, number, number, number, nu
     return day, period, low, most, qty, n
 end
 
+-- The daily lows of the last `count` days that have a look, from `oldest`
+-- to `today` (later days skipped), the newest first, into `out` (cleared
+-- first). Reads only the front of the string: it stops at the first look
+-- of the day after the last one it needs. -> how many.
+export function recentLows(s: string?, today: number, oldest: number, count: number, out: number[]): number
+    local got = 0
+    local len = s and #s or 0
+    local i = 1
+    local prev: number? = nil
+    local day = -1
+    while s and i <= len do
+        local h: number
+        h, i = num(s, i)
+        local flags = h % 4
+        local rest = (h - flags) / 4
+        local field = (rest - rest % 4) / 4
+        local d = prev and (prev - field) or field
+        if d < oldest then
+            break
+        end
+        local low: number
+        low, i = num(s, i)
+        if flags >= 2 then
+            i = skip(s, i)
+        end
+        i = skip(s, i)
+        if flags % 2 == 0 then
+            i = skip(s, i)
+        end
+        if d <= today then
+            if d == day then
+                if low < out[got] then
+                    out[got] = low
+                end
+            elseif got >= count then
+                break
+            else
+                got += 1
+                out[got] = low
+                day = d
+            end
+        end
+        prev = d
+    end
+    for k = got + 1, #out do
+        (out :: { [number]: number? })[k] = nil
+    end
+    return got
+end
+
 -- Two looks of one period as one: the lowest price kept (and what most
 -- sell it for, when the newer look doesn't say); the counts the newer
 -- look's when it has them.
@@ -281,18 +344,38 @@ export function record(
     return encodePoints(p) or s
 end
 
--- `s` without its looks before day `oldest`: nil when none is left.
-local pruning = newPoints()
+-- `s` without its looks before day `oldest`: nil when none is left. (It
+-- only walks the heads: the prune reads every item once a day.)
 export function prune(s: string?, oldest: number): string?
     if not s then
         return nil
     end
-    local _, stop = decode(s, pruning, oldest)
-    if stop > #s then
-        return s
+    local len = #s
+    local i = 1
+    local prev: number? = nil
+    while i <= len do
+        local start = i
+        local h: number
+        h, i = num(s, i)
+        local flags = h % 4
+        local rest = (h - flags) / 4
+        local field = (rest - rest % 4) / 4
+        local d = prev and (prev - field) or field
+        if d < oldest then
+            if start == 1 then
+                return nil
+            end
+            return sub(s, 1, start - 1)
+        end
+        i = skip(s, i)
+        if flags >= 2 then
+            i = skip(s, i)
+        end
+        i = skip(s, i)
+        if flags % 2 == 0 then
+            i = skip(s, i)
+        end
+        prev = d
     end
-    if stop == 1 then
-        return nil
-    end
-    return sub(s, 1, stop - 1)
+    return s
 end

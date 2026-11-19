@@ -7,6 +7,16 @@
 -- money waiting in each character's inbox (SuuUILedger.mail). The module
 -- hands it its saved table, which characters a scope chooses, this
 -- character's key and how to tell a change.
+--
+-- Measured 2026-11-19 with a year of books (six characters, one of them
+-- busy: 26,000 rows): reading every day took some 10 M of the emulator's
+-- work in one frame (a second in game), and each list of them was sorted
+-- whole again (5 M: the Transactions tab's "All", an item's page, "You
+-- sold"). Now the days a page needs are read a slice a frame (Prepare,
+-- the loading mark meanwhile), the characters' rows are merged day by
+-- day (each day's rows are in order already), and what is made of them
+-- (the lists, the items sold, each item's rows) is kept until the books
+-- change (`rev`).
 
 import * as books from "./Books"
 import type Tx, Book, BookMap from "./Books"
@@ -27,7 +37,16 @@ export type BookStoreOptions = {
     me: () -> string?,
     ruleset: () -> string,
     changed: (what: string) -> (),
+    every: (seconds: number, fn: (ticker: TickerHandle) -> ()) -> TickerHandle,
+    -- days a page waited for are read (it draws again)
+    ready: () -> (),
 }
+
+-- Days read at once when no more are left (a week of a few characters),
+-- else a slice a frame: at most this many days and ms.
+export const NOW_DAYS = 60
+export const READ_DAYS = 20
+export const READ_MS = 4
 
 -- An item's name while the client has it cached.
 local function cachedName(itemID: number): string?
@@ -41,6 +60,21 @@ export class BookStore
     readonly o: BookStoreOptions
     -- each character's days as read (until they change)
     decoded: { [string]: { [number]: Tx[] } } = {}
+    -- counts up with each change of the books: what is made of them (the
+    -- lists by scope, first day and limit; the items sold and each item's
+    -- rows per ruleset) is for `madeRev`
+    rev: number = 0
+    madeRev: number = -1
+    made: { [string]: Tx[] } = {}
+    sold: { [string]: { [number]: boolean } } = {}
+    byItem: { [string]: { [number]: Tx[] } } = {}
+    -- each day of the chosen characters (by their keys joined) as one
+    -- list, the newest first (until one of them changes that day)
+    merged: { [string]: { [number]: Tx[] } } = {}
+    -- days being read and merged a slice a frame: for which characters,
+    -- which days, the next
+    reading?: { ck: string, chosen: string[], days: number[], at: number } = nil
+    readTicker: TickerHandle? = nil
 
     constructor(o: BookStoreOptions)
         self.o = o
@@ -73,6 +107,31 @@ export class BookStore
         local cached = self.decoded[char]
         if cached then
             cached[day] = nil
+        end
+        for _, byDay in pairs(self.merged) do
+            byDay[day] = nil
+        end
+        self.rev += 1
+    end
+
+    -- A character's days read again next time (its book was replaced).
+    function ForgetChar(char: string)
+        self.decoded[char] = nil
+        self.merged = {}
+        self.rev += 1
+    end
+
+    -- Every day read again next time.
+    function Reset()
+        self.decoded = {}
+        self.merged = {}
+        self.rev += 1
+    end
+
+    -- What was made of the books, for this `rev`.
+    function Fresh()
+        if self.madeRev ~= self.rev then
+            self.made, self.sold, self.byItem, self.madeRev = {}, {}, {}, self.rev
         end
     end
 
@@ -114,56 +173,226 @@ export class BookStore
         return rows
     end
 
-    -- The chosen characters' transactions from `fromDay` on (nil: all
-    -- kept), the newest first; with `limit`, only that many.
-    function Transactions(scope: GoldScope?, fromDay: number?, limit: number?): Tx[]
+    -- The days (newest first) from `fromDay` on that any of the chosen
+    -- characters has.
+    function DaysOf(chosen: string[], fromDay: number?): number[]
         local map = self:Map()
-        local lists: Tx[][] = {}
-        for _, char in ipairs(self.o.chosen(scope)) do
-            local b = map[char]
-            if b then
-                local got = 0
-                for _, day in ipairs(books.daysOf(b, fromDay)) do
-                    local rows = self:DayRows(char, b, day)
-                    lists[#lists + 1] = rows
-                    got += #rows
-                    if limit and got >= limit then
-                        break
-                    end
+        local seen: { [number]: boolean } = {}
+        local up: number[] = {}
+        for _, char in ipairs(chosen) do
+            for day in pairs(map[char] or {}) do
+                if (not fromDay or day >= fromDay) and not seen[day] then
+                    seen[day] = true
+                    up[#up + 1] = day
                 end
             end
         end
-        local all = books.merge(lists)
-        if limit and #all > limit then
-            local cut: Tx[] = {}
-            for i = 1, limit do
-                cut[i] = all[i]
-            end
-            return cut
-        end
-        return all
-    end
-
-    -- An item's transactions by your characters on a ruleset (nil: this
-    -- one's), the newest first.
-    function ItemTransactions(itemID: number, ruleset: string?): Tx[]
-        local out: Tx[] = {}
-        for _, t in ipairs(self:Transactions({ ruleset = ruleset or self.o.ruleset() }, nil)) do
-            if t.item == itemID then
-                out[#out + 1] = t
-            end
+        table.sort(up)
+        local out: number[] = {}
+        local n = #up
+        for i = 1, n do
+            out[i] = up[n - i + 1]
         end
         return out
     end
 
-    -- The items your characters on a ruleset sold at the auction house.
-    function SoldItems(ruleset: string?): { [number]: boolean }
-        local out: { [number]: boolean } = {}
-        for _, t in ipairs(self:Transactions({ ruleset = ruleset or self.o.ruleset() }, nil)) do
-            if t.kind == "sold" and t.item then
-                out[t.item] = true
+    -- One day of the chosen characters (`ck`: their keys joined) as one
+    -- list, the newest first: each one's read once, then merged (Books.
+    -- mergeInto: each is in order already); kept until one changes.
+    function DayOf(ck: string, chosen: string[], day: number): Tx[]
+        local byDay = self.merged[ck]
+        if not byDay then
+            byDay = {}
+            self.merged[ck] = byDay
+        end
+        local known = byDay[day]
+        if known then
+            return known
+        end
+        local map = self:Map()
+        local lists: Tx[][] = {}
+        for _, char in ipairs(chosen) do
+            local b = map[char]
+            if b and b[day] then
+                local rows = self:DayRows(char, b, day)
+                if #rows > 0 then
+                    lists[#lists + 1] = rows
+                end
             end
         end
+        local out: Tx[]
+        if #lists == 1 then
+            out = lists[1]
+        else
+            out = {}
+            books.mergeInto(out, lists)
+        end
+        byDay[day] = out
+        return out
+    end
+
+    -- Whether the chosen characters' days from `fromDay` on are read: at
+    -- once when NOW_DAYS or fewer are left, else a slice a frame (`ready`
+    -- told at the end). -> whether they are now.
+    function Prepare(scope: GoldScope?, fromDay: number?): boolean
+        local chosen = self.o.chosen(scope)
+        local ck = table.concat(chosen, "\1")
+        local byDay = self.merged[ck] or {}
+        local todo: number[] = {}
+        for _, day in ipairs(self:DaysOf(chosen, fromDay)) do
+            if not byDay[day] then
+                todo[#todo + 1] = day
+            end
+        end
+        if #todo <= NOW_DAYS then
+            for _, day in ipairs(todo) do
+                self:DayOf(ck, chosen, day)
+            end
+            return true
+        end
+        -- (newest first: a page asking for fewer days finds them sooner)
+        self.reading = { ck = ck, chosen = chosen, days = todo, at = 1 }
+        if not self.readTicker then
+            self.readTicker = self.o.every(0, function(ticker: TickerHandle)
+                local r = self.reading
+                if r then
+                    local stop = math.min(#r.days, r.at + READ_DAYS - 1)
+                    local deadline = debugprofilestop() + READ_MS
+                    local i = r.at
+                    while i <= stop do
+                        self:DayOf(r.ck, r.chosen, r.days[i])
+                        i += 1
+                        if debugprofilestop() > deadline then
+                            break
+                        end
+                    end
+                    r.at = i
+                    if i <= #r.days then
+                        return
+                    end
+                end
+                ticker:Cancel()
+                self.readTicker = nil
+                self.reading = nil
+                self.o.ready()
+            end)
+        end
+        return false
+    end
+
+    -- Nothing read in the background any more (the module turned off).
+    function Stop()
+        local t = self.readTicker
+        if t then
+            t:Cancel()
+        end
+        self.readTicker = nil
+        self.reading = nil
+    end
+
+    -- The chosen characters' days from `fromDay` on, the newest first, and
+    -- each one's rows as one list (kept until that day changes: a page
+    -- keeps what it makes of each by the list).
+    function DayLists(scope: GoldScope?, fromDay: number?): (number[], Tx[][])
+        local chosen = self.o.chosen(scope)
+        local ck = table.concat(chosen, "\1")
+        local list = self:DaysOf(chosen, fromDay)
+        local rows: Tx[][] = {}
+        for i, day in ipairs(list) do
+            rows[i] = self:DayOf(ck, chosen, day)
+        end
+        return list, rows
+    end
+
+    -- The chosen characters' transactions from `fromDay` on (nil: all
+    -- kept), the newest first; with `limit`, only that many. Kept until
+    -- the books change (don't change the list).
+    function Transactions(scope: GoldScope?, fromDay: number?, limit: number?): Tx[]
+        self:Fresh()
+        local chosen = self.o.chosen(scope)
+        local ck = table.concat(chosen, "\1")
+        local key = ck .. "|" .. tostring(fromDay) .. "|" .. tostring(limit)
+        local known = self.made[key]
+        if known then
+            return known
+        end
+        local out: Tx[] = {}
+        local n = 0
+        for _, day in ipairs(self:DaysOf(chosen, fromDay)) do
+            for _, t in ipairs(self:DayOf(ck, chosen, day)) do
+                if limit and n >= limit then
+                    break
+                end
+                n += 1
+                out[n] = t
+            end
+            if limit and n >= limit then
+                break
+            end
+        end
+        self.made[key] = out
+        return out
+    end
+
+    -- Whether any of the chosen characters has a transaction kept.
+    function HasAny(scope: GoldScope?): boolean
+        local map = self:Map()
+        for _, char in ipairs(self.o.chosen(scope)) do
+            local b = map[char]
+            if b and next(b) ~= nil then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- An item's transactions by your characters on a ruleset (nil: this
+    -- one's), the newest first. (Every item's made at once, kept until the
+    -- books change.)
+    function ItemTransactions(itemID: number, ruleset: string?): Tx[]
+        self:Fresh()
+        local rs = ruleset or self.o.ruleset()
+        local all = self.byItem[rs]
+        if not all then
+            all = {}
+            for _, t in ipairs(self:Transactions({ ruleset = rs }, nil)) do
+                local id = t.item
+                if id then
+                    local list = all[id]
+                    if not list then
+                        list = {}
+                        all[id] = list
+                    end
+                    list[#list + 1] = t
+                end
+            end
+            self.byItem[rs] = all
+        end
+        return all[itemID] or {}
+    end
+
+    -- The items your characters on a ruleset sold at the auction house
+    -- (kept until the books change).
+    function SoldItems(ruleset: string?): { [number]: boolean }
+        self:Fresh()
+        local rs = ruleset or self.o.ruleset()
+        local known = self.sold[rs]
+        if known then
+            return known
+        end
+        local out: { [number]: boolean } = {}
+        local map = self:Map()
+        for _, char in ipairs(self.o.chosen({ ruleset = rs })) do
+            local b = map[char]
+            for day in pairs(b or {}) do
+                for _, t in ipairs(self:DayRows(char, assert(b), day)) do
+                    if t.kind == "sold" and t.item then
+                        out[t.item] = true
+                    end
+                end
+            end
+        end
+        self.sold[rs] = out
         return out
     end
 
@@ -220,7 +449,7 @@ export class BookStore
             gone += books.prune(b, today - books.KEEP_DAYS + 1)
         end
         if gone > 0 then
-            self.decoded = {}
+            self:Reset()
             self.o.changed("books")
         end
     end

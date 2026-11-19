@@ -14,7 +14,7 @@
 -- page.
 
 import SuuUI from "/Core/API"
-import type Text, TextField, FilterMenu, FilterValues, FilterValue, VirtualList, ItemSlot, Money, Segmented from "/Core/API"
+import type Text, TextField, FilterMenu, FilterValues, FilterValue, VirtualList, ItemSlot, Money, Segmented, LoadingMark from "/Core/API"
 import * as books from "./Books"
 import type Tx from "./Books"
 import * as days from "./Days"
@@ -27,6 +27,9 @@ local S = T.space
 export const ROW_H = 32
 export const DAY_H = 34
 local TOOL_H = 26
+-- a search's text made at once for this many rows, else this many a frame
+export const HAY_NOW = 3000
+export const HAY_ITEMS = 2500
 local HEAD_H = 20
 local FOOT_H = 24
 
@@ -35,6 +38,8 @@ export const RANGES: { [string]: number? } = { today = 1, week = 7, month = 30, 
 
 -- A line of the list: a day's heading or a transaction.
 export type Line = { day?: number, net?: number, tx?: Tx }
+-- A day's lines, and what came in and went out that day.
+type DayBlock = { lines: Line[], inSum: number, outSum: number }
 
 export type Col = { key: string, label: string, w?: number, right?: boolean }
 export const COLS: Col[] = {
@@ -286,6 +291,8 @@ export class TransactionsPage extends Frame
     readonly heads: HeadCell[] = {}
     readonly list: VirtualList<Line>
     readonly empty: Text
+    readonly loadingView: Frame
+    readonly loadingMark: LoadingMark
     readonly foot: Frame
     readonly inText: Text
     readonly inMoney: Money
@@ -295,6 +302,19 @@ export class TransactionsPage extends Frame
     readonly netMoney: Money
     -- what it shows
     rangeKey: string = "week"
+    -- the list whose rows' search text is made; the rows being made a
+    -- slice a frame
+    hayFor?: Tx[] = nil
+    hayJob?: { list: Tx[], i: number } = nil
+    hayTicker: TickerHandle? = nil
+    -- the days' lists the lines were made of (the same: nothing to make
+    -- again)
+    drawnDays?: Tx[][] = nil
+    -- each day's lines, by the day's list (kept with it)
+    blocks: { [Tx[]]: DayBlock } = setmetatable({}, { __mode = "k" }) :: { [Tx[]]: DayBlock }
+    -- each row's line, and what a search looks in (kept with the rows)
+    wrap: { [Tx]: Line } = setmetatable({}, { __mode = "k" }) :: { [Tx]: Line }
+    hay: { [Tx]: string } = setmetatable({}, { __mode = "k" }) :: { [Tx]: string }
     filters: FilterValues = {}
     query: string = ""
     -- whether the kinds, the direction or the search leave anything out
@@ -446,6 +466,33 @@ export class TransactionsPage extends Frame
         self.empty:SetWidth(520)
         self.empty:SetWordWrap(true)
         self.empty:Hide()
+        -- while the days are read (a year of them: BookStore.Prepare): the
+        -- mark, "Reading transactions"
+        local lv = CreateFrame("Frame", nil, self)
+        lv:SetAllPoints(self.list)
+        lv:Hide()
+        self.loadingView = lv
+        self.loadingMark = UI.LoadingMark(lv, { size = 60 })
+        self.loadingMark:SetPoint("CENTER", 0, 40)
+        local title = UI.Text(lv, "header", "gilt-text")
+        title:SetValue("Reading transactions")
+        title:SetPoint("TOP", self.loadingMark, "BOTTOM", 0, -S["space-4"])
+    end
+
+    -- The loading mark (`on`) in the list's place.
+    function Loading(on: boolean)
+        local was = self.loadingView:IsShown()
+        self.loadingView:SetShown(on)
+        if on then
+            if not was then
+                self.loadingMark:Start()
+            end
+            self.list:SetItems({})
+            self.empty:Hide()
+            self.countText:SetValue("")
+        elseif was then
+            self.loadingMark:Stop()
+        end
     end
 
     function SetQuery(text: string)
@@ -493,31 +540,117 @@ export class TransactionsPage extends Frame
 
     -- Whether a transaction is what the search asks for: its item's name,
     -- its text, its kind's word or group, its character's name.
-    function Matches(t: Tx, q: string): boolean
+    -- What a row is searched in: its kind's word and group, its text, its
+    -- item's name, its character's name, in lower case (made once a row;
+    -- a row whose item has no name yet made again next time).
+    function Hay(t: Tx): string
+        local hay = self.hay[t]
+        if hay then
+            return hay
+        end
         local kind = books.kindOf(t.kind)
-        if kind.label:lower():find(q, 1, true) or kind.group:find(q, 1, true) then
-            return true
-        end
-        if t.text and t.text:lower():find(q, 1, true) then
-            return true
-        end
         local id = t.item
-        if id then
-            local name = self.w.m:ItemName(id)
-            if name and name:lower():find(q, 1, true) then
-                return true
+        local name = id and self.w.m:ItemName(id) or nil
+        local c = self:CharOf(t.char)
+        hay = (kind.label .. "\1" .. kind.group .. "\1" .. (t.text or "") .. "\1" .. (name or "") .. "\1" .. (c and c.name or "")):lower()
+        if name or not id then
+            self.hay[t] = hay
+        end
+        return hay
+    end
+
+    -- Whether what each row of `list` is searched in is made: at once for
+    -- a few rows, else HAY_ITEMS a frame (a year of rows; the loading mark
+    -- meanwhile, the list drawn when they're made).
+    function HaysReady(list: Tx[]): boolean
+        if self.hayFor == list then
+            return true
+        end
+        local job = self.hayJob
+        if job and job.list == list then
+            return false
+        end
+        if #list <= HAY_NOW then
+            for _, t in ipairs(list) do
+                self:Hay(t)
+            end
+            self.hayFor = list
+            return true
+        end
+        self.hayJob = { list = list, i = 1 }
+        if not self.hayTicker then
+            self.hayTicker = self.w.m:Every(0, function(ticker: TickerHandle)
+                local j = self.hayJob
+                if j then
+                    local hays = self.hay
+                    local stop = math.min(#j.list, j.i + HAY_ITEMS - 1)
+                    for k = j.i, stop do
+                        local t = j.list[k]
+                        if not hays[t] then
+                            self:Hay(t)
+                        end
+                    end
+                    j.i = stop + 1
+                    if j.i <= #j.list then
+                        return
+                    end
+                    self.hayFor = j.list
+                end
+                ticker:Cancel()
+                self.hayTicker = nil
+                self.hayJob = nil
+                if self:IsVisible() then
+                    self:DrawList()
+                end
+            end)
+        end
+        return false
+    end
+
+    -- A day's lines (its heading, then a line a row) and what came in and
+    -- went out, made once for the day's list.
+    function Block(day: number, rows: Tx[]): DayBlock
+        local b = self.blocks[rows]
+        if b then
+            return b
+        end
+        local head: Line = { day = day, net = 0 }
+        local lines: Line[] = { head }
+        local wrap = self.wrap
+        local i, o = 0, 0
+        for _, t in ipairs(rows) do
+            local line = wrap[t]
+            if not line then
+                line = { tx = t }
+                wrap[t] = line
+            end
+            lines[#lines + 1] = line
+            if t.amount > 0 then
+                i += t.amount
+            else
+                o -= t.amount
             end
         end
-        local c = self:CharOf(t.char)
-        return c ~= nil and c.name:lower():find(q, 1, true) ~= nil
+        head.net = i - o
+        b = { lines = lines, inSum = i, outSum = o }
+        self.blocks[rows] = b
+        return b
+    end
+
+    function Matches(t: Tx, q: string): boolean
+        return self:Hay(t):find(q, 1, true) ~= nil
     end
 
     -- The transactions the range, the kinds, the direction and the search
-    -- keep, the newest first.
-    function Shown(): Tx[]
+    -- keep, the newest first (nil: the days are being read).
+    function Shown(): Tx[]?
         local back = RANGES[self.rangeKey]
         local from = back and (self.today - back + 1) or nil
-        local all = self.w.m:Transactions(self.w:Scope(), from)
+        local scope = self.w:Scope()
+        if not self.w.m:BooksReady(scope, from) then
+            return nil
+        end
+        local all = self.w.m:Transactions(scope, from)
         local f = self.filters
         local groups: { [string]: boolean } = {}
         local anyGroup = false
@@ -527,7 +660,14 @@ export class TransactionsPage extends Frame
         end
         local dir = type(f.dir) == "string" and f.dir :: string or "both"
         local q = self.query
-        self.narrowed = anyGroup or dir ~= "both" or q ~= ""
+        if not (anyGroup or dir ~= "both" or q ~= "") then
+            -- (the kept list itself: it isn't changed)
+            return all
+        end
+        if q ~= "" and not self:HaysReady(all) then
+            return nil
+        end
+        local hays = self.hay
         local out: Tx[] = {}
         for _, t in ipairs(all) do
             local keep = true
@@ -540,7 +680,7 @@ export class TransactionsPage extends Frame
                 keep = t.amount < 0
             end
             if keep and q ~= "" then
-                keep = self:Matches(t, q)
+                keep = (hays[t] or self:Hay(t)):find(q, 1, true) ~= nil
             end
             if keep then
                 out[#out + 1] = t
@@ -588,31 +728,97 @@ export class TransactionsPage extends Frame
     -- The lines (days and rows), the count, the totals, the empty state.
     function DrawList()
         self:DrawHead()
-        local shown = self:Shown()
+        local back = RANGES[self.rangeKey]
+        local from = back and (self.today - back + 1) or nil
+        local scope = self.w:Scope()
+        local f = self.filters
+        self.narrowed = #UI.FilterList(f.kind) > 0 or (type(f.dir) == "string" and f.dir ~= "both") or self.query ~= ""
         local lines: Line[] = {}
-        local heads: { [number]: Line } = {}
-        for _, t in ipairs(shown) do
-            local day = days.dayOf(t.at)
-            local h = heads[day]
-            if not h then
-                h = { day = day, net = 0 }
-                heads[day] = h
-                lines[#lines + 1] = h
+        local i, o, n = 0, 0, 0
+        if not self.narrowed then
+            -- every row of the days: each day's lines made once for its
+            -- list (BookStore keeps a day's list until it changes), so a new
+            -- row remakes only its day's
+            if not self.w.m:BooksReady(scope, from) then
+                self:Loading(true)
+                return
             end
-            h.net = (h.net or 0) + t.amount
-            lines[#lines + 1] = { tx = t }
+            self:Loading(false)
+            local list, rows = self.w.m:Store():DayLists(scope, from)
+            local was = self.drawnDays
+            if was and #was == #rows then
+                local same = true
+                for k = 1, #rows do
+                    if was[k] ~= rows[k] then
+                        same = false
+                        break
+                    end
+                end
+                if same then
+                    -- (nothing it shows changed: the rows in sight drawn again)
+                    self.list:Refresh()
+                    return
+                end
+            end
+            self.drawnDays = rows
+            for k = 1, #list do
+                local b = self:Block(list[k], rows[k])
+                local bl = b.lines
+                local c = #lines
+                for j = 1, #bl do
+                    lines[c + j] = bl[j]
+                end
+                n += #bl - 1
+                i += b.inSum
+                o += b.outSum
+            end
+        else
+            self.drawnDays = nil
+            local shown = self:Shown()
+            if not shown then
+                self:Loading(true)
+                return
+            end
+            self:Loading(false)
+            n = #shown
+            -- (the rows are the newest first: a day's heading where the time
+            -- falls before the day's start, not a date for each row)
+            local wrap = self.wrap
+            local h: Line? = nil
+            local dayStart = math.huge
+            for _, t in ipairs(shown) do
+                local at = t.at
+                if at < dayStart or not h then
+                    local day = days.dayOf(at)
+                    local y, mo, d = days.dateOf(day)
+                    dayStart = time({ year = y, month = mo, day = d, hour = 0 })
+                    h = { day = day, net = 0 }
+                    lines[#lines + 1] = h
+                end
+                h.net = (h.net or 0) + t.amount
+                local line = wrap[t]
+                if not line then
+                    line = { tx = t }
+                    wrap[t] = line
+                end
+                lines[#lines + 1] = line
+                if t.amount > 0 then
+                    i += t.amount
+                else
+                    o -= t.amount
+                end
+            end
         end
+        local net = i - o
         self.lines = lines
         self.list:SetItems(lines)
-        local n = #shown
         self.countText:SetValue(n == 1 and "1 transaction" or (parts.count(n) .. " transactions"))
-        local i, o, net = books.totals(shown)
         self.inMoney:SetCopper(i)
         self.outMoney:SetCopper(o)
         self.netMoney:SetSigned(net)
         local empty: string? = nil
         if n == 0 then
-            if #self.w.m:Transactions(self.w:Scope(), nil) == 0 then
+            if not self.w.m:Store():HasAny(self.w:Scope()) then
                 empty = "Nothing recorded yet: what your characters earn and spend shows here from now on, wherever it comes from."
             elseif self.narrowed then
                 empty = "Nothing matches."

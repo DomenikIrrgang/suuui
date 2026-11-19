@@ -1135,3 +1135,9 @@ These match the game; the tests follow them:
   containers never filter a debuff on a friendly unit (or a buff on an
   enemy) by spell ID: test such filters by the group's candidates; on an
   enemy's debuffs they render as in the game.
+- `debugprofilestop()` stands still within a frame (it follows the emulated
+  clock) and `os` isn't there, so a test can't time its own code and a
+  work slice cut by milliseconds never cuts: give each slice a count too
+  (the Ledger's slices), and time with `wowlua test --profile-out` (each
+  frame's instructions, estimated native weight and the emulator's wall
+  time in `<file>.frames.json`). (Ledger, 2026-11-19)

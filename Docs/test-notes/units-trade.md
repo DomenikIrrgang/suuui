@@ -118,3 +118,47 @@ money). `AUCTION_HOUSE_SHOW_NOTIFICATION` with a kind that takes a name
 (sold, won, outbid, expired) makes Blizzard's own handler fail without the
 name (`ChatFrameUtil.GetAuctionHouseNotificationText`): the game always
 names those, so the Sold note's test fires the formatted one.
+
+## The Ledger opening without a freeze (2026-11-19, wowlua 0.13.15)
+
+| Source | Test file | Tests |
+|---|---|---|
+| Ledger/PriceIndex | `Units/Ledger/PriceIndex.test.wowlua` | a pass a slice a frame, ready and told once, the deals furthest under first; few items at once; kept between asks (the same summaries, nothing worked out again); a look works out its item at once and logs it; a new day redoes everything, a deal setting the deal parts (the summaries kept); an item with no look left dropped from the deals; a vendor price known later |
+| Ledger/Pack | `Units/Ledger/Pack.test.wowlua` | the last days' lows read from the front only (the lowest of a day, later days skipped, the kept days, the buffer cleared) |
+| Ledger | `Units/Ledger.test.wowlua` | a Scan all's slices (`SCAN_SLICE` a frame) and its own deals (`ScanDeals`); the prune keeps the summaries, an item with no look left goes from the index and the deals |
+| Ledger/PricesPage | `Units/Ledger/PricesPage.test.wowlua` | the loading mark while the rows are built; the rows kept between opens, a search's look changing only its row, each order made once; a deal setting and a new day build them again behind the mark; You sold waits for a year of transactions |
+| Ledger/OverviewPage | `Units/Ledger/OverviewPage.test.wowlua` | the deals' loading mark while the index works (as after a /reload), then the top ones, at once on the next open |
+| Ledger/BookStore | `Units/Ledger/BookStore.test.wowlua` | 200 days of two characters read and merged a slice a frame (told when done), a week at once; merged by time, then character; the lists kept until a change, then only the changed day again; an item's rows and the items sold kept |
+| Ledger/TransactionsPage | `Units/Ledger/TransactionsPage.test.wowlua` | 150 days of 25 rows: All behind the loading mark, a new row making only its day's lines, the search's text a slice a frame then at once |
+| Ledger/ItemPage, Ledger/Window | `Units/Ledger/ItemPage.test.wowlua`, `Units/Ledger/Window.test.wowlua` | your sales waiting for the year read ("Reading your transactions…"); the module off while rows are built, on again: built and shown |
+
+How it was measured: a throwaway test (not committed) filled the store
+with 7,000 items (one to six weeks of looks, one to four a day, names for
+nine in ten) and six characters with a year of books (one with 55 rows a
+day), then ran each step inside a frame and read each frame's cost from
+`wowlua test --profile-out` (`<file>.frames.json`: per frame the
+instructions, the estimated native weight and the emulator's wall time).
+`debugprofilestop()` and `os.clock` give nothing inside a test (the
+emulated clock stands still within a frame), so the profile's frames are
+the only clock. Units below are those instructions plus native weight
+(M = million), with the emulator's milliseconds (the dev build, with its
+argument checks).
+
+| Step | Before (one frame) | After (the worst frame) |
+|---|---|---|
+| Overview, summaries not worked out (after a scan, a /reload, a new day) | 77.6 M, 1,038 ms | 1.0 M a slice over 36 frames, the mark meanwhile |
+| Prices, first open | 11.5 M, 214 ms | 1.0 M a slice; the first draw (rows made) 1.65 M |
+| Prices, opened again | 3.5 M (sorted again) | 1.0 M (only redrawn) |
+| A search's look while Prices shows | 10.3 M (every row again) | 0.85 M (its row) |
+| Sort by name | 5.0 M | 0.44 M |
+| Scan all, each frame | 9.0 M (800 items) | 1.2–1.3 M (200 items) |
+| You sold (a year of books) | 20.5 M | 1.34 M (read 20 days a frame first) |
+| Transactions, All (26,000 rows) | 10.7 M | 1.46 M first, 0.88 M after a new row |
+| An item's page | 6.2 M | 1.23 M |
+
+The emulator's speed is not the game's; in game each slice also stops
+after 4 ms (`debugprofilestop`), so the slices stay small whatever the
+machine. Before, the summaries' decode of all 60 days of every item was
+most of it (`Pack.readNumber` with its argument checks: an exported
+function is checked on every call in dev builds; the hot reads call a
+local one now).
