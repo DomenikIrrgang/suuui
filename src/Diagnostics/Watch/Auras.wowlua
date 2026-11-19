@@ -10,7 +10,7 @@ import * as fault from "/Core/Fault"
 import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
 import auraContainer, UnitAuras from "/UI/Auras"
-import isSecret, readable, asString from "wowlua:secret"
+import isSecret, asString from "wowlua:secret"
 import * as tbl from "wowlua:table"
 import * as kit from "./Kit"
 
@@ -140,32 +140,83 @@ end
 -- Counting a unit's auras through a filter
 --------------------------------------------------------------------------------
 
-type Count = { n: number, ids: { [unknown]: boolean }, mine: number, others: number, typed: number, typeless: number, secret: number }
+-- An addon's aura read raises in any fight on Forever ("Auras cannot be
+-- accessed when secret while tainted", IMPLEMENTATION_PLAN step 1.4): a
+-- read that raises says so (`failed`, the error's first line) instead of
+-- passing for "no auras". Sources by `sourceUnit`: "player" (mine), "pet",
+-- another unit (others), none given, or secret.
+type Count = {
+    n: number,
+    ids: { [unknown]: boolean },
+    mine: number,
+    pet: number,
+    others: number,
+    noSource: number,
+    sourceSecret: number,
+    typed: number,
+    typeless: number,
+    -- secret fields and secret aura tables together (UF-25's count)
+    secret: number,
+    auraSecret: number,
+    failed: boolean,
+    err?: string,
+}
+
+const MAX_AURAS = 40
 
 local function count(unit: string, filter: string): Count
-    local out: Count = { n = 0, ids = {}, mine = 0, others = 0, typed = 0, typeless = 0, secret = 0 }
+    local out: Count = {
+        n = 0,
+        ids = {},
+        mine = 0,
+        pet = 0,
+        others = 0,
+        noSource = 0,
+        sourceSecret = 0,
+        typed = 0,
+        typeless = 0,
+        secret = 0,
+        auraSecret = 0,
+        failed = false,
+    }
     local get = kit.resolve("C_UnitAuras.GetAuraDataByIndex")
     if type(get) ~= "function" then
+        out.failed = true
+        out.err = "no C_UnitAuras.GetAuraDataByIndex"
         return out
     end
-    for i = 1, 20 do
+    for i = 1, MAX_AURAS do
         local ok, aura = pcall(get :: (u: string, i: number, f: string) -> unknown, unit, i, filter)
-        if not ok or aura == nil then
+        if not ok then
+            out.failed = true
+            local text = asString(aura)
+            out.err = text and (text:match("^[^\n]*") or text):sub(1, 160) or "an unreadable error"
             break
         end
-        out.n += 1
-        if readable(aura) and type(aura) == "table" then
+        if isSecret(aura) then
+            out.n += 1
+            out.auraSecret += 1
+            out.secret += 1
+        elseif aura == nil then
+            break
+        elseif type(aura) == "table" then
+            out.n += 1
             local id = tbl.field(aura, "auraInstanceID")
             if id ~= nil and not isSecret(id) then
                 out.ids[id] = true
             end
             local source = tbl.field(aura, "sourceUnit")
             if isSecret(source) then
+                out.sourceSecret += 1
                 out.secret += 1
             elseif source == "player" then
                 out.mine += 1
+            elseif source == "pet" then
+                out.pet += 1
             elseif source ~= nil then
                 out.others += 1
+            else
+                out.noSource += 1
             end
             local kind = tbl.field(aura, "dispelName")
             if isSecret(kind) then
@@ -176,7 +227,7 @@ local function count(unit: string, filter: string): Count
                 out.typeless += 1
             end
         else
-            out.secret += 1
+            break
         end
     end
     return out
@@ -197,72 +248,368 @@ end
 -- HUD-CD-5: PLAYER and !PLAYER on the target's debuffs
 --------------------------------------------------------------------------------
 
-local function readTargetDebuffs(w: Watch)
-    if not UnitExists("target") then
+-- Addon code can't read auras in a fight on Forever (count's `failed`), so
+-- the reads that answer are out of combat: on a target change, on the
+-- target's UNIT_AURA and as a fight ends. A fight still reads (when it
+-- starts and every few seconds while there is a target): its failures are
+-- evidence, and a client that allows the read answers there too.
+--
+-- The record, kept at once (in SavedVariables at the next /reload even
+-- when nothing has answered): `reads` (how many were tried, in a fight,
+-- each reason a read was skipped, the secret unit flags and what decided
+-- instead, the most debuffs seen, the last error) and `recent` (the last
+-- RECENT reads that saw a debuff, with the counts per filter and the
+-- sources of what passed each). A case takes its first read with enough
+-- debuffs and is replaced by a better one (yours and others' together,
+-- else more debuffs) up to REPLACE times.
+
+const HOSTILE_PLAYER = "a hostile player target"
+const MOB = "a mob"
+-- what a target is when the game keeps it secret (kept apart from the
+-- two cases the question needs)
+const UNSURE_HOSTILE = "a target of unreadable hostility"
+const UNSURE_KIND = "a hostile target, player or mob unreadable"
+const TARGET_CASES: string[] = { HOSTILE_PLAYER, MOB }
+const RECENT = 5
+const REPLACE = 3
+-- seconds between two reads, and between the reads of a fight
+const THROTTLE = 1
+const TICK = 2
+
+local function bump(t: Result, key: string)
+    t[key] = (tonumber(t[key]) or 0) + 1
+end
+
+-- The target's flags as the watcher reads them (a test makes them secret
+-- here: replacing the game's globals would taint Blizzard's code that
+-- calls them too).
+local unitReads = {
+    canAttack = function(): unknown
+        return UnitCanAttack("player", "target")
+    end,
+    isEnemy = function(): unknown
+        return UnitIsEnemy("player", "target")
+    end,
+    reaction = function(): unknown
+        return UnitReaction("player", "target")
+    end,
+    isPlayer = function(): unknown
+        return UnitIsPlayer("target")
+    end,
+    guid = function(): unknown
+        return UnitGUID("target")
+    end,
+}
+
+-- Whether the target can be attacked when UnitCanAttack is secret:
+-- UnitIsEnemy, then UnitReaction (4 and below: neutral or hostile); nil
+-- when neither is readable. The second return: what told.
+local function hostileOtherwise(): (boolean?, string?)
+    local enemy = unitReads.isEnemy()
+    if not isSecret(enemy) and enemy then
+        return true, "UnitIsEnemy"
+    end
+    local reaction = unitReads.reaction()
+    if not isSecret(reaction) and type(reaction) == "number" then
+        return reaction <= 4, "UnitReaction"
+    end
+    return nil, nil
+end
+
+-- Whether the target is a player when UnitIsPlayer is secret: its GUID's
+-- kind (the GUID itself is never kept); nil when that is secret too.
+local function playerOtherwise(): (boolean?, string?)
+    local guid = unitReads.guid()
+    if not isSecret(guid) and type(guid) == "string" then
+        return guid:sub(1, 7) == "Player-", "UnitGUID"
+    end
+    return nil, nil
+end
+
+-- Who the debuffs that passed a filter came from.
+local function sourcesOf(c: Count): Result
+    return { mine = c.mine, pet = c.pet, others = c.others, none = c.noSource, secret = c.sourceSecret }
+end
+
+local function num(t: unknown, ...: string): number
+    return tonumber(tbl.field(t, ...)) or 0
+end
+
+-- A read's worth as a case: yours and others' together first (by
+-- sourceUnit; a debuff without a source counts as others'), then more
+-- debuffs.
+local function worth(s: unknown): number
+    local others = num(s, "sources", "others") + num(s, "sources", "none")
+    local mixed = num(s, "sources", "mine") > 0 and others > 0
+    return (mixed and 1000 or 0) + num(s, "harmful")
+end
+
+local function readTargetDebuffs(w: Watch, trigger: string)
+    local r = w:result()
+    local reads = tbl.recordAt(r, "reads")
+    local skipped = tbl.recordAt(reads, "skipped")
+    local fight = InCombatLockdown() and true or false
+    bump(reads, "tried")
+    if fight then
+        bump(reads, "inCombat")
+    end
+    local exists = UnitExists("target")
+    if not isSecret(exists) and not exists then
+        bump(skipped, "no target")
         return
     end
-    local canAttack = UnitCanAttack("player", "target")
-    local isPlayer = UnitIsPlayer("target")
-    if isSecret(canAttack) or not canAttack or isSecret(isPlayer) then
+
+    -- hostile, and a player or a mob, read another way where secret
+    local hostile: boolean? = nil
+    local hostileBy: string? = nil
+    local canAttack = unitReads.canAttack()
+    if isSecret(canAttack) then
+        bump(reads, "secretCanAttack")
+        hostile, hostileBy = hostileOtherwise()
+        if hostileBy then
+            bump(tbl.recordAt(reads, "decidedBy"), hostileBy)
+        end
+    else
+        hostile, hostileBy = canAttack and true or false, "UnitCanAttack"
+    end
+    if hostile == false then
+        bump(skipped, "not attackable")
         return
     end
-    local key = isPlayer and "a hostile player target" or "a mob"
-    if w:has(key) then
+    local isPlayer: boolean? = nil
+    local playerBy: string? = nil
+    local p = unitReads.isPlayer()
+    if isSecret(p) then
+        bump(reads, "secretIsPlayer")
+        isPlayer, playerBy = playerOtherwise()
+        if playerBy then
+            bump(tbl.recordAt(reads, "decidedBy"), playerBy)
+        end
+    else
+        isPlayer, playerBy = p and true or false, "UnitIsPlayer"
+    end
+    local key: string
+    if hostile == nil then
+        key = UNSURE_HOSTILE
+    elseif isPlayer == nil then
+        key = UNSURE_KIND
+    elseif isPlayer then
+        key = HOSTILE_PLAYER
+    else
+        key = MOB
+    end
+
+    local cases = tbl.recordAt(r, "cases")
+    local held = cases[key]
+    if held ~= nil and num(held, "replaced") >= REPLACE then
+        bump(skipped, "case settled")
         return
     end
+
     local all = count("target", "HARMFUL")
-    if all.n < (isPlayer and 1 or 2) then
+    if all.failed then
+        bump(skipped, "aura read failed")
+        bump(reads, fight and "failedInCombat" or "failedOutOfCombat")
+        reads.lastError = all.err
+        return
+    end
+    if all.auraSecret > 0 then
+        bump(reads, "auraDataSecret")
+    end
+    if all.n > num(reads, "mostDebuffs") then
+        reads.mostDebuffs = all.n
+    end
+    if all.n == 0 then
+        bump(skipped, "too few debuffs")
         return
     end
     local mine = count("target", "HARMFUL|PLAYER")
     local notMine = count("target", "HARMFUL|!PLAYER")
-    w:case(key, {
+    local both = overlap(mine, notMine)
+    local s: Result = {
+        at = kit.stamp(),
+        combat = fight,
+        trigger = trigger,
+        target = key,
+        hostileBy = hostileBy,
+        playerBy = playerBy,
         harmful = all.n,
         player = mine.n,
         notPlayer = notMine.n,
-        both = overlap(mine, notMine),
-        sourcesMine = all.mine,
-        sourcesOthers = all.others,
-        sourcesSecret = all.secret,
-        passesBoth = mine.n + notMine.n > all.n,
-    })
+        both = both,
+        passesBoth = mine.n + notMine.n > all.n or both > 0,
+        sources = sourcesOf(all),
+        playerSources = sourcesOf(mine),
+        notPlayerSources = sourcesOf(notMine),
+        auraSecret = all.auraSecret > 0 and all.auraSecret or nil,
+        filterError = mine.err or notMine.err,
+    }
+    local recent = tbl.listAt(r, "recent")
+    recent[#recent + 1] = s
+    while #recent > RECENT do
+        table.remove(recent, 1)
+    end
+    if all.n < (key == MOB and 2 or 1) then
+        bump(skipped, "too few debuffs")
+        return
+    end
+
+    if held == nil then
+        s.replaced = 0
+        cases[key] = s
+    elseif worth(s) > worth(held) then
+        s.replaced = num(held, "replaced") + 1
+        s.firstAt = tbl.field(held, "firstAt") or tbl.field(held, "at")
+        cases[key] = s
+    else
+        bump(reads, "caseKept")
+        return
+    end
+    for _, k in ipairs(TARGET_CASES) do
+        if cases[k] == nil then
+            return
+        end
+    end
+    w:finish(nil)
 end
 
 local function armTargetFilters(w: Watch)
-    local last = 0
-    local function read()
-        if GetTime() - last < 5 then
+    local r = w:result()
+    local cases = r.cases
+    if type(cases) == "table" and tbl.field(cases, HOSTILE_PLAYER) ~= nil and tbl.field(cases, MOB) ~= nil then
+        w:finish(nil)
+        return
+    end
+    -- at most one read a second; one asked for sooner runs when the second
+    -- is up
+    local last = -math.huge
+    local pending = false
+    local function read(trigger: string)
+        local wait = THROTTLE - (GetTime() - last)
+        if wait <= 0 then
+            last = GetTime()
+            readTargetDebuffs(w, trigger)
+        elseif not pending then
+            pending = true
+            w:after(wait, function()
+                pending = false
+                last = GetTime()
+                readTargetDebuffs(w, trigger)
+            end)
+        end
+    end
+    -- in a fight, every TICK seconds while there is a target (one-shot
+    -- timers, until the fight ends)
+    local ticking = false
+    local function tick()
+        if not InCombatLockdown() then
+            ticking = false
             return
         end
-        last = GetTime()
-        readTargetDebuffs(w)
+        local exists = UnitExists("target")
+        if isSecret(exists) or exists then
+            read("in a fight")
+        end
+        w:after(TICK, tick)
     end
-    w:on("PLAYER_REGEN_DISABLED", function()
-        w:after(3, read)
-    end)
     w:on("PLAYER_TARGET_CHANGED", function()
-        if InCombatLockdown() then
-            w:after(1, read)
+        read("target changed")
+    end)
+    w:onUnit("UNIT_AURA", { "target" }, function()
+        read("the target's auras changed")
+    end)
+    w:on("PLAYER_REGEN_DISABLED", function()
+        read("the fight started")
+        if not ticking then
+            ticking = true
+            w:after(TICK, tick)
         end
     end)
+    w:on("PLAYER_REGEN_ENABLED", function()
+        read("the fight ended")
+    end)
+end
+
+-- "2 yours, 1 others'" from a sources record (pet, no source and secret
+-- named only when there are some).
+local function sourcesWords(t: unknown): string
+    if type(t) ~= "table" then
+        return "sources not recorded"
+    end
+    local parts: string[] = { ("%d yours"):format(num(t, "mine")), ("%d others'"):format(num(t, "others")) }
+    for _, f in ipairs({ { "pet", "your pet's" }, { "none", "without a source" }, { "secret", "source secret" } }) do
+        local n = num(t, f[1])
+        if n > 0 then
+            parts[#parts + 1] = ("%d %s"):format(n, f[2])
+        end
+    end
+    return table.concat(parts, ", ")
 end
 
 local function sumTargetFilters(r: Result): string
     local cases = r.cases :: { [string]: Result }? or {}
+    local keys: string[] = { HOSTILE_PLAYER, MOB }
+    for _, k in ipairs({ UNSURE_KIND, UNSURE_HOSTILE }) do
+        if cases[k] then
+            keys[#keys + 1] = k
+        end
+    end
     local parts: string[] = {}
-    for _, key in ipairs({ "a hostile player target", "a mob" }) do
+    for _, key in ipairs(keys) do
         local c = cases[key]
         if c then
-            parts[#parts + 1] = ("%s: %s of %s debuffs passed PLAYER, %s passed !PLAYER%s"):format(
+            local line = ("%s: %s of %s debuffs passed PLAYER, %s passed !PLAYER%s"):format(
                 key,
                 tostring(c.player),
                 tostring(c.harmful),
                 tostring(c.notPlayer),
                 c.passesBoth and " (some passed both)" or ""
             )
+            if type(c.sources) == "table" then
+                local others = num(c, "sources", "others") + num(c, "sources", "none")
+                line ..= ("; by sourceUnit %s; PLAYER passed %s; !PLAYER passed %s%s"):format(
+                    sourcesWords(c.sources),
+                    sourcesWords(c.playerSources),
+                    sourcesWords(c.notPlayerSources),
+                    others == 0 and " (all were yours: others' debuffs not seen)" or ""
+                )
+            end
+            parts[#parts + 1] = line
         end
     end
-    return table.concat(parts, "; ")
+    return table.concat(parts, " | ")
+end
+
+-- How far it got, for the status line: the reads and why they were
+-- skipped.
+local function targetProgress(r: Result): string
+    local reads = r.reads
+    if type(reads) ~= "table" then
+        return "no read yet"
+    end
+    local out = ("%d reads (%d in a fight)"):format(num(reads, "tried"), num(reads, "inCombat"))
+    local skipped = tbl.field(reads, "skipped")
+    local reasons: string[] = {}
+    if type(skipped) == "table" then
+        for reason, n in pairs(skipped :: { [string]: unknown }) do
+            local text = ("%s %s"):format(reason, tostring(n))
+            if reason == "too few debuffs" then
+                text ..= (" (most seen %d)"):format(num(reads, "mostDebuffs"))
+            end
+            reasons[#reasons + 1] = text
+        end
+    end
+    table.sort(reasons)
+    if #reasons > 0 then
+        out ..= "; skipped: " .. table.concat(reasons, ", ")
+    end
+    for _, f in ipairs({ { "secretCanAttack", "UnitCanAttack secret" }, { "secretIsPlayer", "UnitIsPlayer secret" } }) do
+        local n = num(reads, f[1])
+        if n > 0 then
+            out ..= ("; %s %d"):format(f[2], n)
+        end
+    end
+    return out
 end
 
 --------------------------------------------------------------------------------
@@ -449,12 +796,13 @@ export function items(): Item[]
             id = "HUD-CD-5",
             kind = kit.Kind.Armed,
 
-            when = "a fight",
+            when = "a target with debuffs",
             question = "Which of HARMFUL|PLAYER and HARMFUL|!PLAYER do a target's debuffs pass, on a hostile player and on a mob (C_UnitAuras filters)?",
-            todo = "in a fight, target a hostile player with a debuff on them (PvP or a duel), and a mob with two or more debuffs (yours and a group member's)",
-            cases = { "a hostile player target", "a mob" },
+            todo = "while you are out of combat (addons can't read auras in a fight), target a mob with two or more debuffs on it, best yours and a group member's (one still alive when your fight ends, or one a group member is fighting); and, separately, a hostile player with any debuff",
+            cases = { HOSTILE_PLAYER, MOB },
             arm = armTargetFilters,
             summarize = sumTargetFilters,
+            progress = targetProgress,
         },
         {
             id = "UF-25",
