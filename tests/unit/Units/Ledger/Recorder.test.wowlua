@@ -13,7 +13,7 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/Ledger"
 import type Tx from "/Units/Ledger/Books"
-import patternOf, coinsOf, lootOf, placeOf, sendExpectation from "/Units/Ledger/Recorder"
+import patternOf, coinsOf, lootOf, placeOf, sendExpectation, freshFrom from "/Units/Ledger/Recorder"
 import type Recorder from "/Units/Ledger/Recorder"
 import expectNoErrors from "../../../helpers"
 import * as ah from "../AuctionHouse/AuctionHouseHelpers"
@@ -140,6 +140,148 @@ local function vendors()
     rec():OnRepairAll(true)
     mock.advanceTime(1)
     expect(#rows()).toBe(n)
+    mock.closeMerchant()
+end
+
+@test("the buyback list's new entries: appended, rolled when full, one bought back, the same stack again")
+local function fresh()
+    expect(freshFrom({}, {})).toBe(1)
+    expect(freshFrom({}, { "a", "b" })).toBe(1)
+    expect(freshFrom({ "a" }, { "a", "b" })).toBe(2)
+    -- the same stack sold again is new
+    expect(freshFrom({ "a" }, { "a", "a" })).toBe(2)
+    expect(freshFrom({ "a", "b" }, { "a", "b", "a" })).toBe(3)
+    -- nothing new, one bought back
+    expect(freshFrom({ "a", "b", "c" }, { "a", "b", "c" })).toBe(4)
+    expect(freshFrom({ "a", "b", "c" }, { "a", "c" })).toBe(3)
+    -- one bought back and one sold at once
+    expect(freshFrom({ "a", "b" }, { "b", "a" })).toBe(2)
+    -- a full list rolls: the oldest gone, the sale last (even the oldest's
+    -- stack again)
+    local full: string[] = {}
+    for i = 1, 12 do
+        full[i] = "x" .. i
+    end
+    local rolled: string[] = {}
+    for i = 2, 12 do
+        rolled[i - 1] = full[i]
+    end
+    rolled[12] = "y"
+    expect(freshFrom(full, rolled)).toBe(12)
+    rolled[12] = "x1"
+    expect(freshFrom(full, rolled)).toBe(12)
+end
+
+-- A bag of herbs, 1 to `n` in a stack (each stack's price its own), and a
+-- vendor open.
+local function herbsAtVendor(n: number)
+    local items: { [number]: number | { id: number, count?: number } } = {}
+    for i = 1, n do
+        items[i] = { id = HERB, count = i }
+    end
+    mock.setBag(0, { slots = 16, items = items })
+    mock.openMerchant({ name = "Quartermaster", items = { { id = WATER, price = 25, stack = 5 } } })
+    mock.advanceTime(0.1)
+end
+
+@test("a sale the hook never saw (another addon's) is one Vendor row from the buyback list; a right-click's stays one")
+local function unseenSale()
+    herbsAtVendor(2)
+    local n = #rows()
+    -- (the engine's sale without UseContainerItem: as another addon's call
+    -- through a reference taken before SuuUI hooked the field)
+    mock.sell(0, 2)
+    mock.advanceTime(1)
+    expect(#rows()).toBe(n + 1)
+    local t = rows()[1]
+    expect(t).toEqual({ at = t.at, kind = "vendor", amount = 3316, item = HERB, qty = 2, char = M:CharKey() })
+    -- a right-click: the hook's expectation, the money, then the list's
+    -- entry that the hook's expectation is already
+    rec():OnUseContainerItem(0, 1)
+    mock.sell(0, 1)
+    mock.advanceTime(1)
+    expect(#rows()).toBe(n + 2)
+    expect(rows()[1].amount).toBe(1658)
+    expect(rows()[1].qty).toBe(1)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 2)
+    expect(rec().matcher:Waiting()).toBe(false)
+    expect(#rec().sales).toBe(0)
+    mock.closeMerchant()
+end
+
+@test("a buyback entry and its money in either order, a moment apart; the hook's expectation and the entry in either order")
+local function eitherOrder()
+    herbsAtVendor(1)
+    local n = #rows()
+    -- the money first, the list's entry 1.5 s later
+    money(4974)
+    mock.advanceTime(1.5)
+    rec():OnSold(HERB, 3, 4974)
+    expect(#rows()).toBe(n + 1)
+    expect(rows()[1].kind).toBe("vendor")
+    expect(rows()[1].qty).toBe(3)
+    -- the entry first, the money 1.5 s later
+    rec():OnSold(HERB, 4, 6632)
+    mock.advanceTime(1.5)
+    money(6632)
+    mock.advanceTime(0.5)
+    expect(#rows()).toBe(n + 2)
+    expect(rows()[1].amount).toBe(6632)
+    -- the hook's sale, the entry before its money: still one row
+    rec():OnUseContainerItem(0, 1)
+    rec():OnSold(HERB, 1, 1658)
+    expect(#rec().matcher.expects).toBe(1)
+    money(1658)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 3)
+    expect(rec().matcher:Waiting()).toBe(false)
+    -- an entry whose money never comes expects nothing after a moment;
+    -- a change no amount fits stays Other
+    rec():OnSold(HERB, 5, 8290)
+    mock.advanceTime(3)
+    expect(rec().matcher:Waiting()).toBe(false)
+    money(8291)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 4)
+    expect(rows()[1].kind).toBe("other")
+    mock.closeMerchant()
+end
+
+@test("buying back books only the Buyback row; a full buyback list rolling books each sale once")
+local function buybackRolls()
+    herbsAtVendor(14)
+    -- 14 sales, none through the hook: the list fills and rolls
+    local n = #rows()
+    local total = 0
+    for i = 1, 14 do
+        mock.sell(0, i)
+        mock.advanceTime(0.5)
+        total += 1658 * i
+    end
+    mock.advanceTime(3)
+    expect(GetNumBuybackItems()).toBe(12)
+    expect(#rows()).toBe(n + 14)
+    local sum = 0
+    for i = 1, 14 do
+        local t = rows()[i]
+        expect(t.kind).toBe("vendor")
+        expect(t.item).toBe(HERB)
+        sum += t.amount
+    end
+    expect(sum).toBe(total)
+    -- buying the newest back: one Buyback row, no sale
+    BuybackItem(GetNumBuybackItems())
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 15)
+    expect(rows()[1].kind).toBe("buyback")
+    expect(rows()[1].amount).toBe(-1658 * 14)
+    expect(GetNumBuybackItems()).toBe(11)
+    -- and an update that changes nothing books nothing
+    mock.fireEvent("MERCHANT_UPDATE")
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 15)
+    expect(rec().matcher:Waiting()).toBe(false)
     mock.closeMerchant()
 end
 

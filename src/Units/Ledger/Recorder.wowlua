@@ -15,9 +15,10 @@
 --                  total), CancelAuction (GetCancelCost; none: booked at
 --                  once without money). Sales from the mail (below).
 --   Vendors        C_Container.UseContainerItem while a vendor is open (the
---                  item's sell price × count), BuyMerchantItem (the price
---                  per stack), BuybackItem, RepairAllItems (not the
---                  guild's).
+--                  item's sell price × count) and the merchant's buyback
+--                  list (each sale's stack, whoever sold it: below),
+--                  BuyMerchantItem (the price per stack), BuybackItem,
+--                  RepairAllItems (not the guild's).
 --   Mail           TakeInboxMoney / AutoLootMailItem: the letter's money
 --                  (an auction sale with its invoice: price, the house's
 --                  cut, the deposit back; a refunded bid; a COD payment;
@@ -44,7 +45,7 @@
 -- few minutes merge into one row.
 
 import * as secret from "wowlua:secret"
-import Matcher from "./Matcher"
+import Matcher, GRACE, TTL from "./Matcher"
 import type Expectation from "./Matcher"
 import type Tx from "./Books"
 import type LedgerModule from "../Ledger"
@@ -55,6 +56,33 @@ const OTHER_MERGE = 300
 const COIN_LINE = 10
 
 local asNumber, asString = secret.asNumber, secret.asString
+
+-- Where the buyback list's entries that are new begin (#now + 1: none).
+-- Every sale appends its stack (the newest last), a full list (12) drops
+-- its oldest, buying back takes one out: so what was there before is the
+-- part of `now` found in order in `old`, the longest such start of `now`,
+-- and the rest is new. (A full list of the same stack sold once more reads
+-- the same: that sale isn't seen here.)
+export function freshFrom(old: string[], now: string[]): number
+    for k = #now, 1, -1 do
+        local j = 1
+        local found = true
+        for i = 1, k do
+            while j <= #old and old[j] ~= now[i] do
+                j += 1
+            end
+            if j > #old then
+                found = false
+                break
+            end
+            j += 1
+        end
+        if found then
+            return k + 1
+        end
+    end
+    return 1
+end
 
 -- A global format ("Auction successful: %s") as a pattern capturing its
 -- %s and %d.
@@ -148,6 +176,11 @@ export class Recorder
     money: number? = nil
     -- a vendor open, and its name
     merchant: string? = nil
+    -- the buyback list as last read while a vendor is open: each entry's
+    -- link (or name), count and price
+    sold: string[] = {}
+    -- the hook's sales lately, each until its buyback entry comes
+    sales: Expectation[] = {}
     -- the inbox's letters as last read (the hooks' fallback)
     letters: { [number]: Letter } = {}
     -- the money set to send (SetSendMailMoney), the fallback for SendMail
@@ -335,7 +368,98 @@ export class Recorder
         if price <= 0 then
             return
         end
-        self:Expect({ kind = "vendor", amount = price * count, item = id, qty = count })
+        local e: Expectation = { kind = "vendor", amount = price * count, item = id, qty = count }
+        self:Expect(e)
+        self.sales[#self.sales + 1] = e
+    end
+
+    -- Vendor sales from the buyback list: a sale the hook above never saw
+    -- (another addon selling through a reference it took before SuuUI
+    -- hooked the field) still puts its stack there, with what it paid for
+    -- the whole stack. A new entry is the evidence of one sale: when a
+    -- sale the hook expected fits it (the same item and amount, still
+    -- waiting or booked already: the money may come before or after the
+    -- list's update), that expectation is this sale and nothing more is
+    -- expected; else the entry expects its own amount for a moment
+    -- (GRACE: the list and the money come with the server's one answer),
+    -- and the Matcher pairs it with the change waiting or coming. A
+    -- change no amount fits stays Other.
+
+    -- The buyback entry at `i`: its signature, item, count, price.
+    function BuybackEntry(i: number): (string, number?, number, number)
+        local ok, name, _icon, price, quantity = pcall(GetBuybackItemInfo, i)
+        local okL, link = pcall(GetBuybackItemLink, i)
+        local l = okL and asString(link) or nil
+        local p = ok and asNumber(price) or 0
+        local q = ok and asNumber(quantity) or 1
+        local n = ok and asString(name) or ""
+        return (l or n) .. "|" .. q .. "|" .. p, self:IDOfLink(l), q, p
+    end
+
+    function NumBuyback(): number
+        local ok, n = pcall(GetNumBuybackItems)
+        return ok and asNumber(n) or 0
+    end
+
+    -- MERCHANT_SHOW: the list as it is (nothing in it new).
+    function SnapBuyback()
+        local list: string[] = {}
+        for i = 1, self:NumBuyback() do
+            list[i] = (self:BuybackEntry(i))
+        end
+        self.sold, self.sales = list, {}
+    end
+
+    -- MERCHANT_UPDATE (often: a quick look at the count and both ends
+    -- first): the entries the list gained, each a sale.
+    function OnMerchantUpdate()
+        if not self.merchant then
+            return
+        end
+        local old = self.sold
+        local n = self:NumBuyback()
+        if n == #old and (n == 0 or ((self:BuybackEntry(n)) == old[n] and (self:BuybackEntry(1)) == old[1])) then
+            return
+        end
+        local list: string[] = {}
+        local items: { id?: number, qty: number, price: number }[] = {}
+        for i = 1, n do
+            local sig, id, qty, price = self:BuybackEntry(i)
+            list[i] = sig
+            items[i] = { id = id, qty = qty, price = price }
+        end
+        self.sold = list
+        for i = freshFrom(old, list), n do
+            local x = items[i]
+            self:OnSold(x.id, x.qty, x.price)
+        end
+    end
+
+    -- A sale the buyback list shows: the hook's expectation that fits it
+    -- taken as this sale, else this one's own expected.
+    function OnSold(id: number?, qty: number, price: number)
+        if price <= 0 then
+            return
+        end
+        local now = GetTime()
+        local keep: Expectation[] = {}
+        local claimed = false
+        for _, e in ipairs(self.sales) do
+            local age = now - (e.since or now)
+            if age < TTL + GRACE then
+                local live = e.booked ~= nil or age < (e.ttl or TTL)
+                if not claimed and live and e.amount == price and (e.item == nil or id == nil or e.item == id) then
+                    claimed = true
+                else
+                    keep[#keep + 1] = e
+                end
+            end
+        end
+        self.sales = keep
+        if claimed then
+            return
+        end
+        self:Expect({ kind = "vendor", amount = price, item = id, qty = qty, ttl = GRACE })
     end
 
     function OnBuyMerchantItem(index: unknown, quantity: unknown)
@@ -915,6 +1039,10 @@ export class Recorder
             local ok, name = pcall(UnitName, "npc")
             self.merchant = ok and asString(name) or "Vendor"
             self:ReadRepairCost()
+            self:SnapBuyback()
+        end)
+        m:OnGameEvent("MERCHANT_UPDATE", function()
+            self:OnMerchantUpdate()
         end)
         m:OnGameEvent("MERCHANT_CLOSED", function()
             self.merchant = nil
@@ -1047,5 +1175,6 @@ export class Recorder
         self.bids, self.merged = {}, {}
         self.merchant, self.partner, self.ticking = nil, nil, false
         self.sending, self.coin, self.coinTaken = nil, {}, {}
+        self.sold, self.sales = {}, {}
     end
 end
