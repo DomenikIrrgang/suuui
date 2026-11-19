@@ -1,0 +1,338 @@
+-- Diagnostics/Watch/Auras: HUD-CD-5, which of HARMFUL|PLAYER and
+-- HARMFUL|!PLAYER a target's debuffs pass. Addon code can't read auras in
+-- a fight (the emulator raises as the game does), so the watcher reads out
+-- of combat too (a target change, the target's UNIT_AURA, a fight's end),
+-- keeps its evidence at once, takes a better read for a case up to a cap,
+-- and is done once a mob and a hostile player have recorded. (The other
+-- watchers of the file are tested through "/suu probe all" in
+-- tests/unit/Diagnostics/AllProbe.)
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as events from "/Core/Events"
+import * as hooks from "/Core/Hooks"
+import * as timers from "/Core/Timers"
+import * as kit from "/Diagnostics/Watch/Kit"
+import * as auras from "/Diagnostics/Watch/Auras"
+import internal unitReads from "/Diagnostics/Watch/Auras"
+import expectNoErrors from "../../../helpers"
+
+type Result = kit.Result
+
+const ID = "HUD-CD-5"
+const MOB = "a mob"
+const HOSTILE_PLAYER = "a hostile player target"
+
+local mate = mock.spawnUnit({ name = "Tamsin Ashford", level = 10, reaction = "friendly", class = "PRIEST", player = true })
+-- fresh for each test (their debuffs gone with them)
+local function newBoar(): mock.MockUnit
+    return mock.spawnUnit({ name = "Mottled Boar", level = 3, reaction = "hostile", health = 80 })
+end
+local function newDuelist(): mock.MockUnit
+    return mock.spawnUnit({ name = "Corwin Hale", level = 10, reaction = "hostile", class = "ROGUE", player = true })
+end
+local boar = newBoar()
+local duelist = newDuelist()
+
+local function item(): kit.Item
+    for _, it in ipairs(auras.items()) do
+        if it.id == ID then
+            return it
+        end
+    end
+    error("no item " .. ID)
+end
+
+local function record(): Result
+    return (assert(kit.store().results[ID], "no record"))
+end
+
+local function reads(): Result
+    return (assert(tbl.field(record(), "reads"), "no reads") :: Result)
+end
+
+local function skipped(reason: string): number
+    return tonumber(tbl.field(reads(), "skipped", reason)) or 0
+end
+
+local function case(key: string): Result?
+    return tbl.field(record(), "cases", key) :: Result?
+end
+
+local function has(v: unknown, text: string): boolean
+    return type(v) == "string" and v:find(text, 1, true) ~= nil
+end
+
+local current: kit.Watch? = nil
+local realReads = {
+    canAttack = unitReads.canAttack,
+    isEnemy = unitReads.isEnemy,
+    reaction = unitReads.reaction,
+    isPlayer = unitReads.isPlayer,
+}
+
+-- The watcher armed on a fresh record, a group member in the party.
+local function arm(): kit.Watch
+    kit.store().results[ID] = nil
+    boar = newBoar()
+    duelist = newDuelist()
+    if not IsInGroup() then
+        mock.group:add(mate)
+        mock.advanceFrames(2)
+    end
+    local w = kit.Watch.new(item())
+    w:start()
+    current = w
+    return w
+end
+
+local function holding(w: kit.Watch): number
+    return events.bus:count(w.owner) + hooks.armed(w.owner) + timers.count(w.owner)
+end
+
+local function mine(unit: mock.MockUnit, id: number)
+    unit:applyAura({ spellId = id, name = "Debuff " .. id, harmful = true, duration = 60, source = mock.player })
+end
+
+local function others(unit: mock.MockUnit, id: number)
+    unit:applyAura({ spellId = id, name = "Debuff " .. id, harmful = true, duration = 60, source = mate })
+end
+
+@afterEach
+local function cleanup()
+    local w = current
+    if w then
+        w:stop()
+        current = nil
+    end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    mock.player:target(nil)
+    if IsInGroup() then
+        mock.group:leave()
+    end
+    kit.store().results[ID] = nil
+    unitReads.canAttack = realReads.canAttack
+    unitReads.isEnemy = realReads.isEnemy
+    unitReads.reaction = realReads.reaction
+    unitReads.isPlayer = realReads.isPlayer
+    mock.advanceTime(1)
+end
+
+@test("a mob's second debuff arriving late, out of combat: the case records on that read, with whose debuffs passed which filter")
+local function late()
+    local w = arm()
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    mine(boar, 589)
+    mock.advanceTime(1.5)
+    -- one debuff: kept as a raw read, not a case yet
+    expect(case(MOB)).toBeNil()
+    expect(#tbl.list(record().recent)).toBe(1)
+    mock.advanceTime(3)
+    others(boar, 772)
+    mock.advanceTime(1.5)
+    local c = assert(case(MOB), "no mob case")
+    expect(c.harmful).toBe(2)
+    expect(c.player).toBe(1)
+    expect(c.notPlayer).toBe(1)
+    expect(c.passesBoth).toBe(false)
+    expect(tbl.field(c, "sources", "mine")).toBe(1)
+    expect(tbl.field(c, "sources", "others")).toBe(1)
+    expect(tbl.field(c, "playerSources", "mine")).toBe(1)
+    expect(tbl.field(c, "playerSources", "others")).toBe(0)
+    expect(tbl.field(c, "notPlayerSources", "others")).toBe(1)
+    expect(c.combat).toBe(false)
+    expect(c.trigger).toBe("the target's auras changed")
+    expect(reads().mostDebuffs).toBe(2)
+    expect(skipped("too few debuffs")).toBe(2)
+    -- a hostile player still missing: armed
+    expect(record().done).toBe(false)
+    expect(w.active).toBe(true)
+    expectNoErrors()
+end
+
+@test("in a fight the reads fail and say so (kept at once, no case); the fight's end reads again")
+local function inFight()
+    local w = arm()
+    mine(boar, 589)
+    others(boar, 772)
+    mock.player:enterCombat()
+    mock.player:target(boar)
+    mock.advanceTime(7)
+    local r = reads()
+    expect(r.inCombat).toBeGreaterThan(2)
+    expect(skipped("aura read failed")).toBeGreaterThan(2)
+    expect(r.failedInCombat).toBeGreaterThan(2)
+    expect(has(r.lastError, "Auras cannot be accessed")).toBe(true)
+    expect(case(MOB)).toBeNil()
+    expect(record().done).toBe(false)
+    -- the evidence is in the record now (SavedVariables at a /reload)
+    expect(kit.store().results[ID]).toBe(record())
+    mock.player:leaveCombat()
+    mock.advanceTime(1.5)
+    local c = assert(case(MOB), "no mob case after the fight")
+    expect(c.trigger).toBe("the fight ended")
+    expect(c.combat).toBe(false)
+    expect(w.active).toBe(true)
+    expectNoErrors()
+end
+
+@test("skipped reads counted: no target, a friendly target, one debuff only (the most seen)")
+local function skips()
+    arm()
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    mock.player:target(nil)
+    mock.advanceTime(1.5)
+    mock.player:target(mate)
+    mock.advanceTime(1.5)
+    mine(boar, 589)
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    expect(skipped("no target")).toBe(1)
+    expect(skipped("not attackable")).toBe(1)
+    -- none, then one
+    expect(skipped("too few debuffs")).toBe(2)
+    expect(reads().mostDebuffs).toBe(1)
+    expect(reads().tried).toBe(4)
+    expect(case(MOB)).toBeNil()
+    local text = assert(item().progress)(record())
+    expect(has(text, "4 reads (0 in a fight)")).toBe(true)
+    expect(has(text, "too few debuffs 2 (most seen 1)")).toBe(true)
+    expect(has(text, "no target 1")).toBe(true)
+    expect(has(text, "not attackable 1")).toBe(true)
+    expect(assert(item().progress)({})).toBe("no read yet")
+    expectNoErrors()
+end
+
+@test("a better read replaces a case (yours and others' first, then more), up to three times, then it is left")
+local function better()
+    arm()
+    mock.player:target(boar)
+    others(boar, 772)
+    others(boar, 773)
+    mock.advanceTime(1.5)
+    expect(tbl.field(case(MOB), "sources", "mine")).toBe(0)
+    expect(tbl.field(case(MOB), "replaced")).toBe(0)
+    mine(boar, 589)
+    mock.advanceTime(1.5)
+    expect(tbl.field(case(MOB), "sources", "mine")).toBe(1)
+    expect(tbl.field(case(MOB), "replaced")).toBe(1)
+    for i = 1, 4 do
+        mine(boar, 590 + i)
+        mock.advanceTime(1.5)
+    end
+    expect(tbl.field(case(MOB), "replaced")).toBe(3)
+    expect(tbl.field(case(MOB), "harmful")).toBe(5)
+    expect(skipped("case settled")).toBe(2)
+    -- a settled case isn't read again: four raw reads
+    expect(#tbl.list(record().recent)).toBe(4)
+    expectNoErrors()
+end
+
+@test("the raw reads: the last five only")
+local function recentCap()
+    arm()
+    mine(boar, 589)
+    for _ = 1, 6 do
+        mock.player:target(nil)
+        mock.advanceTime(1.5)
+        mock.player:target(boar)
+        mock.advanceTime(1.5)
+    end
+    expect(skipped("too few debuffs")).toBe(6)
+    expect(#tbl.list(record().recent)).toBe(5)
+    expectNoErrors()
+end
+
+@test("secret UnitCanAttack and UnitIsPlayer (made secret in the watcher's reads): told another way and counted; unreadable, kept under its own key")
+local function secrets()
+    arm()
+    unitReads.canAttack = function(): unknown
+        return mock.secret(true)
+    end
+    unitReads.isPlayer = function(): unknown
+        return mock.secret(false)
+    end
+    mine(boar, 589)
+    others(boar, 772)
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    expect(reads().secretCanAttack).toBe(1)
+    expect(reads().secretIsPlayer).toBe(1)
+    expect(tbl.field(reads(), "decidedBy", "UnitGUID")).toBe(1)
+    local c = assert(case(MOB), "no mob case")
+    expect(type(c.hostileBy)).toBe("string")
+    expect(c.playerBy).toBe("UnitGUID")
+    -- nothing readable about it: its own key, not one of the two cases
+    unitReads.isEnemy = function(): unknown
+        return mock.secret(true)
+    end
+    unitReads.reaction = function(): unknown
+        return mock.secret(2)
+    end
+    mock.player:target(nil)
+    mock.advanceTime(1.5)
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    expect(case("a target of unreadable hostility")).toBeTruthy()
+    expect(record().done).toBe(false)
+    expectNoErrors()
+end
+
+@test("a mob and a hostile player recorded: done, the answer says whose debuffs passed which filter, nothing left armed")
+local function both()
+    local w = arm()
+    mine(boar, 589)
+    others(boar, 772)
+    mock.player:target(boar)
+    mock.advanceTime(1.5)
+    mine(duelist, 589)
+    mock.player:target(duelist)
+    mock.advanceTime(1.5)
+    local r = record()
+    expect(r.done).toBe(true)
+    expect(case(HOSTILE_PLAYER)).toBeTruthy()
+    local answer = r.answer
+    expect(has(answer, "a mob: 1 of 2 debuffs passed PLAYER, 1 passed !PLAYER; by sourceUnit 1 yours, 1 others'; PLAYER passed 1 yours, 0 others'; !PLAYER passed 0 yours, 1 others'")).toBe(true)
+    expect(has(answer, "a hostile player target: 1 of 1 debuffs passed PLAYER")).toBe(true)
+    expect(has(answer, "(all were yours: others' debuffs not seen)")).toBe(true)
+    expect(w.active).toBe(false)
+    expect(holding(w)).toBe(0)
+    expectNoErrors()
+end
+
+@test("a record with both cases from before: done when armed")
+local function before()
+    kit.store().results[ID] = {
+        question = "",
+        done = false,
+        cases = { [MOB] = { harmful = 2, player = 1, notPlayer = 1 }, [HOSTILE_PLAYER] = { harmful = 1, player = 0, notPlayer = 1 } },
+    }
+    local w = kit.Watch.new(item())
+    w:start()
+    current = w
+    expect(record().done).toBe(true)
+    expect(has(record().answer, "a mob: 1 of 2 debuffs passed PLAYER")).toBe(true)
+    expect(holding(w)).toBe(0)
+    expectNoErrors()
+end
+
+@test("off: nothing left armed, a target with debuffs records nothing")
+local function off()
+    local w = arm()
+    expect(holding(w)).toBeGreaterThan(0)
+    w:stop()
+    expect(holding(w)).toBe(0)
+    mine(boar, 589)
+    others(boar, 772)
+    mock.player:target(boar)
+    mock.player:enterCombat()
+    mock.advanceTime(5)
+    expect(record().reads).toBeNil()
+    expect(record().cases).toBeNil()
+    expectNoErrors()
+end

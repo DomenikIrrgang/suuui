@@ -6,9 +6,13 @@
 -- and where the question is about what follows, the blocked actions of the
 -- next fight. The moments come from events, Blizzard's EventRegistry (its
 -- listeners run through secureexecuterange: their taint stays theirs), secure
--- post-hooks on SuuUI's own module (Chat's OpenChatSettings) and on two
+-- post-hooks on SuuUI's own module (Chat's OpenChatSettings), on two
 -- Blizzard globals the scan doesn't check (PaperDollFrame_SetPet,
--- PaperDollFrame_SetSidebar), a script hook on SuuUI's own windows
+-- PaperDollFrame_SetSidebar) and on the game's tell functions
+-- (ChatFrameUtil.SendTell/SendTellWithMessage: hooksecurefunc leaves the
+-- field secure, and the game's code after the call runs with its own taint
+-- again once the hook returns; the hook only reads the stack and an edit
+-- box's chat type), a script hook on SuuUI's own windows
 -- (OnHide), and one on the chat edit boxes' OnTabPressed (a key's own
 -- handler: nothing of the game's runs after it). Never a hook inside a flow
 -- of the game's (an edit box's attribute change, the map's OnShow).
@@ -400,75 +404,322 @@ end
 -- a fight
 --------------------------------------------------------------------------------
 
--- Whether the code that asked for the whisper is SuuUI's: the first frame
--- of the stack below the game's SendTell (and SendTellWithMessage) that
--- isn't the C side.
-export function startedBySuuUI(stack: string): boolean
-    local seenTell = false
-    for line in stack:gmatch("[^\n]+") do
-        if line:find("SendTell", 1, true) then
-            seenTell = true
-        elseif seenTell and not line:find("[C]", 1, true) then
-            return line:find("AddOns[/\\]SuuUI[/\\]") ~= nil
+-- Who asked for a whisper is read from the stack, by file only: a function
+-- the game calls from C (pcall, a script handler, a secure hook's wrapper)
+-- has no name in it ("in function <file:line>"), so ChatFrameUtil.SendTell,
+-- called through the stdlib's pcall, never shows its name. The client's
+-- lines: "[Interface/AddOns/SuuUI/src/Units/Chat/Panel.lua]:216: in
+-- function <…>", "[C]: in function 'pcall'", "[tail call]: ?"; older forms
+-- ("[string \"@Interface/…\"]:12:", "Interface\AddOns\…:12:") read the same.
+
+-- The file of a stack line, with "/" for "\": "C" for the C side, "tail
+-- call" for a lost frame, "" when the line names none.
+export function lineFile(line: string): string
+    local where = line:match("^%[(.-)%]:") or line:match("^(.-):%d+:") or ""
+    where = where:match("^string \"@?(.-)\"$") or where
+    return (where:gsub("\\", "/"))
+end
+
+-- A file's path inside SuuUI's folder ("src/Units/Chat/Panel.lua"), or nil
+-- (another addon's, a plugin's "SuuUI_…", Blizzard's, C).
+local function suuPath(file: string): string?
+    return file:match("^SuuUI/(.*)$") or file:match("/SuuUI/(.*)$")
+end
+
+-- SuuUI's files that are never the asker: the probe's own (its listeners
+-- and the kit), the hook and error machinery a listener runs under, and
+-- the dev build's call wrappers.
+const MACHINERY: string[] = {
+    "^src/Diagnostics/",
+    "^src/Core/Hooks%.",
+    "^src/Core/Fault%.",
+    "^wowlua/runtime%.",
+    "^wowlua/std/hooks%.",
+}
+
+local function machinery(rel: string): boolean
+    for _, p in ipairs(MACHINERY) do
+        if rel:find(p) then
+            return true
         end
     end
     return false
 end
 
--- The chat type of the edit box the game says opened.
-local function chatTypeOf(box: unknown): string?
+-- Whether SuuUI's own code (not the probe's) is on the stack: one of its
+-- src/ files, or the stdlib's chat module that SuuUI's whispers go through
+-- (all that is left of a caller that tail-called it).
+export function startedBySuuUI(stack: string): boolean
+    for line in stack:gmatch("[^\n]+") do
+        local rel = suuPath(lineFile(line))
+        if rel and not machinery(rel) and (rel:sub(1, 4) == "src/" or rel == "wowlua/std/chat.lua") then
+            return true
+        end
+    end
+    return false
+end
+
+-- The stack, short, for the record: the probe's own frames and the
+-- machinery left out, the C and error-handling frames above the first
+-- real caller too; "Interface/AddOns/" dropped and "<file:123>" as
+-- "<:123>" (the line's own file is in front); at most `max` lines.
+export function shortStack(stack: string, max: number): string[]
+    local out: string[] = {}
+    local leading = true
+    for line in stack:gmatch("[^\n]+") do
+        local file = lineFile(line)
+        local rel = suuPath(file)
+        local glue = file == "C" or file == "tail call" or rel == "wowlua/std/errors.lua"
+        if not (rel and machinery(rel)) and not (leading and glue) then
+            leading = false
+            local s = line:gsub("Interface[/\\]AddOns[/\\]", "")
+            s = s:gsub("<[^>]*:(%d+)>", "<:%1>")
+            out[#out + 1] = #s > 100 and s:sub(1, 100) or s
+            if #out >= max then
+                break
+            end
+        end
+    end
+    return out
+end
+
+const WHISPER_TYPES: { [string]: boolean } = { WHISPER = true, BN_WHISPER = true }
+-- openings kept as evidence (from any source), and their stacks' lines
+const EVIDENCE = 5
+const STACK_LINES = 10
+
+-- The game's functions that open a whisper line (SuuUI's chat.whisper
+-- calls ChatFrameUtil.SendTell, which calls SendTellWithMessage); the old
+-- globals where they aren't aliases of these.
+const TELLS: { owner?: string, name: string }[] = {
+    { owner = "ChatFrameUtil", name = "SendTellWithMessage" },
+    { owner = "ChatFrameUtil", name = "SendTell" },
+    { name = "ChatFrame_SendTellWithMessage" },
+    { name = "ChatFrame_SendTell" },
+}
+
+-- The chat type of an edit box ("unreadable" when it can't be read).
+local function chatTypeOf(box: unknown): string
+    if box == nil then
+        return "no edit box"
+    end
     local ok, t = pcall(function(): unknown
         return (box :: Frame):GetAttribute("chatType")
     end)
-    return ok and asString(t) or nil
+    return ok and asString(t) or "unreadable"
+end
+
+-- The edit box the game has active (or had last).
+local function activeBox(): unknown
+    return tbl.field(_G, "ACTIVE_CHAT_EDIT_BOX") or tbl.field(_G, "LAST_ACTIVE_CHAT_EDIT_BOX")
+end
+
+-- Who last wrote what a whisper's opening writes: the edit boxes' fields
+-- (OpenChat's text and setText), the active box globals.
+local function chatChecks(): Result
+    local fields: string[] = {}
+    for _, box in ipairs(editBoxes()) do
+        for _, f in ipairs(kit.writtenFields(box:GetName() or "edit box", box)) do
+            fields[#fields + 1] = f
+        end
+    end
+    return {
+        editBoxFields = fields,
+        ACTIVE_CHAT_EDIT_BOX = kit.secureState(nil, "ACTIVE_CHAT_EDIT_BOX"),
+        LAST_ACTIVE_CHAT_EDIT_BOX = kit.secureState(nil, "LAST_ACTIVE_CHAT_EDIT_BOX"),
+    }
 end
 
 local function armWhisper(w: Watch)
+    local r = w:result()
+    -- a whisper of an earlier session: a /reload clears taint, so it no
+    -- longer counts (kept to read)
+    if r.started ~= nil then
+        r.startedBeforeReload = r.started
+        r.started = nil
+    end
     local started: Result? = nil
-    -- an edit box opened (or focused) out of combat: a whisper SuuUI asked
-    -- for? (the stack read now, the chat type a frame later, once the game
-    -- has parsed the line)
-    local function opened(box: unknown)
-        if started or InCombatLockdown() then
+    local function markStarted(source: string)
+        if started then
             return
         end
-        local bySuuUI = startedBySuuUI(debugstack(1, 40, 0) or "")
-        if not bySuuUI then
+        local s = kit.moment("a whisper started by SuuUI, out of combat", chatChecks(), 0.5)
+        s.source = source
+        started = s
+        w:result().started = s
+    end
+
+    -- Evidence: the first openings of a whisper line (any source), at
+    -- once; the sources of one moment (a hook, the focus event) in one.
+    local last: Result? = nil
+    local lastAt = -1
+    local function note(source: string, bySuuUI: boolean, chatType: string, stack: string): Result?
+        local now = GetTime()
+        local e = last
+        if e and lastAt == now then
+            local sources = tbl.listAt(e, "sources")
+            if not tbl.contains(sources, source) then
+                sources[#sources + 1] = source
+            end
+            e.bySuuUI = e.bySuuUI == true or bySuuUI
+            -- an edit box's event came first: the hook's stack too (it
+            -- reaches the caller in fewer lines)
+            if source:sub(1, 5) == "hook " and e.hookStack == nil and not tostring(sources[1]):find("^hook ") then
+                e.hookStack = shortStack(stack, STACK_LINES)
+            end
+            return e
+        end
+        local list = tbl.listAt(w:result(), "openings")
+        if #list >= EVIDENCE then
+            return nil
+        end
+        local made: Result = {
+            at = kit.stamp(),
+            sources = { source },
+            bySuuUI = bySuuUI,
+            chatType = chatType,
+            stack = shortStack(stack, STACK_LINES),
+        }
+        list[#list + 1] = made
+        last = made
+        lastAt = now
+        return made
+    end
+
+    -- A whisper opened out of combat: by one of the game's tell functions
+    -- (a whisper by definition), or an edit box shown or focused (one when
+    -- its chat type is, now or once the game has set its text: OpenChat
+    -- sets it in the box's next OnUpdate, and a name the auto-complete
+    -- knows can keep it "SAY" until more is typed).
+    local function opened(source: string, box: unknown, isTell: boolean)
+        if InCombatLockdown() then
             return
         end
-        w:after(0, function()
-            if not started and chatTypeOf(box) == "WHISPER" then
-                started = kit.moment("a whisper started from a SuuUI click, out of combat", nil, 0.5)
-                w:result().started = started
+        local stack = debugstack(1, 60, 20) or ""
+        local by = startedBySuuUI(stack)
+        local typeNow = chatTypeOf(box or activeBox())
+        local entry: Result? = nil
+        if isTell or by or WHISPER_TYPES[typeNow] then
+            entry = note(source, by, typeNow, stack)
+        end
+        if by and isTell then
+            markStarted(source)
+        end
+        w:after(0.3, function()
+            local later = chatTypeOf(box or activeBox())
+            local e = entry
+            if e == nil and WHISPER_TYPES[later] then
+                e = note(source, by, typeNow, stack)
+            end
+            if e then
+                e.chatTypeLater = later
+            end
+            if by and WHISPER_TYPES[later] then
+                markStarted(source)
             end
         end)
     end
-    w:onRegistry("ChatFrame.OnEditBoxShow", opened)
-    w:onRegistry("ChatFrame.OnEditBoxFocusGained", opened)
-    -- a line about to be sent in a fight: the scan then, the blocked
-    -- actions half a second later
-    w:onRegistry("ChatFrame.OnEditBoxPreSendText", function()
-        local s = started
-        if not s or not InCombatLockdown() then
+
+    local hooked: string[] = {}
+    local seen: { [unknown]: boolean } = {}
+    for _, tell in ipairs(TELLS) do
+        local owner = tell.owner
+        local t: unknown = owner and kit.resolve(owner) or nil
+        local fn = owner and tbl.field(t, tell.name) or tbl.field(_G, tell.name)
+        if type(fn) == "function" and not seen[fn] then
+            seen[fn] = true
+            local label = owner and (owner .. "." .. tell.name) or tell.name
+            local body = function()
+                opened("hook " .. label, nil, true)
+            end
+            local ok: boolean
+            if owner then
+                ok = w:hook(t, tell.name, body)
+            else
+                ok = w:hook(tell.name, nil, body)
+            end
+            if ok then
+                hooked[#hooked + 1] = label
+            end
+        end
+    end
+    local registry: string[] = {}
+    for _, e in ipairs({ "ChatFrame.OnEditBoxShow", "ChatFrame.OnEditBoxFocusGained" }) do
+        if w:onRegistry(e, function(box: unknown)
+            opened(e, box, false)
+        end) then
+            registry[#registry + 1] = e
+        end
+    end
+
+    -- A line sent in a fight: counted; after a whisper of this session's,
+    -- the scan then and the blocked actions half a second later answer.
+    local pending = false
+    local lastSend = -1
+    local function sentInFight(source: string)
+        local now = GetTime()
+        if lastSend == now then
             return
         end
-        local m = kit.moment("a chat line sent in a fight", nil, 0)
-        local t = GetTime()
+        lastSend = now
+        local rec = w:result()
+        rec.sendsInFight = (tonumber(rec.sendsInFight) or 0) + 1
+        rec.startedBeforeSend = started ~= nil
+        local s = started
+        if not s or pending then
+            return
+        end
+        pending = true
+        local m = kit.moment("a chat line sent in a fight", chatChecks(), 0)
+        m.source = source
         w:after(0.5, function()
-            local blocked = kit.blockedSince(t)
+            local blocked = kit.blockedSince(now)
             local sendBlocked = false
             for _, b in ipairs(blocked) do
-                if b:find("SendChatMessage") then
+                if b:find("SendChatMessage", 1, true) then
                     sendBlocked = true
                 end
             end
             m.blocked = blocked
-            w:finish(("after a SuuUI-started whisper, a line sent in a fight: %s, %s"):format(
+            w:finish(("after a whisper SuuUI started out of combat, a line sent in a fight: %s, %s"):format(
                 sendBlocked and "SendChatMessage was blocked" or "not blocked",
                 newlyWords(m)
             ), { started = s, sent = m, sendBlocked = sendBlocked })
         end)
-    end)
+    end
+    if w:onRegistry("ChatFrame.OnEditBoxPreSendText", function(box: unknown)
+        if InCombatLockdown() then
+            sentInFight("ChatFrame.OnEditBoxPreSendText")
+            return
+        end
+        -- a whisper line sent out of combat (typed, or opened by a click)
+        local chatType = chatTypeOf(box)
+        if WHISPER_TYPES[chatType] then
+            local stack = debugstack(1, 60, 20) or ""
+            note("sent (ChatFrame.OnEditBoxPreSendText)", startedBySuuUI(stack), chatType, stack)
+        end
+    end) then
+        registry[#registry + 1] = "ChatFrame.OnEditBoxPreSendText"
+    end
+    -- the send refused without the event (another edit box, a macro)
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
+        w:on(e, function(_, _addon: unknown, func: unknown)
+            local f = asString(func)
+            if InCombatLockdown() and f and f:find("SendChatMessage", 1, true) then
+                sentInFight(e)
+            end
+        end)
+    end
+    r.listening = { hooks = hooked, registry = registry }
+end
+
+-- What is still missing, for the status line.
+local function whisperProgress(r: Result): string
+    if r.started ~= nil then
+        return "a whisper SuuUI started is recorded: now send any chat line in a fight, before a /reload"
+    end
+    local n = #tbl.list(r.openings)
+    return n == 0 and "no whisper seen yet" or ("%d whisper openings seen, none started by SuuUI"):format(n)
 end
 
 export function items(): Item[]
@@ -548,8 +799,9 @@ export function items(): Item[]
 
             when = "chat",
             question = "Does a whisper started from a SuuUI click out of combat taint a line sent later in a fight (SendChatMessage blocked)?",
-            todo = "out of combat, start a whisper from SuuUI (the Social window's Whisper, a name in SuuUI's chat); later, in a fight, send any chat line",
+            todo = "out of combat, left-click a player's name in SuuUI's chat (or Whisper in the Social or group finder window); send that whisper or just close the line, either is fine; then, in a fight and without a /reload in between, send any chat line (say, party or a whisper)",
             arm = armWhisper,
+            progress = whisperProgress,
         },
     }
 end

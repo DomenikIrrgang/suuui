@@ -1,24 +1,309 @@
--- Diagnostics/Watch/Taint: who started a whisper, read from the stack at
--- the moment the chat input opened (the moments themselves are tested
+-- Diagnostics/Watch/Taint: who started a whisper, read from the stack by
+-- file (a function the game calls from C has no name in it), and the
+-- WHISPER-taint watcher: the game's tell functions post-hooked, the chat
+-- line's EventRegistry events, evidence of each whisper opening kept at
+-- once, the answer at a line sent in a fight (the other moments are tested
 -- through "/suu probe all" in tests/unit/Diagnostics/AllProbe).
 
-import test, expect from "wowlua:test"
-import startedBySuuUI from "/Diagnostics/Watch/Taint"
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as hooks from "/Core/Hooks"
+import * as kit from "/Diagnostics/Watch/Kit"
+import * as taint from "/Diagnostics/Watch/Taint"
+import lineFile, startedBySuuUI, shortStack from "/Diagnostics/Watch/Taint"
+import expectNoErrors from "../../../helpers"
+import ready, frameOf, resetChat from "../../Units/Chat/ChatHelpers"
 
-@test("who started a whisper: the frame below the game's SendTell")
+type Result = kit.Result
+
+const ID = "WHISPER-taint"
+const NAME = "Tamsin Ashford"
+
+-- A stack as the client prints it under the hook on SendTellWithMessage,
+-- for a name clicked in SuuUI's chat (dev build: its call wrappers too).
+const CLICKED: string[] = {
+    "[Interface/AddOns/SuuUI/src/Diagnostics/Watch/Taint.lua]:520: in function <Interface/AddOns/SuuUI/src/Diagnostics/Watch/Taint.lua:519>",
+    "[C]: in function 'pcall'",
+    "[Interface/AddOns/SuuUI/src/Diagnostics/Watch/Kit.lua]:383: in function <Interface/AddOns/SuuUI/src/Diagnostics/Watch/Kit.lua:379>",
+    "[Interface/AddOns/SuuUI/wowlua/runtime.lua]:1555: in function <Interface/AddOns/SuuUI/wowlua/runtime.lua:1553>",
+    "[Interface/AddOns/SuuUI/src/Core/Fault.lua]:357: in function 'run'",
+    "[C]: in function 'xpcall'",
+    "[Interface/AddOns/SuuUI/src/Core/Hooks.lua]:88: in function <Interface/AddOns/SuuUI/src/Core/Hooks.lua:85>",
+    "[Interface/AddOns/SuuUI/wowlua/std/errors.lua]:184: in function <Interface/AddOns/SuuUI/wowlua/std/errors.lua:180>",
+    "[Interface/AddOns/SuuUI/wowlua/std/hooks.lua]:35: in function <Interface/AddOns/SuuUI/wowlua/std/hooks.lua:34>",
+    "[C]: in function 'SendTellWithMessage'",
+    "[Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua]:385: in function <...dOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua:383>",
+    "[C]: in function 'pcall'",
+    "[Interface/AddOns/SuuUI/wowlua/std/errors.lua]:261: in function <Interface/AddOns/SuuUI/wowlua/std/errors.lua:257>",
+    "[tail call]: ?",
+    "[Interface/AddOns/SuuUI/wowlua/std/chat.lua]:28: in function 'whisper'",
+    "[Interface/AddOns/SuuUI/src/Units/Chat/Panel.lua]:289: in function <Interface/AddOns/SuuUI/src/Units/Chat/Panel.lua:268>",
+}
+
+-- The first `n` lines of CLICKED.
+local function clickedTo(n: number): string
+    local out: string[] = {}
+    for i = 1, n do
+        out[i] = CLICKED[i]
+    end
+    return table.concat(out, "\n")
+end
+
+local function item(): kit.Item
+    for _, it in ipairs(taint.items()) do
+        if it.id == ID then
+            return it
+        end
+    end
+    error("no item " .. ID)
+end
+
+local function record(): Result
+    return (assert(kit.store().results[ID], "no record"))
+end
+
+local current: kit.Watch? = nil
+
+-- The watcher armed on a fresh record, the blocked actions listened to (as
+-- "/suu probe all" does).
+local function arm(): kit.Watch
+    ready()
+    kit.store().results[ID] = nil
+    kit.listenBlocked(true)
+    kit.baseline()
+    local w = kit.Watch.new(item())
+    w:start()
+    current = w
+    return w
+end
+
+local function box(): EditBox
+    return (assert(frames.asEditBox(frames.find("ChatFrame1EditBox")), "no edit box"))
+end
+
+-- A left click on a player's name in SuuUI's chat (Units/Chat/Panel).
+local function clickName()
+    mock.script(frameOf(ChatFrame1), "OnHyperlinkClick", "player:" .. NAME .. ":7", "[" .. NAME .. "]", "LeftButton")
+end
+
+-- A chat line typed and sent (Enter), as by hand.
+local function typeLine(text: string)
+    ChatFrameUtil.OpenChat("")
+    mock.advanceFrames(1)
+    mock.typeText(box(), text)
+    mock.pressKey("ENTER")
+end
+
+local function openings(): Result[]
+    return tbl.list(record().openings) :: Result[]
+end
+
+local function anyLine(lines: unknown, text: string): boolean
+    for _, l in ipairs(tbl.list(lines)) do
+        if type(l) == "string" and l:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+@afterEach
+local function cleanup()
+    local w = current
+    if w then
+        w:stop()
+        current = nil
+    end
+    kit.listenBlocked(false)
+    kit.store().results[ID] = nil
+    resetChat()
+end
+
+--------------------------------------------------------------------------------
+-- Reading the stack
+--------------------------------------------------------------------------------
+
+@test("a stack line's file: bracketed, quoted, plain, with \\ paths; C and lost frames")
+local function files()
+    expect(lineFile("[Interface/AddOns/SuuUI/src/Units/Social.lua]:193: in function <Interface/AddOns/SuuUI/src/Units/Social.lua:190>"))
+        .toBe("Interface/AddOns/SuuUI/src/Units/Social.lua")
+    expect(lineFile("[string \"@Interface/AddOns/SuuUI/src/Units/Social.lua\"]:193: in function `Whisper'"))
+        .toBe("Interface/AddOns/SuuUI/src/Units/Social.lua")
+    expect(lineFile("Interface\\AddOns\\SuuUI\\src\\Units\\Social.lua:193: in function 'Whisper'"))
+        .toBe("Interface/AddOns/SuuUI/src/Units/Social.lua")
+    expect(lineFile("[C]: in function 'pcall'")).toBe("C")
+    expect(lineFile("[tail call]: ?")).toBe("tail call")
+    expect(lineFile("...")).toBe("")
+    expectNoErrors()
+end
+
+@test("who started a whisper: SuuUI's own code anywhere below, never the probe's or the hook machinery")
 local function whisperOrigin()
-    local suu = table.concat({
-        "[string \"@Interface/AddOns/SuuUI/SuuUI.lua\"]:10: in function <probe>",
-        "[string \"@Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua\"]:376: in function `SendTellWithMessage'",
+    -- the client's form: SendTell called through pcall has no name
+    expect(startedBySuuUI(table.concat(CLICKED, "\n"))).toBe(true)
+    -- a caller that tail-called the stdlib's whisper: only chat.lua is left
+    expect(startedBySuuUI(clickedTo(#CLICKED - 1))).toBe(true)
+    -- only the probe, the hook machinery, the error handling: not SuuUI's
+    expect(startedBySuuUI(clickedTo(#CLICKED - 3))).toBe(false)
+    -- with function names, backslashes, quoted, cut short at the front
+    expect(startedBySuuUI(table.concat({
         "[string \"@Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua\"]:385: in function `SendTell'",
-        "[C]: in function `call'",
-        "[string \"@Interface/AddOns/SuuUI/SuuUI.lua\"]:900: in function `whisper'",
-    }, "\n")
-    expect(startedBySuuUI(suu)).toBe(true)
-    local blizzard = table.concat({
-        "[string \"@Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua\"]:385: in function `SendTell'",
-        "[string \"@Interface/AddOns/Blizzard_UnitPopup/UnitPopupButtons.lua\"]:50: in function `OnClick'",
-    }, "\n")
-    expect(startedBySuuUI(blizzard)).toBe(false)
-    expect(startedBySuuUI("no tell here")).toBe(false)
+        "[string \"@Interface/AddOns/SuuUI/src/Units/Social.lua\"]:193: in function `Whisper'",
+    }, "\n"))).toBe(true)
+    expect(startedBySuuUI("Interface\\AddOns\\SuuUI\\src\\Units\\Guild.lua:873: in function 'whisperMember'")).toBe(true)
+    expect(startedBySuuUI("[...s/SuuUI/src/Units/Chat/Panel.lua]:289: in function <...s/SuuUI/src/Units/Chat/Panel.lua:268>")).toBe(true)
+    -- Blizzard's own Whisper (a unit menu), a plugin of SuuUI's, nothing
+    expect(startedBySuuUI(table.concat({
+        "[Interface/AddOns/Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua]:385: in function 'SendTell'",
+        "[Interface/AddOns/Blizzard_UnitPopup/UnitPopupButtons.lua]:50: in function 'OnClick'",
+    }, "\n"))).toBe(false)
+    expect(startedBySuuUI("[Interface/AddOns/SuuUI_HelloPlugin/src/Hello.lua]:3: in function 'say'")).toBe(false)
+    expect(startedBySuuUI("")).toBe(false)
+    expectNoErrors()
+end
+
+@test("the stack for the record: from the first real caller, the probe and machinery left out, short")
+local function short()
+    local lines = shortStack(table.concat(CLICKED, "\n"), 10)
+    expect(lines[1]).toBe("[Blizzard_ChatFrameBase/Shared/ChatFrameUtil.lua]:385: in function <:383>")
+    expect(lines[#lines]).toBe("[SuuUI/src/Units/Chat/Panel.lua]:289: in function <:268>")
+    expect(anyLine(lines, "Diagnostics")).toBe(false)
+    expect(anyLine(lines, "runtime.lua")).toBe(false)
+    expect(anyLine(lines, "Hooks.lua")).toBe(false)
+    expect(#shortStack(table.concat(CLICKED, "\n"), 2)).toBe(2)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The watcher
+--------------------------------------------------------------------------------
+
+@test("a name clicked in SuuUI's chat out of combat: the whisper marked started, its evidence kept at once")
+local function clicked()
+    local w = arm()
+    mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
+    local hooked = tbl.list(tbl.field(record(), "listening", "hooks"))
+    expect(tbl.contains(hooked, "ChatFrameUtil.SendTellWithMessage")).toBe(true)
+    expect(tbl.contains(hooked, "ChatFrameUtil.SendTell")).toBe(true)
+    -- the old globals are aliases there: not hooked twice
+    expect(tbl.contains(hooked, "ChatFrame_SendTell")).toBe(false)
+    expect(tbl.contains(tbl.list(tbl.field(record(), "listening", "registry")), "ChatFrame.OnEditBoxFocusGained")).toBe(true)
+    clickName()
+    -- at once: the record has it before any frame runs
+    local started = record().started
+    expect(type(started)).toBe("table")
+    expect(tbl.field(started, "source")).toBe("hook ChatFrameUtil.SendTellWithMessage")
+    expect(type(tbl.field(started, "checks", "editBoxFields"))).toBe("table")
+    local list = openings()
+    expect(#list).toBe(1)
+    local e = list[1]
+    expect(e.bySuuUI).toBe(true)
+    local sources = tbl.list(e.sources)
+    expect(tbl.contains(sources, "hook ChatFrameUtil.SendTellWithMessage")).toBe(true)
+    expect(tbl.contains(sources, "hook ChatFrameUtil.SendTell")).toBe(true)
+    expect(type(e.chatType)).toBe("string")
+    -- the focus event's stack first; the hook's reaches SuuUI's chat
+    expect(tbl.list(e.sources)[1]).toBe("ChatFrame.OnEditBoxFocusGained")
+    expect(anyLine(e.stack, "ChatFrameEditBox")).toBe(true)
+    expect(anyLine(e.hookStack, "SuuUI/src/Units/Chat/Panel.lua")).toBe(true)
+    expect(anyLine(e.stack, "Diagnostics")).toBe(false)
+    expect(anyLine(e.hookStack, "Diagnostics")).toBe(false)
+    -- the chat type once the game has set the line's text (in the edit
+    -- box's next OnUpdate)
+    mock.advanceFrames(30)
+    expect(e.chatTypeLater).toBe("WHISPER")
+    expect(record().done).toBe(false)
+    expect(w.active).toBe(true)
+    -- the hook leaves the game's functions secure
+    expect((issecurevariable(ChatFrameUtil, "SendTellWithMessage"))).toBe(true)
+    expectNoErrors()
+end
+
+@test("a whisper typed by hand: evidence of it, never marked started")
+local function byHand()
+    arm()
+    mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
+    typeLine("/w " .. NAME .. " hello")
+    mock.advanceTime(1)
+    expect(record().started).toBeNil()
+    local list = openings()
+    expect(#list).toBeGreaterThan(0)
+    local sent = false
+    for _, e in ipairs(list) do
+        expect(e.bySuuUI).toBe(false)
+        if tbl.contains(tbl.list(e.sources), "sent (ChatFrame.OnEditBoxPreSendText)") then
+            sent = true
+            expect(e.chatType).toBe("WHISPER")
+        end
+    end
+    expect(sent).toBe(true)
+    expectNoErrors()
+end
+
+@test("after a SuuUI whisper, a line sent in a fight: the item answers and stops")
+local function inFight()
+    local w = arm()
+    mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
+    clickName()
+    mock.advanceTime(1)
+    mock.player:enterCombat()
+    typeLine("in a fight")
+    mock.advanceTime(1)
+    local r = record()
+    expect(r.done).toBe(true)
+    expect(type(r.answer) == "string" and (r.answer :: string):find("a line sent in a fight", 1, true) ~= nil).toBe(true)
+    expect(type(r.sendBlocked)).toBe("boolean")
+    expect(r.sendsInFight).toBe(1)
+    expect(r.startedBeforeSend).toBe(true)
+    expect(type(tbl.field(r, "sent", "blocked"))).toBe("table")
+    expect(w.active).toBe(false)
+    expect(hooks.armed(w.owner)).toBe(0)
+    expectNoErrors()
+end
+
+@test("a line in a fight with no SuuUI whisper before: counted, still waiting")
+local function noWhisper()
+    local w = arm()
+    mock.player:enterCombat()
+    typeLine("in a fight")
+    mock.advanceTime(1)
+    local r = record()
+    expect(r.done).toBe(false)
+    expect(r.sendsInFight).toBe(1)
+    expect(r.startedBeforeSend).toBe(false)
+    expect(w.active).toBe(true)
+    expectNoErrors()
+end
+
+@test("evidence: the first five openings only; a whisper of an earlier session kept aside")
+local function capped()
+    kit.store().results[ID] = { question = "", done = false, started = { moment = "earlier" } }
+    local w = kit.Watch.new(item())
+    w:start()
+    current = w
+    expect(record().started).toBeNil()
+    expect(tbl.field(record(), "startedBeforeReload", "moment")).toBe("earlier")
+    mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
+    for _ = 1, 7 do
+        clickName()
+        mock.advanceTime(0.5)
+    end
+    expect(#openings()).toBe(5)
+    expectNoErrors()
+end
+
+@test("off: the hooks disarmed, a click records nothing more")
+local function off()
+    local w = arm()
+    expect(hooks.armed(w.owner)).toBeGreaterThan(1)
+    w:stop()
+    expect(hooks.armed(w.owner)).toBe(0)
+    mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
+    clickName()
+    mock.advanceTime(1)
+    expect(record().started).toBeNil()
+    expect(record().openings).toBeNil()
+    expectNoErrors()
 end
