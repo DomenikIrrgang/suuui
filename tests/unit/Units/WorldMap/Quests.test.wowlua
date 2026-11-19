@@ -8,6 +8,7 @@ import * as mock from "wowlua:mock"
 import * as quests from "/Units/WorldMap/Quests"
 import quest from "/Units/WorldMap/Rows"
 import type Quest from "/Units/WorldMap/Rows"
+import expectNoErrors from "../../../helpers"
 
 -- The quests in your log for these tests.
 local logged: { [number]: boolean } = {}
@@ -170,6 +171,70 @@ local function holidays()
     events = {}
     expect(quests.readCalendar()).toBe(false)
     expect(quests.eventOn("hallowsEnd")).toBe(true)
+end
+
+@test("holidays from a calendar with secret values: never an error; a secret event keeps the holidays that were on")
+local function secretHolidays()
+    local now: unknown = { year = 2026, month = 10, monthDay = 21, hour = 12, minute = 0 }
+    mock.fake("C_DateAndTime.GetCurrentCalendarTime", function(): unknown
+        return now
+    end)
+    local shown: unknown = { month = 10, year = 2026 }
+    mock.fake("C_Calendar.GetMonthInfo", function(_: number): unknown
+        return shown
+    end)
+    local function day(d: number, h: number?): unknown
+        return { year = 2026, month = 10, monthDay = d, hour = h or 0, minute = 0 }
+    end
+    local events: unknown[] = {}
+    local count: unknown = nil
+    mock.fake("C_Calendar.GetNumDayEvents", function(_: number, _: number): unknown
+        return count or #events
+    end)
+    mock.fake("C_Calendar.GetDayEvent", function(_: number, _: number, i: number): unknown
+        return events[i]
+    end)
+    -- Hallow's End is on
+    events = { { calendarType = "HOLIDAY", eventID = 324, startTime = day(18), endTime = day(31) } }
+    expect(quests.readCalendar()).toBe(true)
+    expect(quests.eventOn("hallowsEnd")).toBe(true)
+    -- a secret type (as in the game), a secret ID, a secret time, a secret
+    -- event: skipped, and Hallow's End stays on; a readable holiday still counts
+    events = {
+        { calendarType = mock.secret("PLAYER"), eventID = 1, startTime = day(1), endTime = day(31) },
+        { calendarType = "HOLIDAY", eventID = mock.secret(327), startTime = day(1), endTime = day(31) },
+        { calendarType = "HOLIDAY", eventID = 141, startTime = { year = 2026, month = 10, monthDay = 1, hour = mock.secret(0), minute = 0 }, endTime = day(31) },
+        mock.secret({ calendarType = "HOLIDAY", eventID = 181, startTime = day(1), endTime = day(31) }),
+        { calendarType = "HOLIDAY", eventID = 263, startTime = day(21, 6), endTime = day(21, 23) },
+    }
+    expect(quests.readCalendar()).toBe(true)
+    expect(quests.eventOn("hallowsEnd")).toBe(true)
+    expect(quests.eventOn("darkmoonFaire", 1429)).toBe(true)
+    expect(quests.eventOn("lunarFestival")).toBe(false)
+    expect(quests.eventOn("winterVeil")).toBe(false)
+    expect(quests.eventOn("noblegarden")).toBe(false)
+    -- every event readable again: what's read is all that's on
+    events = {}
+    expect(quests.readCalendar()).toBe(true)
+    expect(quests.eventOn("hallowsEnd")).toBe(false)
+    expect(quests.eventOn("darkmoonFaire", 1429)).toBe(false)
+    -- today, the shown month or the number of events secret: nothing read
+    events = { { calendarType = "HOLIDAY", eventID = 324, startTime = day(18), endTime = day(31) } }
+    count = mock.secret(1)
+    expect(quests.readCalendar()).toBe(false)
+    count = nil
+    shown = { month = mock.secret(10), year = 2026 }
+    expect(quests.readCalendar()).toBe(false)
+    shown = mock.secret({ month = 10, year = 2026 })
+    expect(quests.readCalendar()).toBe(false)
+    shown = { month = 10, year = 2026 }
+    now = { year = 2026, month = 10, monthDay = mock.secret(21), hour = 12, minute = 0 }
+    expect(quests.readCalendar()).toBe(false)
+    expect(quests.eventOn("hallowsEnd")).toBe(false)
+    now = { year = 2026, month = 10, monthDay = 21, hour = 12, minute = 0 }
+    expect(quests.readCalendar()).toBe(true)
+    expect(quests.eventOn("hallowsEnd")).toBe(true)
+    expectNoErrors()
 end
 
 @test("a quest's name: the data's, the game's title, else its ID")

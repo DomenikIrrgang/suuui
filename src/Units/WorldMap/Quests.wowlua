@@ -251,31 +251,69 @@ local HOLIDAYS: { [number]: string } = {
 local DARKMOON_SITE: { [number]: number } = { [263] = 1429, [264] = 1412 } -- Elwynn Forest, Mulgore
 local events: { on: { [string]: boolean }, darkmoon?: number } = { on = {} }
 
-local function stamp(t: CalendarTime?): number
-    return t and (((t.year * 100 + t.month) * 100 + t.monthDay) * 100 + t.hour) * 100 + t.minute or 0
+-- A calendar time as one number to compare; nil while it can't be read
+-- (any part secret: the game hides some of the calendar from addons).
+local function stamp(t: CalendarTime?): number?
+    if not (t and secret.readable(t)) then
+        return nil
+    end
+    local y, mo, d = asNumber(t.year), asNumber(t.month), asNumber(t.monthDay)
+    local h, mi = asNumber(t.hour), asNumber(t.minute)
+    if not (y and mo and d and h and mi) then
+        return nil
+    end
+    return (((y * 100 + mo) * 100 + d) * 100 + h) * 100 + mi
 end
 -- today's holidays; false while the calendar shows another month (you're
--- looking through it): what was read stays
+-- looking through it) or today can't be read: what was read stays. An event
+-- that can't be read (secret) is skipped, and the holidays that were on stay
+-- on: it may be one of them.
 export function readCalendar(): boolean
     local cal = C_Calendar
     local now = errors.tryValue(C_DateAndTime and C_DateAndTime.GetCurrentCalendarTime)
     if not (cal and now) then
         return false
     end
+    local t = stamp(now)
     local month = errors.tryValue(cal.GetMonthInfo, 0)
-    if not (month and month.month == now.month and month.year == now.year) then
+    if not (t and month and secret.readable(month)) then
+        return false
+    end
+    local today, thisMonth, thisYear = asNumber(now.monthDay), asNumber(now.month), asNumber(now.year)
+    if not (today and asNumber(month.month) == thisMonth and asNumber(month.year) == thisYear) then
+        return false
+    end
+    local count = asNumber(errors.tryValue(cal.GetNumDayEvents, 0, today))
+    if not count then
         return false
     end
     local on: { [string]: boolean } = {}
     local site: number? = nil
-    local t = stamp(now)
-    for i = 1, errors.tryValue(cal.GetNumDayEvents, 0, now.monthDay) or 0 do
-        local e = errors.tryValue(cal.GetDayEvent, 0, now.monthDay, i)
-        local key = e and e.calendarType == "HOLIDAY" and HOLIDAYS[e.eventID]
-        if e and key and stamp(e.startTime) <= t and t < stamp(e.endTime) then
-            on[key] = true
-            site = DARKMOON_SITE[e.eventID] or site
+    local skipped = false
+    for i = 1, count do
+        local e = errors.tryValue(cal.GetDayEvent, 0, today, i)
+        if e then
+            local kind: string?, id: number?, from: number?, to: number? = nil, nil, nil, nil
+            if secret.readable(e) then
+                kind, id = asString(e.calendarType), asNumber(e.eventID)
+                from, to = stamp(e.startTime), stamp(e.endTime)
+            end
+            if not (kind and id and from and to) then
+                skipped = true
+            else
+                local key = kind == "HOLIDAY" and HOLIDAYS[id]
+                if key and from <= t and t < to then
+                    on[key] = true
+                    site = DARKMOON_SITE[id] or site
+                end
+            end
         end
+    end
+    if skipped then
+        for key in pairs(events.on) do
+            on[key] = true
+        end
+        site = site or events.darkmoon
     end
     events.on, events.darkmoon = on, site
     return true
