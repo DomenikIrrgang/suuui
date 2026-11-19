@@ -1,6 +1,6 @@
 -- Units/Ledger/PriceIndex.wowlua
--- What the Ledger makes of one ruleset's prices (Units/Ledger), kept so no
--- page works it out again: per item its summary (the latest look, the
+-- What the Ledger makes of one ruleset's prices (Units/Ledger; the prices
+-- are the price store's, SuuUI.Prices), kept so no page works it out again: per item its summary (the latest look, the
 -- usual price, the change) and what that look is by the deal settings
 -- (how far under, under vendor price, the deals' order), and the items
 -- that are deals. A summary holds for the day, its deal part for the deal
@@ -17,8 +17,7 @@
 -- `done` callback). What changed since is logged (Log: the items, in
 -- order), so a page that keeps rows of its own updates only those.
 
-import * as store from "./Store"
-import type Look, PriceMap from "./Store"
+import type PriceLook from "/Core/API"
 import * as stats from "./Stats"
 import * as days from "./Days"
 
@@ -28,7 +27,7 @@ import * as days from "./Days"
 -- that price), the deals' order (the furthest under first).
 export type ItemSummary = {
     itemID: number,
-    look: Look,
+    look: PriceLook,
     usual?: number,
     change?: number,
     under?: number,
@@ -50,8 +49,11 @@ export type DealEntry = {
 }
 
 export type PriceIndexOptions = {
-    -- the ruleset's prices (nil: none)
-    map: () -> PriceMap?,
+    -- the ruleset's items with prices; an item's latest look and usual
+    -- price (nil: none)
+    items: () -> number[],
+    latest: (itemID: number) -> PriceLook?,
+    usual: (itemID: number) -> number?,
     -- the deal settings: how far under counts, whether under vendor
     -- price does (a change redoes the deal parts)
     settings: () -> (number, boolean),
@@ -117,10 +119,7 @@ export class PriceIndex
         self.gen += 1
         self.log = {}
         self.dealList = nil
-        local queue: number[] = {}
-        for itemID in pairs(self.o.map() or {}) do
-            queue[#queue + 1] = itemID
-        end
+        local queue = self.o.items()
         -- (in item order: the same for every pass)
         table.sort(queue)
         self.queue, self.qi, self.total = queue, 1, #queue
@@ -129,22 +128,18 @@ export class PriceIndex
     -- An item worked out (its summary when the day's isn't there, its deal
     -- part when the settings' isn't); dropped when it has no looks.
     -- -> its summary.
-    function Fill(itemID: number, s: string?): ItemSummary?
-        if not s then
-            self.items[itemID] = nil
-            if self.dealSet[itemID] then
-                self.dealSet[itemID] = nil
-                self.dealList = nil
-            end
-            return nil
-        end
+    function Fill(itemID: number): ItemSummary?
         local sm = self.items[itemID]
         if not sm then
-            local look = store.latest(s)
+            local look = self.o.latest(itemID)
             if not look then
+                if self.dealSet[itemID] then
+                    self.dealSet[itemID] = nil
+                    self.dealList = nil
+                end
                 return nil
             end
-            local usual = store.usualOf(s, self.day)
+            local usual = self.o.usual(itemID)
             sm = {
                 itemID = itemID,
                 look = look,
@@ -185,18 +180,30 @@ export class PriceIndex
 
     -- Up to `n` items of the queue worked out now (a ms budget too, when
     -- given). -> whether the queue is done.
+    -- (An item already worked out, by a look since the pass began, costs a
+    -- lookup and doesn't count: a Scan all read since works out every item
+    -- it found as it reads them.)
     function Run(n: number, ms: number?): boolean
-        local map = self.o.map() or {}
         local queue = self.queue
-        local stop = math.min(#queue, self.qi + n - 1)
+        local count = #queue
         local deadline = ms and (debugprofilestop() + ms) or nil
-        local i = self.qi
-        while i <= stop do
+        local items, dk = self.items, self.dk
+        local i, done = self.qi, 0
+        while i <= count do
             local id = queue[i]
-            self:Fill(id, map[id])
-            i += 1
-            if deadline and debugprofilestop() > deadline then
-                break
+            local sm = items[id]
+            if not (sm and sm.dk == dk) then
+                if done >= n then
+                    break
+                end
+                self:Fill(id)
+                done += 1
+                i += 1
+                if deadline and debugprofilestop() > deadline then
+                    break
+                end
+            else
+                i += 1
             end
         end
         self.qi = i
@@ -211,8 +218,13 @@ export class PriceIndex
     -- a frame and `done` told at the end. -> whether it's ready now.
     function Prepare(now: number?): boolean
         self:Check()
+        -- (the front already worked out skipped at once: after a Scan all
+        -- that found every item, nothing is left)
+        if self:Run(0) then
+            return true
+        end
         local left = #self.queue - self.qi + 1
-        if left <= 0 or (left <= (now or 0) and self:Run(left)) then
+        if left <= (now or 0) and self:Run(left) then
             return true
         end
         if not self.ticker then
@@ -241,8 +253,7 @@ export class PriceIndex
         if sm and sm.dk == self.dk then
             return sm
         end
-        local map = self.o.map()
-        return self:Fill(itemID, map and map[itemID])
+        return self:Fill(itemID)
     end
 
     -- A look changed an item: worked out again now, and logged (`checked`:
@@ -253,8 +264,7 @@ export class PriceIndex
             self:Check()
         end
         self.items[itemID] = nil
-        local map = self.o.map()
-        local sm = self:Fill(itemID, map and map[itemID])
+        local sm = self:Fill(itemID)
         self:Log(itemID)
         return sm
     end
@@ -268,8 +278,7 @@ export class PriceIndex
         end
         local was = sm.underVendor
         sm.dk = ""
-        local map = self.o.map()
-        self:Fill(itemID, map and map[itemID])
+        self:Fill(itemID)
         if sm.underVendor ~= was then
             self:Log(itemID)
         end

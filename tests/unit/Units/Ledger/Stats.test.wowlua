@@ -1,10 +1,11 @@
--- Units/Ledger/Stats: the usual price, change, deals, and when an item is
--- cheapest (each look against its own week; 3 looks a row; 4 % apart).
+-- Units/Ledger/Stats: change, deals, and when an item is cheapest (each
+-- look against its own week; 3 looks a row; 4 % apart). The usual price is
+-- the price store's (Core/Prices/Store).
 
 import test, expect, cases from "wowlua:test"
 import * as stats from "/Units/Ledger/Stats"
 import type WhenRow from "/Units/Ledger/Stats"
-import * as pack from "/Units/Ledger/Pack"
+import type PriceLook from "/Core/API"
 import * as days from "/Units/Ledger/Days"
 import expectNoErrors from "../../../helpers"
 
@@ -18,20 +19,6 @@ local function median()
     expect(stats.median({})).toBeNil()
     expect(stats.median({ 1 }, 0)).toBeNil()
     expect(stats.median({ 7 })).toBe(7)
-end
-
-@test("the usual price: the middle of the last 14 days that have a look, to the copper")
-local function usual()
-    expect(stats.usual({})).toBeNil()
-    expect(stats.usual({ 1000 })).toBe(1000)
-    expect(stats.usual({ 1000, 1001 })).toBe(1001)
-    -- the 15th day back and older don't count
-    local lows: number[] = {}
-    for i = 1, 14 do
-        lows[i] = 100 + i
-    end
-    lows[15], lows[16], lows[17] = 1, 1, 1
-    expect(stats.usual(lows)).toBe(108)
 end
 
 @test("change: the lowest now against the usual price, in percent")
@@ -91,16 +78,16 @@ local function whenCheapest()
     -- eight weeks, a look each Night and Evening; the price rises 1 % a day;
     -- Tuesdays 10 % under, nights 6 % under
     local first = days.dayNumber(2026, 9, 21) -- a Monday
-    local s: string? = nil
-    for d = first, first + 55 do
+    local list: PriceLook[] = {}
+    for d = first + 55, first, -1 do
         local base = 10000 * (1.01 ^ (d - first))
         if days.weekday(d) == 2 then
             base = base * 0.9
         end
-        s = pack.record(s, d, days.NIGHT, math.floor(base * 0.94), 0, 5, 5)
-        s = pack.record(s, d, days.EVENING, math.floor(base), 0, 5, 5)
+        list[#list + 1] = { day = d, period = days.EVENING, low = math.floor(base), most = 0, qty = 5, n = 5 }
+        list[#list + 1] = { day = d, period = days.NIGHT, low = math.floor(base * 0.94), most = 0, qty = 5, n = 5 }
     end
-    local w = stats.whenCheapest(pack.decode(s, pack.newPoints()))
+    local w = stats.whenCheapest(list)
     expect(#w.weekdays).toBe(7)
     expect(#w.times).toBe(4)
     expect(w.weekdays[2].looks).toBe(8)
@@ -121,7 +108,7 @@ local function whenCheapest()
     expect(w.periods.enough).toBe(false)
     expect(w.times[days.NIGHT].pct < w.times[days.EVENING].pct - 4).toBe(true)
     -- nothing seen: rows of nothing
-    local none = stats.whenCheapest(pack.newPoints())
+    local none = stats.whenCheapest({})
     expect(none.weekdays[1]).toEqual({ pct = 0, looks = 0 })
     expect(none.days.enough).toBe(false)
     expectNoErrors()

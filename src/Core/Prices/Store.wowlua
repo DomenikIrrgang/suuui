@@ -1,14 +1,13 @@
--- Units/Ledger/Store.wowlua
--- The Ledger's price store (Units/Ledger): per ruleset, per item, the
--- looks of the last 60 days (Pack: one string per item), and what the
--- window reads of them: the latest look, the daily lows (and what most
--- sell it for) of the last days, the last 14 days' lows for the usual
--- price, every look of a range. Pure over the strings it is given; the
--- module keeps them in SuuUILedger.
+-- Core/Prices/Store.wowlua
+-- The price store's reads and writes (Core/Prices): per ruleset, per item,
+-- the looks of the last 60 days (Pack: one string per item), and what is
+-- read of them: the latest look, the daily lows (and what most sell it
+-- for) of the last days, the last 14 days' lows for the usual price, every
+-- look of a range. Pure over the strings it is given; Core/Prices keeps
+-- them in SuuUIPrices.
 
 import * as pack from "./Pack"
 import type Points from "./Pack"
-import * as stats from "./Stats"
 
 -- How long looks are kept (and read back), in days.
 export const KEEP_DAYS = 60
@@ -88,16 +87,43 @@ export function recentLows(s: string?, today: number, count: number): number[]
     return out
 end
 
--- The usual price (Stats.usual) on `today`; nil: no look kept.
-local usualLows: number[] = {}
-export function usualOf(s: string?, today: number): number?
-    pack.recentLows(s, today, oldestKept(today), stats.USUAL_DAYS, usualLows)
-    return stats.usual(usualLows)
+-- The usual price: the middle (median) of the lowest buyouts of the last
+-- 14 days that have a look (decided 2026-11-18, for the Ledger).
+export const USUAL_DAYS = 14
+
+-- The middle of the first `n` values (all: nil n), the mean of the middle
+-- two for an even count; nil when there are none. `values` is left as it
+-- was.
+export function median(values: number[], n: number?): number?
+    local count = n or #values
+    if count <= 0 then
+        return nil
+    end
+    local sorted: number[] = {}
+    for i = 1, count do
+        sorted[i] = values[i]
+    end
+    table.sort(sorted)
+    local mid = math.floor(count / 2)
+    if count % 2 == 1 then
+        return sorted[mid + 1]
+    end
+    return (sorted[mid] + sorted[mid + 1]) / 2
 end
 
--- When it's cheapest (Stats.whenCheapest) from the kept looks.
-export function whenOf(s: string?, today: number): stats.When
-    return stats.whenCheapest(pack.decode(s, scratch, oldestKept(today)))
+-- The usual price from the daily lows of the days that have a look, the
+-- newest first (any number of them; the first 14 count), rounded to a
+-- copper. Nil: no look.
+export function usual(lowsNewestFirst: number[]): number?
+    local m = median(lowsNewestFirst, math.min(#lowsNewestFirst, USUAL_DAYS))
+    return m and math.floor(m + 0.5)
+end
+
+-- The usual price on `today`; nil: no look kept.
+local usualLows: number[] = {}
+export function usualOf(s: string?, today: number): number?
+    pack.recentLows(s, today, oldestKept(today), USUAL_DAYS, usualLows)
+    return usual(usualLows)
 end
 
 -- A look recorded for an item in `map` (Pack.record): whether it changed

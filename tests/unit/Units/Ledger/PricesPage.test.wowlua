@@ -11,13 +11,14 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
-import internal M, SCAN_SLICE from "/Units/Ledger"
+import internal M from "/Units/Ledger"
 import type PricesPage, PriceRow, PriceEntry from "/Units/Ledger/PricesPage"
 import BUILD_ITEMS, NOW_ITEMS from "/Units/Ledger/PricesPage"
 import PASS_ITEMS from "/Units/Ledger/PriceIndex"
 import expectNoErrors from "../../../helpers"
 import tokenOf from "../../UI/WindowsHelpers"
-import seed, openLedger, wipe, LOTUS, KINGSBLOOD, AXE, ESSENCE, ORE, LATE from "./LedgerHelpers"
+import seed, openLedger, wipe, LOTUS, KINGSBLOOD, AXE, ESSENCE, ORE, LATE, see, scanAll, scanRead from "./LedgerHelpers"
+import * as prices from "/Core/Prices"
 
 @afterEach
 local function cleanup()
@@ -239,7 +240,7 @@ end
 local function lateName()
     seed()
     mock.defineItem(990611, { name = "Test Slow Moss", quality = 2 }, { cached = false, delay = 0.3 })
-    M:RecordLook(990611, 50, 0, 1, 1)
+    see(990611, 50, 0, 1, 1)
     mock.advanceFrames(2)
     local names = M:Names()
     -- (others waiting already: the row in sight goes first)
@@ -259,7 +260,7 @@ local function lateName()
     late = rowOf(p, 990611)
     expect(late.name:GetText()).toBe("Test Slow Moss")
     expect(tokenOf(late.name)).toBe("quality-uncommon")
-    expect(assert(M:Data().names)[990611]).toBe("2Test Slow Moss")
+    expect(assert(prices.data().names)[990611]).toBe("2Test Slow Moss")
     expect(names:Pending(990611)).toBe(false)
     expect(LATE).toBe(990606)
 end
@@ -270,7 +271,7 @@ local function scanNames()
     mock.defineItem(990613, { name = "Test Hidden Bloom", quality = 3 }, { cached = false, delay = 600 })
     mock.defineItem(990614, { name = "Test Hidden Root", quality = 1 }, { cached = false, delay = 600 })
     -- (as the auction house tells it: the names it had, by item)
-    M:Emit("SUUUI_AUCTION_SCANNED", { 990613, 500, 0, 3, 1, 990614, 80, 0, 9, 2 }, 2, { [990613] = "Test Hidden Bloom", [990614] = "Test Hidden Root" }, { [990613] = 3, [990614] = 1 })
+    scanAll({ 990613, 500, 0, 3, 1, 990614, 80, 0, 9, 2 }, 2, { [990613] = "Test Hidden Bloom", [990614] = "Test Hidden Root" }, { [990613] = 3, [990614] = 1 })
     mock.advanceTime(0.05)
     expect(C_Item.IsItemDataCachedByID(990613)).toBe(false)
     local p = page()
@@ -299,7 +300,7 @@ local function backgroundNames()
             looks[#looks + 1] = v
         end
     end
-    M:Emit("SUUUI_AUCTION_SCANNED", looks, N)
+    scanAll(looks, N)
     mock.advanceTime(0.05)
     local names = M:Names()
     expect(names:PendingCount()).toBe(N)
@@ -318,7 +319,7 @@ local function backgroundNames()
     expect(#ids(p)).toBe(7)
     expect(p.countText:GetText()).toBe("7 items")
     expect(names:PendingCount()).toBe(0)
-    expect(assert(M:Data().names)[990707]).toBe("1Test Cloth 7")
+    expect(assert(prices.data().names)[990707]).toBe("1Test Cloth 7")
     p.search.edit:ClearFocus()
 end
 
@@ -328,7 +329,7 @@ local function askedAgain()
     mock.advanceTime(1)
     -- (the client never answers in time)
     mock.defineItem(990615, { name = "Test Mute Leaf", quality = 1 }, { cached = false, delay = 600 })
-    M:RecordLook(990615, 50, 0, 1, 1)
+    see(990615, 50, 0, 1, 1)
     mock.advanceFrames(2)
     local asks = 0
     hooksecurefunc(C_Item, "RequestLoadItemDataByID", function(id: number)
@@ -364,7 +365,7 @@ end
 @test("the ruleset: those with prices; another one's prices, its name in the head")
 local function rulesets()
     seed()
-    assert(M:PriceMap("Roleplay", true))[ORE] = assert(M:PriceMap())[ORE]
+    assert(prices.map("Roleplay", true))[ORE] = assert(prices.map())[ORE]
     local w = openLedger("prices")
     local p = w.prices
     expect(#p.rulesets.options).toBe(2)
@@ -385,10 +386,7 @@ local function thousands()
             looks[#looks + 1] = v
         end
     end
-    M:RecordScan(looks, 3000)
-    for _ = 1, math.ceil(3000 / SCAN_SLICE) do
-        mock.advanceTime(0.01)
-    end
+    scanRead(looks, 3000)
     -- (the rows built a slice a frame: the loading mark meanwhile)
     local p = page()
     expect(p.loadingView).toBeShown()
@@ -417,10 +415,7 @@ local function scanMany(n: number)
             looks[#looks + 1] = v
         end
     end
-    M:RecordScan(looks, n)
-    for _ = 1, math.ceil(n / SCAN_SLICE) + 1 do
-        mock.advanceTime(0.01)
-    end
+    scanRead(looks, n)
 end
 
 @test("the rows kept between opens; a search's look changes only its row; a new day or a deal setting builds them again behind the loading mark")
@@ -444,7 +439,7 @@ local function keptRows()
     expect(p:Ordered()).toBe(order)
     -- a search's look: that row only, at once
     local e = assert(p.byID[3100005])
-    M:RecordLook(3100005, 7, 0, 3, 1)
+    see(3100005, 7, 0, 3, 1)
     mock.advanceFrames(2)
     expect(p.loadingView).never.toBeShown()
     expect(p.entries).toBe(entries)
@@ -541,13 +536,14 @@ local function keptAcrossReload()
     mock.defineItem(990617, { name = "Test Kept Moss", quality = 2 }, { cached = false, delay = 600 })
     if mock.reloads() == 0 then
         seed()
-        -- (a search's look, with the name the house told)
-        M:Emit("SUUUI_AUCTION_SEEN", 990617, 50, 0, 1, 1, "search", "Test Kept Moss", 2)
+        -- (a search's look, with the name the house told: the price
+        -- store keeps it)
+        see(990617, 50, 0, 1, 1, nil, "Test Kept Moss", 2)
         mock.advanceTime(0.05)
-        expect(assert(M:Data().names)[990617]).toBe("2Test Kept Moss")
+        expect(assert(prices.data().names)[990617]).toBe("2Test Kept Moss")
         mock.reloadUI()
     end
-    -- (a fresh client: only what SuuUILedger kept)
+    -- (a fresh client: only what SuuUIPrices kept)
     expect(mock.reloads()).toBe(1)
     expect(M.itemNames).toBeNil()
     expect(C_Item.IsItemDataCachedByID(990617)).toBe(false)

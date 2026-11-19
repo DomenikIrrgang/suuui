@@ -3,11 +3,19 @@
 -- items, 40 days of looks at every time of day, a Scan all, characters
 -- with gold day by day, the window opened, and a clean slate after.
 --
+--   see(itemID, low, most, qty, n, at?, name?, quality?)
+--                    a look as the auction house tells one: kept in the
+--                    price store, then seen by the Ledger's watches
+--   scanAll(looks, items, names?, qualities?)
+--                    a Scan all's looks kept in the price store (its first
+--                    slice now; the Ledger reads them once all are)
+--   scanRead(looks, items, names?, qualities?)
+--                    the same, run until the Ledger has read it all
 --   seed()           the looks, the scan and the characters
 --   seedBooks()      transactions of this week (yours and Kaelith's)
 --   openLedger(view?, opts?)   the window opened (through the service)
---   wipe()           the Ledger's data (the names too) and the window's state
---                    cleared
+--   wipe()           the Ledger's data, the price store (the names too) and
+--                    the window's state cleared
 
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
@@ -17,6 +25,8 @@ import type LedgerOpenOptions from "/Core/API"
 import * as gold from "/Units/Ledger/Gold"
 import * as days from "/Units/Ledger/Days"
 import * as books from "/Units/Ledger/Books"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
+import * as prices from "/Core/Prices"
 
 export const LOTUS = 990601
 export const KINGSBLOOD = 990602
@@ -33,6 +43,36 @@ mock.defineItem(ORE, { name = "Test Ore", quality = 1, sellPrice = 25, classID =
 mock.defineItem(LATE, { name = "Test Late Herb", quality = 1, sellPrice = 10, classID = 7 }, { cached = false, delay = 0.3 })
 
 const DAY = 86400
+
+export function see(
+    itemID: number,
+    low: number,
+    most: number,
+    qty: number,
+    n: number,
+    at: number?,
+    name: string?,
+    quality: number?
+): boolean
+    local changed = priceStore.look(itemID, low, most, qty, n, at, name, quality)
+    M:SeeLook(itemID, low, at)
+    return changed
+end
+
+export function scanAll(looks: number[], items: number, names: { [number]: string }?, qualities: { [number]: number }?)
+    prices.recordScan(looks, items, names, qualities)
+end
+
+export function scanRead(looks: number[], items: number, names: { [number]: string }?, qualities: { [number]: number }?)
+    prices.recordScan(looks, items, names, qualities)
+    local guard = 0
+    while (prices.scanning() or M.scanTicker ~= nil) and guard < 1000 do
+        mock.advanceTime(0.01)
+        guard += 1
+    end
+    -- (and what it told, the frame after)
+    mock.advanceTime(0.01)
+end
 
 -- The start of the day `k` days ago, at `hour`.
 local function at(k: number, hour: number): number
@@ -55,7 +95,7 @@ local function looks(itemID: number, price: number, n: number)
             if hour == 2 then
                 p = p * 0.93
             end
-            M:RecordLook(itemID, math.floor(p), math.floor(p * 1.15), 40, 6, at(k, hour))
+            priceStore.look(itemID, math.floor(p), math.floor(p * 1.15), 40, 6, at(k, hour))
         end
     end
 end
@@ -85,7 +125,7 @@ export function seed()
     looks(ORE, 2000, 3)
     -- the scan: the lotus 29 % under, the axe under vendor price, the rest
     -- as usual
-    M:RecordScan({
+    priceStore.scan({
         LOTUS,
         284000,
         320000,
@@ -175,8 +215,9 @@ export function wipe()
         t.rangeKey = "week"
     end
     local d = M:Data()
-    d.prices, d.scans, d.watches, d.pruned, d.gold, d.goal = nil, nil, nil, nil, nil, nil
-    d.books, d.mail, d.booksPruned, d.names = nil, nil, nil, nil
+    d.scans, d.watches, d.gold, d.goal = nil, nil, nil, nil
+    d.books, d.mail, d.booksPruned = nil, nil, nil
+    priceStore.wipe()
     local names = M.itemNames
     if names then
         names:Stop()

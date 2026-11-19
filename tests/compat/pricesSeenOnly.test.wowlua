@@ -1,0 +1,46 @@
+-- Saved prices from a SuuUI without the Ledger: tests/profiles/
+-- prices-seen-only.json has only the auction house's `seen` of three
+-- characters (one said its ruleset, two by their key's realm; one on
+-- another ruleset). At load each newer look moves into the price store,
+-- in time order, and `seen` goes.
+
+import test, expect, config from "wowlua:test"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import * as prices from "/Core/Prices"
+import * as DB from "/Core/DB"
+import internal M as AH from "/Units/AuctionHouse"
+import errorsSoFar from "../helpers"
+
+config({ profile = "prices-seen-only" })
+
+const ORE = 991201
+const BAR = 991202
+const GEM = 991203
+
+@test("only the auction house's seen: its looks moved into the price store, per ruleset; seen gone")
+local function seenOnly()
+    expect(prices.lastMigration()).toEqual({ ledgerItems = 0, names = 0, seenLooks = 4, dropped = 0, chars = 3 })
+    local today = SuuUI.Calendar.DayOf()
+    local ore = prices.looks(ORE)
+    expect(#ore).toBe(2)
+    expect(ore[1].low).toBe(110)
+    expect(ore[2]).toEqual({ day = today - 2, period = SuuUI.Calendar.NOON, low = 120, most = 150, qty = 40, n = 3 })
+    expect(prices.latest(BAR)).toEqual({
+        day = today,
+        period = SuuUI.Calendar.NIGHT,
+        low = 60,
+        most = 0,
+        qty = 0,
+        n = 0,
+    })
+    expect(assert(prices.latest(GEM, "Elsewhere")).low).toBe(5)
+    expect(prices.latest(GEM)).toBeNil()
+    for _, key in ipairs({ "Player - Realm", "Altplayer - Realm", "Farplayer - Elsewhere" }) do
+        expect(tbl.field(DB.db, "charData", key, "auctionhouse", "seen")).toBeNil()
+    end
+    expect(tbl.field(DB.db, "charData", "Player - Realm", "auctionhouse", "posted")).toBeTruthy()
+    -- the auction house reads it: the newest look on this ruleset
+    expect(assert(AH:LowestSeen(ORE)).price).toBe(110)
+    expect(errorsSoFar()).toEqual({})
+end

@@ -1,0 +1,79 @@
+-- Saved prices from before the price store (0.48): tests/profiles/
+-- prices-ledger.json has the Ledger's prices, names and prune day in
+-- SuuUILedger (this ruleset's ore and bar, another ruleset's gem) and two
+-- characters' auction house `seen`: this one's ore look of this morning
+-- (newer than the Ledger's newest), its bar's of days before (older); an
+-- alt's ore look later this morning (the same period) and a hide only it
+-- saw. At load the store takes the Ledger's prices unchanged, the newer
+-- looks of `seen`, and `seen` goes; a second load changes nothing.
+
+import test, expect, config from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import * as prices from "/Core/Prices"
+import * as DB from "/Core/DB"
+import internal M as Ledger from "/Units/Ledger"
+import internal M as AH from "/Units/AuctionHouse"
+import errorsSoFar from "../helpers"
+
+config({ profile = "prices-ledger" })
+
+const ORE = 991201
+const BAR = 991202
+const GEM = 991203
+const HIDE = 991204
+
+local function ah(key: string): unknown
+    return tbl.field(DB.db, "charData", key, "auctionhouse")
+end
+
+@test(
+    "the old prices moved into the price store at load: the Ledger's unchanged, the newer seen looks added, seen gone; again after a /reload"
+)
+local function moved()
+    -- (each load: the first, then after a /reload with what it saved)
+    if mock.reloads() == 0 then
+        local m = assert(prices.lastMigration())
+        expect(m).toEqual({ ledgerItems = 3, names = 2, seenLooks = 2, dropped = 2, chars = 2 })
+    else
+        expect(prices.lastMigration()).toEqual({ ledgerItems = 0, names = 0, seenLooks = 0, dropped = 0, chars = 0 })
+    end
+    local today = SuuUI.Calendar.DayOf()
+    -- the Ledger's, as it kept them
+    expect(prices.packed(BAR)).toBe("iqt/jV#")
+    expect(prices.packed(GEM, "Another")).toBe("iqtCT$")
+    expect(assert(prices.latest(GEM, "Another")).low).toBe(50)
+    expect({ prices.keptName(BAR) }).toEqual({ "Test Compat Bar", 2 })
+    expect(assert(prices.data().pruned).Realm).toBe(20453)
+    -- this character's ore look of this morning in front; the alt's of the
+    -- same period dropped; the alt's hide a look of its own
+    local ore = prices.looks(ORE)
+    expect(#ore).toBe(3)
+    expect(ore[1]).toEqual({ day = today, period = SuuUI.Calendar.MORNING, low = 950, most = 0, qty = 7, n = 2 })
+    expect(ore[2]).toEqual({ day = today - 1, period = SuuUI.Calendar.NOON, low = 1000, most = 1200, qty = 6, n = 3 })
+    expect(ore[3].low).toBe(1100)
+    expect(assert(prices.latest(HIDE)).low).toBe(77)
+    expect(#prices.looks(BAR)).toBe(1)
+    -- gone from where they were; the rest stays
+    local l = tbl.field(_G, "SuuUILedger")
+    expect(tbl.field(l, "prices")).toBeNil()
+    expect(tbl.field(l, "names")).toBeNil()
+    expect(tbl.field(l, "pruned")).toBeNil()
+    expect(tbl.field(l, "goal", "name")).toBe("Test Goal")
+    expect(tbl.field(ah("Player - Realm"), "seen")).toBeNil()
+    expect(tbl.field(ah("Altplayer - Realm"), "seen")).toBeNil()
+    expect(tbl.field(ah("Player - Realm"), "scanAt")).toBe(1767182400)
+    expect(tbl.field(ah("Player - Realm"), "posted")).toBeTruthy()
+    -- read as the modules read it
+    expect(assert(AH:LowestSeen(ORE)).price).toBe(950)
+    expect(assert(Ledger:Latest(ORE)).low).toBe(950)
+    expect(Ledger:Items()).toContain(HIDE)
+    expect(Ledger:Rulesets()).toEqual({ "Realm", "Another" })
+    expect(assert(Ledger:ItemName(BAR))).toBe("Test Compat Bar")
+    expect(errorsSoFar()).toEqual({})
+    if mock.reloads() == 0 then
+        mock.reloadUI()
+    end
+    expect(mock.reloads()).toBe(1)
+end

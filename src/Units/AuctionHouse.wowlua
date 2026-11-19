@@ -197,14 +197,15 @@ local WIDTH, HEIGHT = 840, 580
 
 local TONE: { [string]: string } = { info = "ink-muted", ok = "fel", error = "ember-text" }
 
--- What SuuUI remembers per item, per character: what the house showed last,
--- what you posted at; your bids; the last Scan all. `ruleset`: the
--- character's (SuuUI.Ruleset(), kept since API 0.48; before, its key's
--- realm says it): each ruleset has its own house, so prices are read only
--- from characters on this one.
+-- What SuuUI remembers per character: what you posted at; your bids; the
+-- last Scan all. `ruleset`: the character's (SuuUI.Ruleset(), kept since
+-- API 0.48; before, its key's realm says it): each ruleset has its own
+-- house, so posted prices are read only from characters on this one. (What
+-- the house showed is the price store's, one copy per ruleset: Prices.
+-- Until 0.48 each character kept its own `seen`; Core/Prices moved them
+-- in.)
 export type CharStore = {
     ruleset?: string,
-    seen?: { [number]: SeenEntry },
     posted?: { [number]: PostedEntry },
     bids?: { [number]: number },
     scanAt?: number,
@@ -548,10 +549,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- What SuuUI remembers per item, and the item tooltips (AuctionHouse/Prices)
     ----------------------------------------------------------------------------
 
-    -- (`scan`: one of Scan all's, told with the rest when it is done;
-    -- the item's name and quality when the house told them)
-    function Seen(itemID: number?, m: Market | number | nil, qty: number?, scan: boolean?, name: string?, quality: number?)
-        ahPrices.recordSeen(self, itemID, m, qty, scan, name, quality)
+    -- (the item's name and quality when the house told them)
+    function Seen(itemID: number?, m: Market | number | nil, qty: number?, name: string?, quality: number?)
+        ahPrices.recordSeen(self, itemID, m, qty, name, quality)
     end
 
     function LowestSeen(itemID: number?): SeenEntry?
@@ -1123,7 +1123,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 return self:SearchItem(item)
             end,
             -- (0.44) the newest price any of your characters saw (crafting
-            -- costs); 0.48: those on this ruleset
+            -- costs); 0.48: on this ruleset, from the price store (`at`: the
+            -- start of the time of day it was seen in)
             Price = function(itemID: number): AuctionPrice?
                 local e = self:LowestSeen(itemID)
                 return e and { price = e.price, at = e.at } or nil

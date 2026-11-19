@@ -1,20 +1,14 @@
 -- Units/Ledger/Names.wowlua
--- The item names the Ledger has learned (Units/Ledger), so its pages and
--- notes show them and the Prices search finds them although the client's
--- item cache doesn't hold them (it forgets; a Scan all brings thousands it
--- never had). Kept in SuuUILedger.names, shared by every ruleset, no days:
--- itemID -> one string, the quality's digit then the name ("2Goblin Rocket
--- Helmet"; "-" for a quality not known). 6,890 items are about 260 KB in
--- the SavedVariables file (38 bytes an item), a sixteenth of their prices
--- (the size test). Small, but it would grow with every item a house ever
--- showed: the module drops the names of items no longer in any prices or
--- watches when the prices prune.
---
--- Where names come from: the auction house's scans and searches (their
--- payload, 0.48), the client's cache whenever a page reads one it has, and
--- the client's answers to what the Ledger asks for. The lookup every page
--- and note uses (Get): the kept name, then the client's cache (kept), then,
--- when asked to, a request.
+-- The item names the Ledger's pages and notes show (Units/Ledger), and the
+-- Prices search finds, although the client's item cache doesn't hold them
+-- (it forgets; a Scan all brings thousands it never had). They are kept in
+-- the price store (SuuUI.Prices, 0.48: SuuUIPrices.names, for every
+-- ruleset; its prune drops the names of items in no prices): the auction
+-- house's scans and searches keep theirs there, and this keeps what the
+-- client tells: its cache whenever a page reads one it has, and its
+-- answers to what the Ledger asks for. The lookup every page and note uses
+-- (Get): the kept name, then the client's cache (kept), then, when asked
+-- to, a request.
 --
 -- Asking: a queue read on a beat, a few requests in flight at once (never
 -- thousands at once), the rows in sight first. The client answers
@@ -27,11 +21,11 @@
 
 import * as parts from "./Parts"
 
-export type NameMap = { [number]: string }
-export type NameData = { names?: NameMap }
-
 export type ItemNamesOptions = {
-    data: () -> NameData,
+    -- the kept name and quality (the price store's), and one kept there:
+    -- whether that changed it
+    kept: (itemID: number) -> (string?, number?),
+    keep: (itemID: number, name: string?, quality: number?) -> boolean,
     every: (seconds: number, fn: (ticker: TickerHandle) -> ()) -> TickerHandle,
     -- a name kept that a page may wait for, or one given up
     arrived: (itemID: number) -> (),
@@ -47,19 +41,6 @@ export const STEP = 0.2
 export const CHECKS = 400
 export const RETRY_AFTER = 5
 export const TRIES = 4
-
--- "2Goblin Rocket Helmet"
-export function pack(name: string, quality: number?): string
-    local q = (quality and quality >= 0 and quality <= 9) and tostring(math.floor(quality)) or "-"
-    return q .. name
-end
-
-export function unpack(s: string?): (string?, number?)
-    if not s or #s < 2 then
-        return nil, nil
-    end
-    return s:sub(2), tonumber(s:sub(1, 1))
-end
 
 export class ItemNames
     readonly o: ItemNamesOptions
@@ -81,41 +62,15 @@ export class ItemNames
         self.o = o
     end
 
-    function Map(make: boolean?): NameMap?
-        local d = self.o.data()
-        local map = d.names
-        if not map and make then
-            map = {}
-            d.names = map
-        end
-        return map
-    end
-
     -- The kept name and quality (nil: none).
     function Kept(itemID: number): (string?, number?)
-        local map = self:Map()
-        return unpack(map and map[itemID])
+        return self.o.kept(itemID)
     end
 
     -- A name learned; whether that changed what is kept (a quality not
     -- known keeps the one kept).
     function Keep(itemID: number, name: string?, quality: number?): boolean
-        if not name or name == "" then
-            return false
-        end
-        local map = assert(self:Map(true))
-        local was = map[itemID]
-        if was then
-            local n, q = unpack(was)
-            if quality == nil then
-                quality = q
-            end
-            if n == name and q == quality then
-                return false
-            end
-        end
-        map[itemID] = pack(name, quality)
-        return true
+        return self.o.keep(itemID, name, quality)
     end
 
     -- An item's name and quality: kept, else the client's (kept), else nil
@@ -166,9 +121,9 @@ export class ItemNames
 
     -- The names not kept of these items asked for.
     function AskAll(ids: number[])
-        local map = self:Map() or {}
+        local kept = self.o.kept
         for _, id in ipairs(ids) do
-            if not map[id] then
+            if not kept(id) then
                 self:Ask(id)
             end
         end
@@ -296,23 +251,5 @@ export class ItemNames
             self:Land(itemID)
             self:Missed(itemID)
         end
-    end
-
-    -- The names of items no longer the Ledger's dropped; how many.
-    function Prune(keep: (itemID: number) -> boolean): number
-        local map = self:Map()
-        if not map then
-            return 0
-        end
-        local gone: number[] = {}
-        for id in pairs(map) do
-            if not keep(id) then
-                gone[#gone + 1] = id
-            end
-        end
-        for _, id in ipairs(gone) do
-            map[id] = nil
-        end
-        return #gone
     end
 end

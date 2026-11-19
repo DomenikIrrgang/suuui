@@ -12,6 +12,8 @@ import type LedgerOpenOptions from "/Core/API"
 import internal M from "/Units/Ledger"
 import * as notes from "/Units/Ledger/Notes"
 import expectNoErrors from "../../../helpers"
+import see, scanAll from "./LedgerHelpers"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
 
 const DUST = 990701
 const SHARD = 990702
@@ -29,7 +31,8 @@ local said: { [string]: unknown }[] = {}
 local function cleanup()
     said = {}
     local d = M:Data()
-    d.prices, d.scans, d.watches, d.names = nil, nil, nil, nil
+    d.scans, d.watches = nil, nil
+    priceStore.wipe()
     M:DropIndexes()
     M.vendor = {}
     M:Reset("scanNote")
@@ -50,7 +53,7 @@ end
 -- An item's looks on days before today: lows[k] k days ago.
 local function history(itemID: number, lows: number[])
     for k = #lows, 1, -1 do
-        M:RecordLook(itemID, lows[k], 0, 10, 2, time() - k * DAY_SECONDS)
+        see(itemID, lows[k], 0, 10, 2, time() - k * DAY_SECONDS)
     end
 end
 
@@ -62,7 +65,7 @@ local function scan(list: { number }[])
             looks[#looks + 1] = v
         end
     end
-    M:Emit("SUUUI_AUCTION_SCANNED", looks, #list)
+    scanAll(looks, #list)
     mock.advanceTime(0.01)
     mock.advanceTime(0.01)
 end
@@ -149,7 +152,7 @@ local function watchNote()
     mock.advanceTime(0.01)
     expect(#said).toBe(0)
     -- a search finds it under
-    M:RecordLook(DUST, 750, 0, 2, 1)
+    see(DUST, 750, 0, 2, 1)
     mock.advanceTime(0.01)
     expect(#said).toBe(1)
     local note = said[1]
@@ -162,7 +165,7 @@ local function watchNote()
     expect((note.icon :: { texture: unknown }).texture).toBe(134400)
     -- searched again: not told again before the next scan
     mock.advanceTime(5)
-    M:RecordLook(DUST, 740, 0, 3, 1)
+    see(DUST, 740, 0, 3, 1)
     mock.advanceTime(0.01)
     expect(#said).toBe(1)
     -- a scan finds it under: told again, as the scan's
@@ -189,7 +192,7 @@ local function keptNames()
     history(ROOT, { 1000, 1000, 1000 })
     M:WatchItem(ROOT, 1200)
     mock.advanceTime(0.01)
-    M:RecordLook(ROOT, 750, 0, 2, 1)
+    see(ROOT, 750, 0, 2, 1)
     mock.advanceTime(0.01)
     expect(#said).toBe(1)
     expect(said[1].title).toBe("Test Hidden Root under " .. money(1200))

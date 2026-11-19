@@ -1,64 +1,30 @@
--- Units/Ledger/Days: the Ledger's calendar: day numbers and dates both
--- ways, the weekday, the four periods of a day by the computer's clock.
+-- Units/Ledger/Days: the Ledger's calendar is the price store's
+-- (SuuUI.Calendar): the same day numbers, dates, weekdays and periods.
 
-import test, expect, cases from "wowlua:test"
+import test, expect from "wowlua:test"
+import SuuUI from "/Core/API"
 import * as days from "/Units/Ledger/Days"
 import expectNoErrors from "../../../helpers"
 
-@test("a date's day number and back")
-@cases({
-    { 1970, 1, 1, 0 },
-    { 1969, 12, 31, -1 },
-    { 2000, 3, 1, 11017 },
-    { 2024, 2, 29, 19782 },
-    { 2026, 11, 18, 20775 },
-})
-local function dayNumbers(y: number, m: number, d: number, n: number)
-    expect(days.dayNumber(y, m, d)).toBe(n)
-    local y2, m2, d2 = days.dateOf(n)
-    expect({ y2, m2, d2 }).toEqual({ y, m, d })
-end
-
-@test("every day of four years goes there and back")
-local function roundTrips()
-    local start = days.dayNumber(2023, 1, 1)
-    for n = start, start + 4 * 366 do
-        local y, m, d = days.dateOf(n)
-        expect(days.dayNumber(y, m, d)).toBe(n)
-    end
-    expectNoErrors()
-end
-
-@test("the weekday: 1 Monday … 7 Sunday")
-local function weekdays()
-    -- 1 January 1970 was a Thursday; 18 November 2026 is a Wednesday
-    expect(days.weekday(0)).toBe(4)
-    expect(days.weekday(days.dayNumber(2026, 11, 18))).toBe(3)
-    expect(days.weekday(days.dayNumber(2026, 11, 22))).toBe(7)
-    expect(days.weekday(days.dayNumber(2026, 11, 23))).toBe(1)
-    expect(days.weekday(-1)).toBe(3)
-    expect(days.WEEKDAYS[days.weekday(days.dayNumber(2026, 11, 17))]).toBe("Tuesday")
-end
-
-@test("the periods: Night 0–6, Morning 6–10, Noon 10–16, Evening 16–24")
-@cases({ { 0, 1 }, { 5, 1 }, { 6, 2 }, { 9, 2 }, { 10, 3 }, { 15, 3 }, { 16, 4 }, { 23, 4 } })
-local function periods(hour: number, period: number)
-    expect(days.periodOfHour(hour)).toBe(period)
-end
-
-@test("a time's day and period, by the computer's clock")
-local function dayOf()
+@test("the same calendar as the price store's")
+local function sameCalendar()
+    local C = SuuUI.Calendar
+    local n = days.dayNumber(2026, 11, 18)
+    expect(n).toBe(C.DayNumber(2026, 11, 18))
+    expect(n).toBe(20775)
+    local y, m, d = days.dateOf(n)
+    expect({ y, m, d }).toEqual({ 2026, 11, 18 })
+    expect(days.weekday(n)).toBe(3)
+    expect(days.periodOfHour(12)).toBe(days.NOON)
+    expect({ days.NIGHT, days.MORNING, days.NOON, days.EVENING }).toEqual({ 1, 2, 3, 4 })
+    expect(days.PERIODS[days.EVENING]).toBe("Evening")
+    expect(days.WEEKDAYS[1]).toBe("Monday")
     local at = time({ year = 2026, month = 11, day = 18, hour = 7, min = 30 })
     local day, period = days.dayOf(at)
-    expect(day).toBe(days.dayNumber(2026, 11, 18))
+    expect(day).toBe(n)
     expect(period).toBe(days.MORNING)
-    expect(days.PERIODS[period]).toBe("Morning")
-    day, period = days.dayOf(time({ year = 2026, month = 11, day = 18, hour = 23, min = 59 }))
-    expect(period).toBe(days.EVENING)
-    -- now
-    local now, nowPeriod = days.dayOf()
-    local t = date("*t") :: { year: number, month: number, day: number, hour: number }
-    expect(now).toBe(days.dayNumber(t.year, t.month, t.day))
-    expect(nowPeriod).toBe(days.periodOfHour(t.hour))
+    local now, p = days.dayOf()
+    local cn, cp = C.DayOf()
+    expect({ now, p }).toEqual({ cn, cp })
     expectNoErrors()
 end

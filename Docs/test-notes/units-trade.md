@@ -162,3 +162,36 @@ machine. Before, the summaries' decode of all 60 days of every item was
 most of it (`Pack.readNumber` with its argument checks: an exported
 function is checked on every call in dev builds; the hot reads call a
 local one now).
+
+## One price store (2026-11-19, wowlua 0.13.15)
+
+The auction house's looks are kept once per ruleset in the price store
+(`Core/Prices`, `SuuUIPrices`); the Ledger and the auction house module
+read it. `tests/unit/Core/Prices/PricesHelpers.wowlua` puts looks and
+scans into it for the tests of both modules (`look`, `scan`, `wipe`), and
+`LedgerHelpers` has `see` (a look as the auction house tells one: kept,
+then the Ledger's watches see it), `scanAll` and `scanRead` (a Scan all
+kept and read by the Ledger to its end, and the frame after for what it
+told).
+
+| Source | Test file | Tests |
+|---|---|---|
+| Core/Prices | `Core/Prices.test.wowlua` | a look kept and told, read back (latest, usual price, daily lows, every look, rulesets, items); when a look was; names packed, kept, read (the client's cache not kept), pruned; Scan all's looks a slice a frame, told once, a second scan finishing the first; the prune (once a day, a slice a frame, the names, told per ruleset); the API (only SuuUI's own modules write; the calendar; the number format); the migration (merging, a seen entry newer or not, everything moved and gone, run again, stopped half way, seen only); kept across a /reload; the saved size before and after |
+| Core/Prices/Days, Pack, Store | `Core/Prices/*.test.wowlua` | moved from the Ledger; when a period starts (`timeOf`); the median and the usual price (from Ledger/Stats) |
+| Ledger/Days | `Units/Ledger/Days.test.wowlua` | the Ledger's calendar is the store's |
+| Ledger | `Units/Ledger.test.wowlua` | the looks read from the store (none kept in SuuUILedger); Scan all read once the store has it; the store's prune followed (and with the Ledger off); the auction house module off: what is kept still shown; off and on: the looks kept meanwhile read |
+| Ledger/PriceIndex | `Units/Ledger/PriceIndex.test.wowlua` | the items a scan worked out skipped (ready at once when that's all of them) |
+| AuctionHouse/Prices | `Units/AuctionHouse/Prices.test.wowlua` | a look kept in the store, the period's lowest; one per ruleset whoever scanned, posted prices per character; the Ledger off: kept, read, the tooltip block without the usual price; on again, the history read |
+| compat | `compat/pricesFromLedger.test.wowlua`, `compat/pricesSeenOnly.test.wowlua` | old saved data (`prices-ledger.json`: the Ledger's prices and names, two characters' seen; `prices-seen-only.json`: only seen, three characters, two rulesets) moved in at load, and nothing changed by a second load |
+
+How the size was measured: the test builds one ruleset's 7,000 items with
+60 days of looks (one or two a day), their names, and three characters'
+`seen` of every item (as their last Scan all left it), counts the bytes a
+SavedVariables file holds for each (tabs, keys, values), runs the
+migration and counts again: before 7,670 KB (the Ledger's prices
+4,887 KB, names 259 KB, `seen` 2,524 KB, 841 KB a character), after
+5,146 KB. One character's `seen` in game was 567 KB for 6,907 items (84
+bytes an item; the test's entries carry every field, 123 bytes).
+
+The profiles' JSON keeps table keys as strings (`"991201"`), where WoW
+writes numbers; the migration reads both.

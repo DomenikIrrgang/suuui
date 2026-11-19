@@ -1,13 +1,13 @@
--- Units/Ledger/Store: the price store's reads (the latest look, the daily
+-- Core/Prices/Store: the price store's reads (the latest look, the daily
 -- lows and what most sell it for, the last 14 days' lows and the usual
--- price, every look of a range, when it's cheapest), a look recorded into a
+-- price, every look of a range), a look recorded into a
 -- ruleset's map, the old ones pruned; and its size for a heavy user: 6,400
 -- items, 60 days, one or two looks a day.
 
 import test, expect from "wowlua:test"
-import * as store from "/Units/Ledger/Store"
-import type PriceMap from "/Units/Ledger/Store"
-import * as pack from "/Units/Ledger/Pack"
+import * as store from "/Core/Prices/Store"
+import type PriceMap from "/Core/Prices/Store"
+import * as pack from "/Core/Prices/Pack"
 import expectNoErrors from "../../../helpers"
 
 const TODAY = 20775
@@ -58,8 +58,28 @@ local function usual()
     local two = pack.record(nil, TODAY, 1, 500, 0, 1, 1)
     two = pack.record(two, TODAY, 4, 400, 0, 1, 1)
     expect(store.recentLows(two, TODAY, 14)).toEqual({ 400 })
-    -- when it's cheapest from the kept looks
-    expect(#store.whenOf(s, TODAY).weekdays).toBe(7)
+end
+
+@test("the median and the usual price from the daily lows: the first 14 count, to the copper")
+local function usualOfLows()
+    local list = { 5, 1, 4, 2, 3 }
+    expect(store.median(list)).toBe(3)
+    expect(list).toEqual({ 5, 1, 4, 2, 3 })
+    expect(store.median({ 4, 1, 3, 2 })).toBe(2.5)
+    expect(store.median({ 9, 1, 3, 2 }, 3)).toBe(3)
+    expect(store.median({})).toBeNil()
+    expect(store.median({ 1 }, 0)).toBeNil()
+    expect(store.usual({})).toBeNil()
+    expect(store.usual({ 1000 })).toBe(1000)
+    expect(store.usual({ 1000, 1001 })).toBe(1001)
+    -- the 15th day back and older don't count
+    local lows: number[] = {}
+    for i = 1, 14 do
+        lows[i] = 100 + i
+    end
+    lows[15], lows[16], lows[17] = 1, 1, 1
+    expect(store.usual(lows)).toBe(108)
+    expectNoErrors()
 end
 
 @test("a look recorded into a ruleset's map; the old ones pruned, the item gone with none left")
@@ -89,13 +109,13 @@ local function random(): number
     return seed / 2147483648
 end
 
--- What WoW writes for one item of SuuUILedger.prices[ruleset]: three tabs,
+-- What WoW writes for one item of SuuUIPrices.prices[ruleset]: three tabs,
 -- [itemID] = "…",
 local function savedLine(itemID: number, s: string): number
     return 3 + #("[" .. itemID .. "] = \"") + #s + #("\",\n")
 end
 
-@test("6,400 items, 60 days, one or two looks a day: the size in SuuUILedger")
+@test("6,400 items, 60 days, one or two looks a day: the size in SuuUIPrices")
 local function size()
     local map: PriceMap = {}
     local ITEMS, DAYS = 6400, 60
@@ -131,7 +151,7 @@ local function size()
         expect(s:find('["\\\n]') == nil).toBe(true)
     end
     print(
-        ("Ledger store: %d items, %d days, %d looks: %d characters of looks (%.2f a look), %.2f MB in SuuUILedger"):format(
+        ("Price store: %d items, %d days, %d looks: %d characters of looks (%.2f a look), %.2f MB in SuuUIPrices"):format(
             ITEMS,
             DAYS,
             looks,

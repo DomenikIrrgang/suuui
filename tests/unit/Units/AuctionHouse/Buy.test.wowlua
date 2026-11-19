@@ -20,6 +20,7 @@ import FavButton from "/Units/AuctionHouse/Buy"
 import type AuctionHouseModule from "/Units/AuctionHouse"
 import newParent from "../../../helpers"
 import internal M as Ledger from "/Units/Ledger"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
 import type LedgerOpenOptions from "/Core/API"
 import * as settings from "/Core/Settings"
 import house, key from "./AuctionHouseHelpers"
@@ -731,16 +732,18 @@ end
 local NUGGET = 990291
 mock.defineItem(NUGGET, { name = "Test Nugget", quality = 1, stackCount = 20, classID = 7, icon = 134400, sellPrice = 4000 })
 
--- The Ledger's looks of an item on days before today: lows[k] k days ago.
+-- An item's looks in the price store on days before today: lows[k] k days
+-- ago.
 local function ledgerHistory(itemID: number, lows: number[])
     for k = #lows, 1, -1 do
-        Ledger:RecordLook(itemID, lows[k], 0, 10, 2, time() - k * 86400)
+        priceStore.look(itemID, lows[k], 0, 10, 2, time() - k * 86400)
     end
 end
 
 local function forgetLedger()
     local d = Ledger:Data()
-    d.prices, d.scans, d.watches, d.names = nil, nil, nil, nil
+    d.scans, d.watches = nil, nil
+    priceStore.wipe()
     Ledger:DropIndexes()
     Ledger.vendor = {}
     Ledger:Reset("markDeals")
@@ -759,8 +762,8 @@ local function dealMarks()
     ledgerHistory(NUGGET, { 5000, 5000, 5000 })
     open(nuggetHouse())
     search("")
-    -- (0.48: the name and quality told along, kept for the Ledger)
-    expect(assert(Ledger:Data().names)[GEM]).toBe("1Test Gem")
+    -- (0.48: the name and quality told along, kept in the price store)
+    expect({ SuuUI.Prices.KeptName(GEM) }).toEqual({ "Test Gem", 1 })
     -- the gem: a third under its usual 15s
     local gem = resultNamed("Test Gem")
     expect(gem.under).toBeShown()

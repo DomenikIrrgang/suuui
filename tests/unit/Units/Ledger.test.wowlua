@@ -1,8 +1,9 @@
--- Units/Ledger: the Ledger's data: the auction house's looks kept per
--- ruleset (a search's at once, Scan all's a slice a frame), the usual price
--- and deals, the last scan's deals, watches, your characters' gold, the
--- ledger service (the tooltips' usual price), old looks pruned, its
--- settings, and turning it off and on.
+-- Units/Ledger: the Ledger's data: the auction house's looks read from the
+-- price store per ruleset (a search's at once, Scan all's a slice a frame
+-- once the store has them), the usual price and deals, the last scan's
+-- deals, watches, your characters' gold, the ledger service (the tooltips'
+-- usual price), the store's prune followed, its settings, and turning it
+-- off and on.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -11,10 +12,12 @@ import internal M, SECTION, SCAN_SLICE from "/Units/Ledger"
 import internal M as AH from "/Units/AuctionHouse"
 import * as events from "/Core/Events"
 import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import * as settings from "/Core/Settings"
 import * as days from "/Units/Ledger/Days"
 import * as books from "/Units/Ledger/Books"
-import * as store from "/Units/Ledger/Store"
+import * as prices from "/Core/Prices"
+import * as priceStore from "./../Core/Prices/PricesHelpers"
 import * as secret from "wowlua:secret"
 import expectNoErrors, cycle, NOTHING from "../../helpers"
 
@@ -34,7 +37,8 @@ const DAY_SECONDS = 86400
 local function cleanup()
     events.offAll(LISTENER)
     local d = M:Data()
-    d.prices, d.scans, d.watches, d.pruned, d.names = nil, nil, nil, nil, nil
+    d.scans, d.watches = nil, nil
+    priceStore.wipe()
     local names = M.itemNames
     if names then
         names:Stop()
@@ -49,10 +53,25 @@ local function cleanup()
     expectNoErrors()
 end
 
+-- A look as the auction house module tells one: kept in the price store
+-- (which tells the Ledger when it changed what is kept), then told as
+-- SUUUI_AUCTION_SEEN (the watches). -> whether it changed what is kept.
+local function see(itemID: number, low: number, most: number, qty: number, n: number, at: number?): boolean
+    local changed = priceStore.look(itemID, low, most, qty, n, at)
+    M:SeeLook(itemID, low, at)
+    return changed
+end
+
+-- A Scan all's looks kept in the price store (the first slice now, the
+-- rest a slice a frame: the Ledger reads them once all are).
+local function scanAll(looks: number[], items: number, names: { [number]: string }?, qualities: { [number]: number }?)
+    prices.recordScan(looks, items, names, qualities)
+end
+
 -- An item's looks on days before today: lows[k] k days ago.
 local function history(itemID: number, lows: number[])
     for k = #lows, 1, -1 do
-        M:RecordLook(itemID, lows[k], 0, 10, 2, time() - k * DAY_SECONDS)
+        see(itemID, lows[k], 0, 10, 2, time() - k * DAY_SECONDS)
     end
 end
 
@@ -91,26 +110,29 @@ local function searchLook()
     mock.advanceTime(0.01)
     expect(told).toEqual({ "prices" })
     -- the same look again changes nothing
-    expect(M:RecordLook(DUST, 100, 150, 210, 2)).toBe(false)
-    expect(M:RecordLook(DUST, 0, 0, 1, 1)).toBe(false)
-    -- kept under this ruleset only
+    expect(see(DUST, 100, 150, 210, 2)).toBe(false)
+    expect(see(DUST, 0, 0, 1, 1)).toBe(false)
+    -- kept under this ruleset only, in the price store (the Ledger keeps
+    -- none of its own)
     expect(M:Items()).toEqual({ DUST })
     expect(M:Items("Another")).toEqual({})
     expect(M:Latest(DUST, "Another")).toBeNil()
     expect(M:Ruleset()).toBe(SuuUI.Ruleset())
     expect(M:Rulesets()).toEqual({ SuuUI.Ruleset() })
+    expect(M:ItemCount()).toBe(1)
+    expect((M:Data() :: { [string]: unknown }).prices).toBeNil()
     -- a ruleset with prices of its own comes after this one
-    assert(M:PriceMap("Another", true))[SHARD] = assert(M:PriceMap())[DUST]
-    assert(M:PriceMap("Aardvark", true))
+    assert(prices.map("Another", true))[SHARD] = assert(prices.map())[DUST]
+    assert(prices.map("Aardvark", true))
     expect(M:Rulesets()).toEqual({ SuuUI.Ruleset(), "Another" })
-    assert(M:PriceMap("Aardvark", true))[SHARD] = assert(M:PriceMap())[DUST]
+    assert(prices.map("Aardvark", true))[SHARD] = assert(prices.map())[DUST]
     expect(M:Rulesets()).toEqual({ SuuUI.Ruleset(), "Aardvark", "Another" })
 end
 
 @test("the usual price, change, daily lows, every look and when it's cheapest, through the module")
 local function reads()
     history(SHARD, { 1000, 1100, 900, 1000, 1200, 1050, 950 })
-    M:RecordLook(SHARD, 700, 0, 5, 1)
+    see(SHARD, 700, 0, 5, 1)
     local sm = assert(M:Summary(SHARD))
     expect(sm.look.low).toBe(700)
     -- the middle of 700, 1000, 1100, 900, 1000, 1200, 1050, 950
@@ -121,7 +143,7 @@ local function reads()
     expect(M:Usual(HIDE)).toBeNil()
     -- cached until a look changes it
     expect(M:Summary(SHARD)).toBe(sm)
-    M:RecordLook(SHARD, 600, 0, 5, 1)
+    see(SHARD, 600, 0, 5, 1)
     expect(assert(M:Usual(SHARD))).toBe(1000)
     expect(assert(M:Summary(SHARD)).look.low).toBe(600)
     local lows, mosts = M:DailyLows(SHARD, 9)
@@ -140,9 +162,9 @@ local function deals()
     history(SHARD, { 1000, 1000, 1000, 1000 })
     history(DUST, { 100, 100, 100 })
     history(HIDE, { 600, 600 })
-    M:RecordLook(SHARD, 690, 0, 5, 1)
-    M:RecordLook(DUST, 90, 0, 5, 1)
-    M:RecordLook(HIDE, 400, 0, 5, 1)
+    see(SHARD, 690, 0, 5, 1)
+    see(DUST, 90, 0, 5, 1)
+    see(HIDE, 400, 0, 5, 1)
     expect(M:VendorPrice(HIDE)).toBe(500)
     expect(M:VendorPrice(BAR)).toBeNil()
     expect(M:VendorPrice(BAR)).toBeNil()
@@ -174,7 +196,7 @@ local function deals()
     M:Reset("dealVendor")
     M:Reset("dealPercent")
     history(BAR, { 1000, 1000, 1000, 1000 })
-    M:RecordLook(BAR, 690, 0, 5, 1)
+    see(BAR, 690, 0, 5, 1)
     list = M:Deals()
     expect(list[2].itemID).toBe(SHARD)
     expect(list[3].itemID).toBe(BAR)
@@ -199,17 +221,22 @@ local function scan()
     for i = 1, 1998 do
         add(1000000 + i, 100 + i, 0, 1, 1)
     end
-    -- (a scan told while one is read: the newer one is read)
-    AH:Emit("SUUUI_AUCTION_SCANNED", looks, 2000)
-    AH:Emit("SUUUI_AUCTION_SCANNED", looks, 2000)
-    -- the first slice
+    scanAll(looks, 2000)
+    -- the store's first slice
     expect(M:LastScan()).toBeNil()
     expect(assert(M:Latest(SHARD)).low).toBe(700)
     expect(M:Latest(1000000 + 1998)).toBeNil()
-    -- (the rest: a slice a frame)
-    for _ = 1, math.ceil(2000 / SCAN_SLICE) do
+    -- (a scan kept while one is: the first finished at once, and the
+    -- Ledger reads the newer one)
+    scanAll(looks, 2000)
+    expect(assert(M:Latest(1000000 + 1998)).low).toBe(2098)
+    -- (the rest: a slice a frame, the store's then the Ledger's)
+    local frames = 0
+    while not M:LastScan() and frames < 100 do
         mock.advanceTime(0.01)
+        frames += 1
     end
+    expect(frames > math.ceil(2000 / SCAN_SLICE)).toBe(true)
     local s = assert(M:LastScan())
     expect(s.items).toBe(2000)
     expect(s.deals).toBe(2)
@@ -226,15 +253,19 @@ local function scan()
     expect(M:Index().items[SHARD]).toBe(M:Summary(SHARD))
     mock.advanceTime(0.01)
     expect(told).toEqual({ "prices", "scan" })
-    -- a small one at once, through the auction house module's message
-    AH:Emit("SUUUI_AUCTION_SCANNED", { DUST, 40, 0, 20, 2 }, 1)
+    -- a small one at once
+    scanAll({ DUST, 40, 0, 20, 2 }, 1)
     expect(assert(M:LastScan()).items).toBe(1)
+    -- the auction house module's own message keeps nothing here (the
+    -- module keeps its looks in the store before it tells it)
+    AH:Emit("SUUUI_AUCTION_SCANNED", { HIDE, 1, 0, 20, 2 }, 1)
+    expect(assert(M:Latest(HIDE)).low).toBe(450)
     expect(M:LastScan("Another")).toBeNil()
 end
 
 @test("watches: under your price after a look; gone when a later scan doesn't find it")
 local function watches()
-    M:RecordLook(DUST, 900, 0, 5, 1, time() - DAY_SECONDS)
+    see(DUST, 900, 0, 5, 1, time() - DAY_SECONDS)
     mock.advanceTime(0.01)
     local told = heard()
     M:WatchItem(DUST, 800)
@@ -244,7 +275,7 @@ local function watches()
     mock.advanceTime(0.01)
     expect(told).toEqual({ "watches" })
     -- a search finds it under
-    M:RecordLook(DUST, 750, 0, 5, 1)
+    see(DUST, 750, 0, 5, 1)
     local under = M:WatchedUnder()
     expect(#under).toBe(1)
     expect(under[1].itemID).toBe(DUST)
@@ -255,16 +286,16 @@ local function watches()
     expect(assert(M:WatchOf(SHARD)).low).toBeNil()
     -- two under: the furthest under first, then by item
     M:WatchItem(HIDE, 1000)
-    M:RecordLook(HIDE, 500, 0, 1, 1)
+    see(HIDE, 500, 0, 1, 1)
     M:WatchItem(BAR, 1000)
-    M:RecordLook(BAR, 500, 0, 1, 1)
+    see(BAR, 500, 0, 1, 1)
     under = M:WatchedUnder()
     expect({ under[1].itemID, under[2].itemID, under[3].itemID }).toEqual({ HIDE, BAR, DUST })
     M:UnwatchItem(HIDE)
     M:UnwatchItem(BAR)
     -- a scan that finds the shard under, not the dust
     mock.advanceTime(5)
-    AH:Emit("SUUUI_AUCTION_SCANNED", { SHARD, 90, 0, 1, 1 }, 1)
+    scanAll({ SHARD, 90, 0, 1, 1 }, 1)
     under = M:WatchedUnder()
     expect(#under).toBe(1)
     expect(under[1].itemID).toBe(SHARD)
@@ -355,76 +386,51 @@ local function service()
     expect(assert(ledger.TooltipUsual)(SHARD)).toBeNil()
 end
 
-@test("looks older than 60 days pruned once a day, after login's rush")
-local function prune()
-    M:RecordLook(DUST, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
-    M:RecordLook(SHARD, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
-    M:RecordLook(SHARD, 200, 0, 1, 1)
-    -- (many items: a slice a frame)
-    for i = 1, 900 do
-        M:RecordLook(1000000 + i, 100, 0, 1, 1, time() - 61 * DAY_SECONDS)
-    end
-    expect(M:NeedsPrune()).toBe(true)
-    -- the names kept: the gone items' dropped with them, a watched one's not
-    M:KeepName(DUST, "Test Dust", 1)
-    M:KeepName(SHARD, "Test Shard", 2)
-    M:KeepName(HIDE, "Test Hide", 1)
-    M:KeepName(BAR, "Test Bar", 1)
-    M:WatchItem(HIDE, 400)
-    -- (the money changes of the tests before booked by now, and told)
-    mock.advanceTime(3)
-    mock.advanceTime(0.01)
-    -- turned off and on: pruned 10 seconds later
-    local c = cycle("ledger")
-    expect(c.after.timers).toBe(c.before.timers + 1)
-    mock.advanceTime(10)
-    mock.advanceTime(0.01)
-    mock.advanceTime(0.01)
-    expect(M:Latest(DUST)).toBeNil()
-    expect(assert(M:Latest(SHARD)).low).toBe(200)
-    expect(#M:Looks(SHARD, 60)).toBe(1)
-    expect(M:Latest(1000000 + 900)).toBeNil()
-    expect(M:NeedsPrune()).toBe(false)
-    local names = assert(M:Data().names)
-    expect(names[DUST]).toBeNil()
-    expect(names[BAR]).toBeNil()
-    expect(names[SHARD]).toBe("2Test Shard")
-    expect(names[HIDE]).toBe("1Test Hide")
-    -- once a day
-    M:Prune()
-    expect(M.pruneTicker).toBeNil()
-end
-
-@test("the prune keeps the summaries (a look older than 60 days counts in none); an item with no look left goes from the index and the deals")
+@test("the store's prune followed: the summaries kept (a look older than 60 days counts in none); an item with no look left goes from the index and the deals")
 local function pruneKeepsSummaries()
     history(SHARD, { 1000, 1000, 1000 })
-    M:RecordLook(SHARD, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
-    M:RecordLook(HIDE, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
-    M:RecordLook(SHARD, 600, 0, 5, 1)
+    see(SHARD, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
+    see(HIDE, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
+    see(SHARD, 600, 0, 5, 1)
     local sm = assert(M:Summary(SHARD))
     -- (the hide: its old look under vendor price)
     expect(#M:Deals()).toBe(2)
     expect(M:Summary(HIDE)).never.toBeNil()
-    M:Data().pruned = nil
-    M:Prune()
+    mock.advanceTime(0.01)
+    local told = heard()
+    prices.data().pruned = nil
+    prices.prune()
     mock.advanceTime(0.01)
     mock.advanceTime(0.01)
-    expect(M.pruneTicker).toBeNil()
+    expect(prices.needsPrune()).toBe(false)
     expect(M:Summary(SHARD)).toBe(sm)
     expect(M:Summary(HIDE)).toBeNil()
     expect(M:Index().items[HIDE]).toBeNil()
     expect(#M:Deals()).toBe(1)
+    expect(told).toEqual({ "prices" })
+    -- with the Ledger off the store prunes alone; on again, it reads what's left
+    settings.set("ledger", "enabled", false)
+    see(DUST, 100, 0, 1, 1, time() - 70 * DAY_SECONDS)
+    prices.data().pruned = nil
+    prices.prune()
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+    expect(prices.latest(DUST)).toBeNil()
+    settings.set("ledger", "enabled", true)
+    expect(M:Latest(DUST)).toBeNil()
+    expect(assert(M:Summary(SHARD)).look.low).toBe(600)
 end
 
 @test("item names: told with a search's look and a scan's, kept for every ruleset; the client's answers kept for the Ledger's items")
 local function itemNames()
-    -- a search's look, with the name and quality the house told
-    AH:Emit("SUUUI_AUCTION_SEEN", DUST, 120, 0, 40, 2, "search", "Test Dust", 1)
-    expect(assert(M:Data().names)[DUST]).toBe("1Test Dust")
+    -- a search's look, with the name and quality the house told (the
+    -- auction house module keeps it in the price store)
+    AH:Seen(DUST, 120, 40, "Test Dust", 1)
+    expect(assert(prices.data().names)[DUST]).toBe("1Test Dust")
     -- a scan's: the names it had (none for the bar: the client hadn't it)
-    AH:Emit("SUUUI_AUCTION_SCANNED", { SHARD, 90, 0, 1, 1, BAR, 50, 0, 4, 1 }, 2, { [SHARD] = "Test Shard" }, { [SHARD] = 2 })
+    scanAll({ SHARD, 90, 0, 1, 1, BAR, 50, 0, 4, 1 }, 2, { [SHARD] = "Test Shard" }, { [SHARD] = 2 })
     mock.advanceTime(0.05)
-    local names = assert(M:Data().names)
+    local names = assert(prices.data().names)
     expect(names[SHARD]).toBe("2Test Shard")
     -- the rest asked for after the scan: the bar is in the client's cache
     mock.advanceTime(0.3)
@@ -434,7 +440,7 @@ local function itemNames()
     -- the client's answers: either event, for an item the Ledger knows
     const SLOW = 990405
     mock.defineItem(SLOW, { name = "Test Slow Hide", quality = 3 })
-    M:RecordLook(SLOW, 300, 0, 1, 1)
+    see(SLOW, 300, 0, 1, 1)
     mock.fireEvent("GET_ITEM_INFO_RECEIVED", SLOW, true)
     expect(names[SLOW]).toBe("3Test Slow Hide")
     const STRANGER = 990406
@@ -459,19 +465,19 @@ local function firstBooksPrune()
     -- items (the prices pruned today already), the gold, the goal, no books
     local d = M:Data()
     d.books, d.booksPruned, d.mail = nil, nil, nil
-    local today, period = days.dayOf()
+    local today = days.dayOf()
     local here = SuuUI.Ruleset()
-    local map = assert(M:PriceMap(here, true))
     for i = 1, 8 do
-        store.record(map, 990410 + i, today, period, 1000 * i, 0, i, 1)
+        priceStore.look(990410 + i, 1000 * i, 0, i, 1)
     end
-    d.pruned = { [here] = today }
+    local map = assert(prices.map(here))
+    prices.data().pruned = { [here] = today }
     d.goal = { name = "Test Goal", amount = 10000000 }
     local saved: { [number]: string } = {}
     for id, s in pairs(map) do
         saved[id] = s
     end
-    expect(M:NeedsPrune()).toBe(false)
+    expect(prices.needsPrune()).toBe(false)
     expect(M:Store():NeedsPrune()).toBe(true)
     -- the new build starts; its prunes run after login's rush
     cycle("ledger")
@@ -480,23 +486,24 @@ local function firstBooksPrune()
     mock.advanceTime(0.01)
     expect(M:Data().booksPruned).toBe(today)
     expect(M:Store():NeedsPrune()).toBe(false)
-    expect(M:Data().prices).toBe(d.prices)
-    expect(assert(M:Data().prices)[here]).toEqual(saved)
+    expect(assert(prices.data().prices)[here]).toEqual(saved)
     expect(#M:Items(here)).toBe(8)
     expect(assert(M:Latest(990418)).low).toBe(8000)
-    expect(assert(d.pruned)[here]).toBe(today)
+    expect(assert(prices.data().pruned)[here]).toBe(today)
     expect(assert(d.goal).name).toBe("Test Goal")
     expect(M:GoldMap()[assert(M:CharKey())]).toBeTruthy()
-    -- and a day later: the prices pruned too, today's looks kept
-    d.pruned = { [here] = today - 1 }
+    -- and a day later: the prices pruned too (the store's prune), today's
+    -- looks kept
+    prices.data().pruned = { [here] = today - 1 }
     d.booksPruned = today - 1
     cycle("ledger")
+    prices.prune()
     mock.advanceTime(10)
     mock.advanceTime(0.01)
     mock.advanceTime(0.01)
-    expect(assert(M:Data().prices)[here]).toEqual(saved)
+    expect(assert(prices.data().prices)[here]).toEqual(saved)
     expect(M:Data().booksPruned).toBe(today)
-    expect(assert(d.pruned)[here]).toBe(today)
+    expect(assert(prices.data().pruned)[here]).toBe(today)
     d.books, d.goal = nil, nil
 end
 
@@ -545,11 +552,32 @@ local function offAndOn()
     expect(c.stateOn).toBe(modules.ModuleState.Enabled)
     settings.set("ledger", "enabled", false)
     expect(SuuUI.UseService(SuuUI.Services.LEDGER)).toBeNil()
-    -- the auction house's looks go nowhere meanwhile
+    -- the auction house's looks are kept meanwhile (the price store's),
+    -- and read once it's on again
     AH:Seen(DUST, 120, 40)
-    expect(M:Latest(DUST)).toBeNil()
+    expect(assert(prices.latest(DUST)).low).toBe(120)
     settings.set("ledger", "enabled", true)
     expect(SuuUI.UseService(SuuUI.Services.LEDGER)).toBeTruthy()
+    expect(assert(M:Latest(DUST)).low).toBe(120)
+    expect(assert(M:Summary(DUST)).look.low).toBe(120)
+end
+
+@test("the auction house module off: the Ledger shows what the price store kept; on again, its looks reach the Ledger as before")
+local function auctionHouseOff()
+    history(SHARD, { 1000, 1000, 1000 })
+    see(SHARD, 600, 0, 5, 1)
+    local own = ownOf(AH)
+    own.reloadToToggle = false
+    settings.set("auctionhouse", "enabled", false)
+    expect(AH:IsEnabled()).toBe(false)
+    expect(assert(M:Latest(SHARD)).low).toBe(600)
+    expect(M:Usual(SHARD)).toBe(1000)
+    expect(#M:Deals()).toBe(1)
+    expect(#M:Looks(SHARD)).toBe(4)
+    settings.set("auctionhouse", "enabled", true)
+    own.reloadToToggle = true
+    AH:Seen(SHARD, 550, 4)
+    expect(assert(M:Summary(SHARD)).look.low).toBe(550)
 end
 
 @test("the goal: one per account, set and cleared, told as 'goal'")

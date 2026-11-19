@@ -18,6 +18,10 @@ import * as motion from "/Core/Motion"
 import * as pixel from "/Core/Pixel"
 import * as rolePresets from "/Core/RolePresets"
 import * as rulesets from "/Core/Rulesets"
+import * as prices from "/Core/Prices"
+import * as calendar from "/Core/Prices/Days"
+import * as pack from "/Core/Prices/Pack"
+import type Look as PriceLookType from "/Core/Prices/Store"
 import * as roles from "/Core/Roles"
 import * as services from "/Core/Services"
 import ALERTS, TALENTS, PROFESSIONS, COLLECTIONS, BAGS, NOTIFICATIONS, DURABILITY, WELCOME from "/Core/ServiceKeys"
@@ -1388,6 +1392,145 @@ function API.RulesetOfCharKey(charKey: string): string?
     return rulesets.ofCharKey(charKey)
 end
 
+--------------------------------------------------------------------------------
+-- 0.48: the price store (Core/Prices): what the auction house showed, one
+-- copy per ruleset, the last 60 days, owned by neither the auction house
+-- module nor the Ledger. Anyone reads it; only SuuUI's own modules write
+-- (the auction house's looks, the names the Ledger learns).
+--------------------------------------------------------------------------------
+
+-- A write's module must be one of SuuUI's own.
+local function ownModule(m: unknown, what: string)
+    if not (type(m) == "table" and (m :: modules.AnyModule).builtIn == true) then
+        error("SuuUI.Prices." .. what .. ": only SuuUI's own modules write prices", 3)
+    end
+end
+
+API.Prices = {
+    -- how many days of looks are kept
+    KEEP_DAYS = prices.KEEP_DAYS,
+    -- the rulesets with prices, this character's first; the items with
+    -- prices on one (nil: this character's), and how many
+    Rulesets = function(): string[]
+        return prices.rulesetList()
+    end,
+    Items = function(ruleset: string?): number[]
+        return prices.items(ruleset)
+    end,
+    ItemCount = function(ruleset: string?): number
+        return prices.itemCount(ruleset)
+    end,
+    -- whether an item has prices on any ruleset
+    Known = function(itemID: number): boolean
+        return prices.known(itemID)
+    end,
+    -- the newest look { day, period, low, most, qty, n } (nil: none)
+    Latest = function(itemID: number, ruleset: string?): PriceLookType?
+        return prices.latest(itemID, ruleset)
+    end,
+    -- the usual price today: the middle of the lowest buyouts of the last
+    -- 14 days that have a look (nil: none)
+    Usual = function(itemID: number, ruleset: string?): number?
+        return prices.usual(itemID, ruleset)
+    end,
+    -- the daily lows of the last `count` days (index `count` today, 0: no
+    -- look), and what most sold it for at each day's lowest look
+    DailyLows = function(itemID: number, count: number, ruleset: string?): (number[], number[])
+        return prices.dailyLows(itemID, count, ruleset)
+    end,
+    -- every look of the last `count` days (nil: all kept), newest first
+    Looks = function(itemID: number, count: number?, ruleset: string?): PriceLookType[]
+        return prices.looks(itemID, count, ruleset)
+    end,
+    -- an item's name and quality: the kept one, else the client's cache's
+    -- (nil: neither); KeptName only the kept one
+    Name = function(itemID: number): (string?, number?)
+        return prices.nameOf(itemID)
+    end,
+    KeptName = function(itemID: number): (string?, number?)
+        return prices.keptName(itemID)
+    end,
+    -- when a look was: "this morning", "yesterday", "3 days ago"
+    When = function(at: number): string
+        return prices.whenText(at)
+    end,
+    -- (SuuUI's own modules) a look on this character's ruleset, now: the
+    -- lowest buyout per unit, what most sell it for, how many offered in
+    -- how many auctions (0 or nil: not known), and its name -> whether it
+    -- changed what is kept
+    Record = function(
+        m: modules.AnyModule,
+        itemID: number,
+        low: number,
+        most: number?,
+        qty: number?,
+        n: number?,
+        name: string?,
+        quality: number?
+    ): boolean
+        ownModule(m, "Record")
+        return prices.record(itemID, low, most, qty, n, name, quality)
+    end,
+    -- (SuuUI's own modules) Scan all's looks: five numbers an item
+    -- (itemID, low, most, qty, n), how many items, the names the house
+    -- told; kept a slice a frame, then SUUUI_PRICES_SCANNED
+    RecordScan = function(
+        m: modules.AnyModule,
+        looks: number[],
+        items: number,
+        names: { [number]: string }?,
+        qualities: { [number]: number }?
+    )
+        ownModule(m, "RecordScan")
+        prices.recordScan(looks, items, names, qualities)
+    end,
+    -- (SuuUI's own modules) an item's name learned -> whether it changed
+    KeepName = function(m: modules.AnyModule, itemID: number, name: string?, quality: number?): boolean
+        ownModule(m, "KeepName")
+        return prices.keepName(itemID, name, quality)
+    end,
+}
+
+-- 0.48: the calendar the prices are kept by (Core/Prices/Days): a day as a
+-- number (days since 1 January 1970 by the computer's calendar), the time
+-- of day as one of four periods by the computer's clock.
+API.Calendar = {
+    NIGHT = calendar.NIGHT,
+    MORNING = calendar.MORNING,
+    NOON = calendar.NOON,
+    EVENING = calendar.EVENING,
+    PERIODS = calendar.PERIODS,
+    WEEKDAYS = calendar.WEEKDAYS,
+    -- the day and period of a time (nil: now)
+    DayOf = function(at: number?): (number, number)
+        return calendar.dayOf(at)
+    end,
+    -- a day's date: year, month, day of the month
+    DateOf = function(day: number): (number, number, number)
+        return calendar.dateOf(day)
+    end,
+    DayNumber = function(year: number, month: number, day: number): number
+        return calendar.dayNumber(year, month, day)
+    end,
+    -- 1 Monday … 7 Sunday
+    Weekday = function(day: number): number
+        return calendar.weekday(day)
+    end,
+    PeriodOfHour = function(hour: number): number
+        return calendar.periodOfHour(hour)
+    end,
+    -- the time() a period of a day starts at
+    TimeOf = function(day: number, period: number): number
+        return calendar.timeOf(day, period)
+    end,
+}
+
+-- 0.48: a whole number as printable characters a SavedVariables file keeps
+-- as they are (the price store's format; the Ledger's books use it too),
+-- and the number at `i` of such a string with where the next one starts.
+API.PackNumber = pack.encodeNumber
+API.UnpackNumber = pack.readNumber
+
 -- Opens the first-run welcome again (the welcome module). False when that
 -- module is off.
 function API.ShowWelcome()
@@ -1428,6 +1571,8 @@ export type SettingsSection = modules.SettingsSection
 export type AlertsService = serviceKeys.AlertsService
 export type AuctionHouseService = serviceKeys.AuctionHouseService
 export type AuctionPrice = serviceKeys.AuctionPrice
+-- Core/Prices (0.48)
+export type PriceLook = PriceLookType
 export type AutoQuestsService = serviceKeys.AutoQuestsService
 export type BagsService = serviceKeys.BagsService
 export type BindSpell = serviceKeys.BindSpell

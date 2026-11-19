@@ -6,16 +6,20 @@
 -- public API only; it works with the auction house module off (its prices
 -- then stop growing).
 --
+-- The prices are the price store's (SuuUI.Prices, 0.48: Core/Prices, one
+-- copy per ruleset in SuuUIPrices): the auction house module writes every
+-- look there, whether the Ledger is on or off, and the Ledger reads the
+-- history, the latest look, the usual price and the item names from it; it
+-- keeps no prices of its own. What it makes of them (each item's summary
+-- and deal, Ledger/PriceIndex) follows the store's messages: a search's
+-- look (SUUUI_PRICE_CHANGED), a Scan all's looks all kept
+-- (SUUUI_PRICES_SCANNED, read a slice a frame here: the scan's deals) and
+-- the prune (SUUUI_PRICES_PRUNED). (Until 0.48's store the prices and names
+-- were here, in SuuUILedger.prices and .names: Core/Prices moved them out
+-- at load.)
+--
 -- What it keeps, in its own SavedVariable SuuUILedger (account-wide, kept
 -- out of SuuUIDB so settings and profiles stay light):
---   prices   per ruleset (SuuUI.Ruleset(): each has its own house), per
---            item, the looks of the last 60 days (Ledger/Pack: one short
---            string an item): per day and time of day (Night 0–6, Morning
---            6–10, Noon 10–16, Evening 16–24 by the computer's clock) the
---            lowest buyout per unit, what most sell it for, how many
---            offered in how many auctions. From the auction house module's
---            looks: SUUUI_AUCTION_SEEN (a search) and SUUUI_AUCTION_SCANNED
---            (Scan all, read a slice a frame here).
 --   scans    per ruleset, the last Scan all: when, how many items, how
 --            many deals and how many of them under vendor price.
 --   watches  per ruleset, per item: your price, and the last look's.
@@ -29,12 +33,6 @@
 --            Other).
 --   mail     per character, the money waiting in its inbox when it last
 --            looked, and how many auction sales of it.
---   names    per item, its name and quality as the Ledger learned them
---            (Ledger/Names: from the auction house's scans and searches,
---            the client's cache and its answers), for every ruleset; the
---            names of items no longer in any prices or watches dropped
---            with the prices' prune. (Added after version 1: nothing to
---            migrate, saved data without it fills in as the pages ask.)
 --
 -- For the window (step 3) and the notes (step 4), the module's methods.
 -- `ruleset` is optional everywhere (nil: this character's); a day is a day
@@ -82,9 +80,10 @@
 --       ItemTransactions(itemID, ruleset) -> those of an item on a ruleset;
 --       SoldItems(ruleset) -> { [itemID] = true }
 --   MailWaiting(scope) -> money, sales, known (any of them looked)
---   ItemName(itemID, ask) -> name?, quality?: the kept name, else the
---       client's (`ask`: asked for when neither has it); KeepName(itemID,
---       name, quality); AskNames(itemIDs) (in the background)
+--   ItemName(itemID, ask) -> name?, quality?: the kept name (the price
+--       store's), else the client's (`ask`: asked for when neither has
+--       it); KeepName(itemID, name, quality); AskNames(itemIDs) (in the
+--       background)
 -- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
 -- "watches", "gold", "goal", "books" (a transaction) or "mail".
 --
@@ -103,8 +102,7 @@ import type SettingsSection, LedgerUnder from "/Core/API"
 import * as saved from "wowlua:saved"
 import * as secret from "wowlua:secret"
 import * as days from "./Ledger/Days"
-import * as store from "./Ledger/Store"
-import type Look, PriceMap from "./Ledger/Store"
+import type PriceLook from "/Core/API"
 import LedgerWindow from "./Ledger/Window"
 import type LedgerOpenOptions from "/Core/API"
 import * as stats from "./Ledger/Stats"
@@ -118,21 +116,19 @@ import BookStore from "./Ledger/BookStore"
 import type BookData, MailInfo from "./Ledger/BookStore"
 import Recorder from "./Ledger/Recorder"
 import ItemNames from "./Ledger/Names"
-import type NameMap from "./Ledger/Names"
 import PriceIndex from "./Ledger/PriceIndex"
 import type ItemSummary as IndexedSummary, DealEntry as IndexedDeal from "./Ledger/PriceIndex"
 
+local Prices = SuuUI.Prices
+
 local DEFAULTS = { dealPercent = 25, dealVendor = true, markDeals = true, scanNote = false, tipUsual = true, soldNote = true }
 
--- Scan all's looks read a slice a frame (about 7,000 items in all for a
--- big house: each one's summary worked out too, PriceIndex), and the kept
--- prices pruned the same way once a day: at most this many items and
--- milliseconds a frame (measured 2026-11-19: 800 items a frame were some
--- 100 ms each).
+-- Scan all's looks read a slice a frame once the price store has them
+-- (about 7,000 items in all for a big house: each one's summary worked out,
+-- PriceIndex): at most this many items and milliseconds a frame (measured
+-- 2026-11-19: 800 items a frame were some 100 ms each).
 export const SCAN_SLICE = 200
 local SCAN_MS = 4
-export const PRUNE_SLICE = 500
-local PRUNE_MS = 4
 
 export const SECTION: SettingsSection = {
     id = "ledger",
@@ -214,16 +210,13 @@ export type Watch = { target: number, low?: number, at?: number }
 export type Goal = { name: string, amount: number }
 -- What SuuUILedger holds (see the top).
 export type LedgerData = {
-    prices?: { [string]: PriceMap },
     scans?: { [string]: ScanInfo },
     watches?: { [string]: { [number]: Watch } },
     gold?: GoldMap,
-    pruned?: { [string]: number },
     goal?: Goal,
     books?: BookMap,
     booksPruned?: number,
     mail?: { [string]: MailInfo },
-    names?: NameMap,
 }
 -- How the window opens: on an item's page (its ID), or Prices showing
 -- "deals", "vendor", "watched", "sold", "bags" or "all".
@@ -256,9 +249,8 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     vendor: { [number]: number } = {}
     -- SUUUI_LEDGER_CHANGED waiting to be told, by what
     pendingChanges: { [string]: boolean } = {}
-    -- Scan all's looks being read, and a prune running
+    -- Scan all's looks being read
     scanTicker: TickerHandle? = nil
-    pruneTicker: TickerHandle? = nil
     -- the window, made when it first opens
     window: LedgerWindow? = nil
     -- at an auctioneer now, in a fight (the window's Search the house; the
@@ -289,46 +281,13 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         return db :: unknown :: LedgerData
     end
 
-    -- A ruleset's prices: nil when it has none and `make` isn't set.
-    function PriceMap(ruleset: string?, make: boolean?): PriceMap?
-        local d = self:Data()
-        local all = d.prices
-        if not all then
-            if not make then
-                return nil
-            end
-            all = {}
-            d.prices = all
-        end
-        local key = ruleset or SuuUI.Ruleset()
-        local map = all[key]
-        if not map and make then
-            map = {}
-            all[key] = map
-        end
-        return map
-    end
-
     function Ruleset(): string
         return SuuUI.Ruleset()
     end
 
     -- The rulesets with prices, this character's first, then by name.
     function Rulesets(): string[]
-        local here = SuuUI.Ruleset()
-        local out: string[] = { here }
-        for key, map in pairs(self:Data().prices or {}) do
-            if key ~= here and next(map) ~= nil then
-                out[#out + 1] = key
-            end
-        end
-        table.sort(out, function(a: string, b: string): boolean
-            if a == here or b == here then
-                return a == here and b ~= here
-            end
-            return a < b
-        end)
-        return out
+        return Prices.Rulesets()
     end
 
     function Today(): (number, number)
@@ -337,25 +296,15 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     -- The items with prices on a ruleset.
     function Items(ruleset: string?): number[]
-        local out: number[] = {}
-        for itemID in pairs(self:PriceMap(ruleset) or {}) do
-            out[#out + 1] = itemID
-        end
-        return out
+        return Prices.Items(ruleset)
     end
 
     ----------------------------------------------------------------------------
     -- Reading prices
     ----------------------------------------------------------------------------
 
-    -- An item's kept looks (Ledger/Pack), nil: none.
-    function Packed(itemID: number, ruleset: string?): string?
-        local map = self:PriceMap(ruleset)
-        return map and map[itemID]
-    end
-
-    function Latest(itemID: number, ruleset: string?): Look?
-        return store.latest(self:Packed(itemID, ruleset))
+    function Latest(itemID: number, ruleset: string?): PriceLook?
+        return Prices.Latest(itemID, ruleset)
     end
 
     -- What it makes of a ruleset's prices (Ledger/PriceIndex).
@@ -364,8 +313,14 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         local idx = self.indexes[key]
         if not idx then
             idx = PriceIndex.new({
-                map = function(): PriceMap?
-                    return self:PriceMap(key)
+                items = function(): number[]
+                    return Prices.Items(key)
+                end,
+                latest = function(itemID: number): PriceLook?
+                    return Prices.Latest(itemID, key)
+                end,
+                usual = function(itemID: number): number?
+                    return Prices.Usual(itemID, key)
                 end,
                 settings = function(): (number, boolean)
                     return self:Get("dealPercent"), self:Get("dealVendor") == true
@@ -417,7 +372,7 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     end
 
     function DailyLows(itemID: number, count: number, ruleset: string?): (number[], number[])
-        return store.dailyLows(self:Packed(itemID, ruleset), days.dayOf(), count)
+        return Prices.DailyLows(itemID, count, ruleset)
     end
 
     -- The Prices row's 30 days.
@@ -426,16 +381,12 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         return lows
     end
 
-    function Looks(itemID: number, count: number?, ruleset: string?): Look[]
-        local today = days.dayOf()
-        return store.looks(
-            self:Packed(itemID, ruleset),
-            today - math.min(count or store.KEEP_DAYS, store.KEEP_DAYS) + 1
-        )
+    function Looks(itemID: number, count: number?, ruleset: string?): PriceLook[]
+        return Prices.Looks(itemID, count, ruleset)
     end
 
     function WhenCheapest(itemID: number, ruleset: string?): When
-        return store.whenOf(self:Packed(itemID, ruleset), days.dayOf())
+        return stats.whenCheapest(Prices.Looks(itemID, nil, ruleset))
     end
 
     ----------------------------------------------------------------------------
@@ -475,11 +426,7 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     -- How many items a ruleset has prices for.
     function ItemCount(ruleset: string?): number
-        local n = 0
-        for _ in pairs(self:PriceMap(ruleset) or {}) do
-            n += 1
-        end
-        return n
+        return Prices.ItemCount(ruleset)
     end
 
     -- The deals the last Scan all found (this session), furthest under
@@ -522,57 +469,32 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         return was ~= (low < w.target) or low < w.target
     end
 
-    -- One look (a search's): on this ruleset, now (or at `at`). -> whether
-    -- it changed what is kept.
-    function RecordLook(
-        itemID: number,
-        low: number,
-        most: number,
-        qty: number,
-        n: number,
-        at: number?,
-        name: string?,
-        quality: number?
-    ): boolean
+    -- A search's look (SUUUI_AUCTION_SEEN): the watches see its price.
+    function SeeLook(itemID: number, low: number, at: number?)
         if not (itemID and low and low > 0) then
-            return false
+            return
         end
-        if name then
-            self:KeepName(itemID, name, quality)
-        end
-        local ruleset = SuuUI.Ruleset()
-        local t = at or time()
-        local day, period = days.dayOf(t)
-        local changed = store.record(assert(self:PriceMap(ruleset, true)), itemID, day, period, low, most, qty, n)
-        if self:SeeWatched(ruleset, itemID, low, t) then
+        if self:SeeWatched(SuuUI.Ruleset(), itemID, low, at or time()) then
             self:Changed("watches")
         end
-        if changed then
-            local idx = self.indexes[ruleset]
-            if idx then
-                idx:Touch(itemID)
-            end
-            self:Changed("prices")
-        end
-        return changed
     end
 
-    -- Scan all's looks (SUUUI_AUCTION_SCANNED: five numbers an item, and
-    -- the names the house told), read a slice a frame; then the scan's
-    -- deals counted and kept, and the names still missing asked for in
-    -- the background.
-    function RecordScan(
-        looks: number[],
-        items: number,
-        at: number?,
-        names: { [number]: string }?,
-        qualities: { [number]: number }?
-    )
-        local itemNames = self:Names()
-        local ruleset = SuuUI.Ruleset()
+    -- A look changed what the price store keeps of an item
+    -- (SUUUI_PRICE_CHANGED): its summary worked out again.
+    function PriceChanged(ruleset: string, itemID: number)
+        local idx = self.indexes[ruleset]
+        if idx then
+            idx:Touch(itemID)
+        end
+        self:Changed("prices")
+    end
+
+    -- Scan all's looks, all kept by the price store (SUUUI_PRICES_SCANNED:
+    -- five numbers an item), read a slice a frame: each item's summary
+    -- worked out, the scan's deals counted and kept, the watches; then the
+    -- names still missing asked for in the background.
+    function ReadScan(ruleset: string, looks: number[], items: number, at: number?)
         local t = at or time()
-        local day, period = days.dayOf(t)
-        local map = assert(self:PriceMap(ruleset, true))
         local prev = self.scanTicker
         if prev then
             prev:Cancel()
@@ -594,11 +516,6 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
                 k += 1
                 local itemID, low = looks[b + 1], looks[b + 2]
                 if itemID and low and low > 0 then
-                    local name = names and names[itemID]
-                    if name then
-                        itemNames:Keep(itemID, name, qualities and qualities[itemID])
-                    end
-                    store.record(map, itemID, day, period, low, looks[b + 3] or 0, looks[b + 4] or 0, looks[b + 5] or 0)
                     -- (its summary worked out now: the Overview's deals and
                     -- the Prices list read them, no page works them out)
                     local sm = idx:Touch(itemID, true)
@@ -665,65 +582,14 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- Whether a ruleset's prices weren't pruned today yet.
-    function NeedsPrune(): boolean
-        local today = days.dayOf()
-        local d = self:Data()
-        local pruned = d.pruned or {}
-        for ruleset in pairs(d.prices or {}) do
-            if pruned[ruleset] ~= today then
-                return true
-            end
+    -- The price store dropped looks older than 60 days (SUUUI_PRICES_PRUNED):
+    -- the items with none left go from the index. (A look older than 60
+    -- days counts in no summary: the others stay as they are.)
+    function Pruned(ruleset: string, gone: number[])
+        for _, itemID in ipairs(gone) do
+            self:Forget(ruleset, itemID)
         end
-        return false
-    end
-
-    -- Every kept look older than 60 days dropped, a slice of items a
-    -- frame, once a day per ruleset.
-    function Prune()
-        local today = days.dayOf()
-        local d = self:Data()
-        local pruned = d.pruned or {}
-        d.pruned = pruned
-        local queue: { ruleset: string, itemID: number }[] = {}
-        for ruleset, map in pairs(d.prices or {}) do
-            if pruned[ruleset] ~= today then
-                pruned[ruleset] = today
-                for itemID in pairs(map) do
-                    queue[#queue + 1] = { ruleset = ruleset, itemID = itemID }
-                end
-            end
-        end
-        if #queue == 0 or self.pruneTicker then
-            return
-        end
-        local i = 0
-        self.pruneTicker = self:Every(0, function(ticker)
-            local stop = math.min(#queue, i + PRUNE_SLICE)
-            local deadline = debugprofilestop() + PRUNE_MS
-            local prices = self:Data().prices or {}
-            local k = i
-            while k < stop do
-                k += 1
-                local q = queue[k]
-                local map = prices[q.ruleset]
-                -- (a look older than 60 days counts in no summary: only an
-                -- item with none left goes from the index)
-                if map and store.prune(map, q.itemID, today) and not map[q.itemID] then
-                    self:Forget(q.ruleset, q.itemID)
-                end
-                if debugprofilestop() > deadline then
-                    break
-                end
-            end
-            i = k
-            if i >= #queue then
-                ticker:Cancel()
-                self.pruneTicker = nil
-                self:PruneNames()
-                self:Changed("prices")
-            end
-        end)
+        self:Changed("prices")
     end
 
     ----------------------------------------------------------------------------
@@ -734,8 +600,11 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         local n = self.itemNames
         if not n then
             n = ItemNames.new({
-                data = function(): LedgerData
-                    return self:Data()
+                kept = function(itemID: number): (string?, number?)
+                    return Prices.KeptName(itemID)
+                end,
+                keep = function(itemID: number, name: string?, quality: number?): boolean
+                    return Prices.KeepName(self, itemID, name, quality)
                 end,
                 every = function(seconds: number, fn: (ticker: TickerHandle) -> ()): TickerHandle
                     return self:Every(seconds, fn)
@@ -761,13 +630,10 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     -- Whether an item is in any ruleset's prices or watches.
     function Known(itemID: number): boolean
-        local d = self:Data()
-        for _, map in pairs(d.prices or {}) do
-            if map[itemID] then
-                return true
-            end
+        if Prices.Known(itemID) then
+            return true
         end
-        for _, list in pairs(d.watches or {}) do
+        for _, list in pairs(self:Data().watches or {}) do
             if list[itemID] then
                 return true
             end
@@ -785,16 +651,6 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     function AskNames(ids: number[])
         self:Names():AskAll(ids)
-    end
-
-    -- The names of items in no ruleset's prices and no watch dropped (with
-    -- the prices' prune: an item not seen for 60 days). Kept all, they'd
-    -- grow with every item a house ever showed; a transaction's item asks
-    -- for its name again when it shows.
-    function PruneNames()
-        self:Names():Prune(function(itemID: number): boolean
-            return self:Known(itemID)
-        end)
     end
 
     ----------------------------------------------------------------------------
@@ -1166,11 +1022,19 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         self:RegisterSettings(SECTION)
-        self:On("SUUUI_AUCTION_SEEN", function(_, itemID, low, most, qty, n, _source, name, quality)
-            self:RecordLook(itemID, low, most, qty, n, nil, name, quality)
+        -- (the auction house module keeps every look in the price store,
+        -- with this module on or off; these follow the store)
+        self:On("SUUUI_AUCTION_SEEN", function(_, itemID, low)
+            self:SeeLook(itemID, low)
         end)
-        self:On("SUUUI_AUCTION_SCANNED", function(_, looks, items, names, qualities)
-            self:RecordScan(looks, items, nil, names, qualities)
+        self:On("SUUUI_PRICE_CHANGED", function(_, ruleset, itemID)
+            self:PriceChanged(ruleset, itemID)
+        end)
+        self:On("SUUUI_PRICES_SCANNED", function(_, ruleset, looks, items, at)
+            self:ReadScan(ruleset, looks, items, at)
+        end)
+        self:On("SUUUI_PRICES_PRUNED", function(_, ruleset, gone)
+            self:Pruned(ruleset, gone)
         end)
         -- the deals change with their settings
         self:WatchAll({ "dealPercent", "dealVendor" }, function()
@@ -1227,13 +1091,9 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
         rec:Enable()
         entry.enable(self)
         notes.enable(self)
-        -- (after login's rush)
-        local prices = self:NeedsPrune()
-        if prices or self:Store():NeedsPrune() then
+        -- (after login's rush; the prices are pruned by the price store)
+        if self:Store():NeedsPrune() then
             self:After(10, function()
-                if prices then
-                    self:Prune()
-                end
                 self:PruneBooks()
             end)
         end
@@ -1241,7 +1101,7 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
 
     -- (its listeners, timers and the service go with the release)
     override function OnDisable()
-        self.scanTicker, self.pruneTicker = nil, nil
+        self.scanTicker = nil
         local names = self.itemNames
         if names then
             names:Stop()

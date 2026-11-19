@@ -13,6 +13,8 @@ import internal M as Bags from "/Units/Bags"
 import * as settings from "/Core/Settings"
 import * as entry from "/Units/Ledger/Entry"
 import expectNoErrors from "../../../helpers"
+import see, scanAll from "./LedgerHelpers"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
 
 const DUST = 990601
 const SHARD = 990602
@@ -52,7 +54,8 @@ local function cleanup()
         settings.set("ledger", "enabled", true)
     end
     local d = M:Data()
-    d.prices, d.scans, d.watches = nil, nil, nil
+    d.scans, d.watches = nil, nil
+    priceStore.wipe()
     M:DropIndexes()
     ClearCursor()
     mock.advanceFrames(2)
@@ -203,11 +206,11 @@ end
 
 @test("the watched items under your price, with how many the look that found them offered")
 local function watched()
-    M:RecordLook(DUST, 900, 0, 5, 1, time() - 86400)
+    see(DUST, 900, 0, 5, 1, time() - 86400)
     M:WatchItem(DUST, 800)
     M:WatchItem(SHARD, 100)
     expect(entry.watchedUnder(M)).toEqual({})
-    M:RecordLook(DUST, 750, 0, 2, 1)
+    see(DUST, 750, 0, 2, 1)
     local under = entry.watchedUnder(M)
     expect(#under).toBe(1)
     expect(under[1].itemID).toBe(DUST)
@@ -218,12 +221,12 @@ local function watched()
     expect(assert(svc.WatchedUnder)()).toEqual(under)
     -- a dearer look later in the same period: the watch has that look's
     -- price, the period keeps the lowest, so how many is not known
-    M:RecordLook(DUST, 780, 0, 9, 1)
+    see(DUST, 780, 0, 9, 1)
     expect(entry.watchedUnder(M)[1].low).toBe(780)
     expect(entry.watchedUnder(M)[1].qty).toBe(0)
     -- the last scan, through the service
     expect(assert(svc.LastScan)()).toBeNil()
-    M:Emit("SUUUI_AUCTION_SCANNED", { SHARD, 90, 0, 1, 1 }, 1)
+    scanAll({ SHARD, 90, 0, 1, 1 }, 1)
     local s = assert(assert(svc.LastScan)())
     expect(s.items).toBe(1)
     M:UnwatchItem(DUST)

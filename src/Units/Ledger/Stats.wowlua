@@ -1,9 +1,9 @@
 -- Units/Ledger/Stats.wowlua
 -- What the Ledger makes of an item's looks (Units/Ledger; decided
--- 2026-11-18). Pure functions over numbers and decoded looks (Pack):
+-- 2026-11-18). Pure functions over numbers and looks (SuuUI.Prices: the
+-- usual price, the middle of the lowest buyouts of the last 14 days that
+-- have a look, is the price store's):
 --
---   usual     the middle (median) of the lowest buyouts of the last 14
---             days that have a look
 --   change    the lowest now against the usual price, in percent (-26:
 --             26 % under it)
 --   deals     a last look at least "Counts as a deal" percent under its
@@ -17,9 +17,8 @@
 --             named only when the rows are 4 % or more apart.
 
 import weekday from "./Days"
-import type Points from "./Pack"
+import type PriceLook from "/Core/API"
 
-export const USUAL_DAYS = 14
 export const WHEN_LOOKS = 3
 export const WHEN_SPREAD = 4
 
@@ -41,14 +40,6 @@ export function median(values: number[], n: number?): number?
         return sorted[mid + 1]
     end
     return (sorted[mid] + sorted[mid + 1]) / 2
-end
-
--- The usual price from the daily lows of the days that have a look, the
--- newest first (any number of them; the first 14 count), rounded to a
--- copper. Nil: no look.
-export function usual(lowsNewestFirst: number[]): number?
-    local m = median(lowsNewestFirst, math.min(#lowsNewestFirst, USUAL_DAYS))
-    return m and math.floor(m + 0.5)
 end
 
 -- The lowest now against the usual price, in percent (negative: under).
@@ -131,12 +122,13 @@ local function rows(ratios: number[][]): WhenRow[]
     return out
 end
 
--- From an item's looks (Pack's decode: day, period, low each).
-export function whenCheapest(p: Points): When
+-- From an item's looks (SuuUI.Prices.Looks: day, period, low each).
+export function whenCheapest(list: PriceLook[]): When
+    local count = #list
     -- each day's lowest
     local dayLow: { [number]: number } = {}
-    for k = 1, p.count do
-        local d, low = p.day[k], p.low[k]
+    for k = 1, count do
+        local d, low = list[k].day, list[k].low
         local was = dayLow[d]
         if not was or low < was then
             dayLow[d] = low
@@ -154,25 +146,25 @@ export function whenCheapest(p: Points): When
         end
         local mid = median(week)
         if mid and mid > 0 then
-            local list = byWeekday[weekday(d)]
-            list[#list + 1] = low / mid - 1
+            local wl = byWeekday[weekday(d)]
+            wl[#wl + 1] = low / mid - 1
         end
     end
     -- the times: each look against its week's looks
     local byPeriod: number[][] = { {}, {}, {}, {} }
-    for k = 1, p.count do
-        local d = p.day[k]
+    for k = 1, count do
+        local d = list[k].day
         local week: number[] = {}
-        for j = 1, p.count do
-            local dj = p.day[j]
+        for j = 1, count do
+            local dj = list[j].day
             if dj >= d - 3 and dj <= d + 3 then
-                week[#week + 1] = p.low[j]
+                week[#week + 1] = list[j].low
             end
         end
         local mid = median(week)
-        local list = byPeriod[p.period[k]]
-        if mid and mid > 0 and list then
-            list[#list + 1] = p.low[k] / mid - 1
+        local pl = byPeriod[list[k].period]
+        if mid and mid > 0 and pl then
+            pl[#pl + 1] = list[k].low / mid - 1
         end
     end
     local weekdays, times = rows(byWeekday), rows(byPeriod)

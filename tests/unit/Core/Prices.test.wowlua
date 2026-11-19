@@ -1,0 +1,637 @@
+-- Core/Prices: the price store, one copy per ruleset in SuuUIPrices: a
+-- look kept and told, read back (latest, usual price, daily lows, every
+-- look, the rulesets and items); when a look was; names kept, read and
+-- pruned; Scan all's looks kept a slice a frame and told once; the prune
+-- once a day; the API (anyone reads, only SuuUI's own modules write; the
+-- calendar, the number format); the migration from the Ledger's prices and
+-- names and every character's auction house `seen`, safe to run again; and
+-- the saved size before and after for one ruleset with 7,000 items and
+-- three scanning characters.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import * as prices from "/Core/Prices"
+import * as pack from "/Core/Prices/Pack"
+import * as store from "/Core/Prices/Store"
+import * as days from "/Core/Prices/Days"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import * as DB from "/Core/DB"
+import internal M as AH from "/Units/AuctionHouse"
+import * as priceStore from "./Prices/PricesHelpers"
+import expectNoErrors from "../../helpers"
+
+const ORE = 991101
+const BAR = 991102
+const GEM = 991103
+const HIDE = 991104
+const DAY = 86400
+mock.defineItem(ORE, { name = "Test Store Ore", quality = 1 })
+mock.defineItem(BAR, { name = "Test Store Bar", quality = 2 }, { cached = false, delay = 600 })
+
+const LISTENER = { name = "PricesTest" }
+
+-- The Ledger's SavedVariable, as Core reads it to move the old prices in.
+local function ledgerData(): { [string]: unknown }
+    return tbl.field(_G, "SuuUILedger") :: { [string]: unknown }
+end
+
+-- Every character's data in SuuUIDB.
+local function charData(): { [string]: { [string]: unknown } }
+    local d = DB.db :: { charData: { [string]: { [string]: unknown } } }
+    return d.charData
+end
+
+local addedChars: string[] = {}
+
+-- A character's auction house data, as SuuUI before the store kept it.
+local function oldChar(key: string, ah: { [string]: unknown })
+    charData()[key] = { auctionhouse = ah }
+    addedChars[#addedChars + 1] = key
+end
+
+@afterEach
+local function cleanup()
+    events.offAll(LISTENER)
+    priceStore.wipe()
+    local l = ledgerData()
+    l.prices, l.names, l.pruned, l.goal = nil, nil, nil, nil
+    for _, key in ipairs(addedChars) do
+        charData()[key] = nil
+    end
+    addedChars = {}
+    local mine = AH:CharData() :: { [string]: unknown }
+    mine.seen = nil
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+-- What the store told, in order.
+local function heard(): string[]
+    local out: string[] = {}
+    events.on(
+        "SUUUI_PRICE_CHANGED",
+        function(_, ruleset, itemID)
+            out[#out + 1] = "changed " .. ruleset .. " " .. itemID
+        end,
+        LISTENER
+    )
+    events.on(
+        "SUUUI_PRICES_SCANNED",
+        function(_, ruleset, _looks, items)
+            out[#out + 1] = "scanned " .. ruleset .. " " .. items
+        end,
+        LISTENER
+    )
+    events.on(
+        "SUUUI_PRICES_PRUNED",
+        function(_, ruleset, gone)
+            out[#out + 1] = "pruned " .. ruleset .. " " .. #gone
+        end,
+        LISTENER
+    )
+    return out
+end
+
+@test("a look: kept on this ruleset, told when it changed what is kept; read back")
+local function recordAndRead()
+    local here = SuuUI.Ruleset()
+    local told = heard()
+    expect(prices.record(ORE, 120, 0, 40, 2)).toBe(true)
+    -- the same again: nothing changed, nothing told
+    expect(prices.record(ORE, 120, 0, 40, 2)).toBe(false)
+    -- no price: nothing
+    expect(prices.record(ORE, 0)).toBe(false)
+    expect(told).toEqual({ "changed " .. here .. " " .. ORE })
+    local today, period = days.dayOf()
+    expect(prices.latest(ORE)).toEqual({ day = today, period = period, low = 120, most = 0, qty = 40, n = 2 })
+    expect(prices.latest(ORE, "Another")).toBeNil()
+    expect(prices.latest(BAR)).toBeNil()
+    -- days before: the usual price, the daily lows, every look
+    for k, low in ipairs({ 100, 110, 130, 140 }) do
+        prices.record(ORE, low, 150, 10, 1, nil, nil, time() - k * DAY)
+    end
+    expect(prices.usual(ORE)).toBe(120)
+    expect(prices.usual(BAR)).toBeNil()
+    local lows, mosts = prices.dailyLows(ORE, 5)
+    expect(lows).toEqual({ 140, 130, 110, 100, 120 })
+    expect(mosts).toEqual({ 150, 150, 150, 150, 0 })
+    expect(#prices.looks(ORE)).toBe(5)
+    expect(#prices.looks(ORE, 2)).toBe(2)
+    -- the rulesets and items
+    expect(prices.items()).toEqual({ ORE })
+    expect(prices.itemCount()).toBe(1)
+    expect(prices.itemCount("Another")).toBe(0)
+    expect(prices.known(ORE)).toBe(true)
+    expect(prices.known(BAR)).toBe(false)
+    expect(prices.rulesetList()).toEqual({ here })
+    assert(prices.map("Another", true))[BAR] = prices.packed(ORE)
+    assert(prices.map("Aardvark", true))
+    expect(prices.rulesetList()).toEqual({ here, "Another" })
+    expect(prices.known(BAR)).toBe(true)
+    -- the newest look's name, when the house told it
+    prices.record(GEM, 50, 0, 1, 1, "Test Store Gem", 3)
+    expect({ prices.keptName(GEM) }).toEqual({ "Test Store Gem", 3 })
+end
+
+@test("when a look was: today by the time of day, then yesterday, days ago")
+local function whenText()
+    local today = days.dayOf()
+    expect(prices.whenText(days.timeOf(today, days.NIGHT))).toBe("last night")
+    expect(prices.whenText(days.timeOf(today, days.MORNING) + 60)).toBe("this morning")
+    expect(prices.whenText(days.timeOf(today, days.NOON))).toBe("around midday")
+    expect(prices.whenText(days.timeOf(today, days.EVENING))).toBe("this evening")
+    expect(prices.whenText(time() - DAY)).toBe("yesterday")
+    expect(prices.whenText(time() - 3 * DAY)).toBe("3 days ago")
+    expect(SuuUI.Prices.When(time())).toBe(prices.whenText(time()))
+end
+
+@test(
+    "names: packed with their quality; kept, the quality not lost to a name without one; the client's cache read, not kept; the prune"
+)
+local function names()
+    expect(prices.packName("Goblin Rocket Helmet", 2)).toBe("2Goblin Rocket Helmet")
+    expect(prices.packName("Linen Cloth", nil)).toBe("-Linen Cloth")
+    expect(prices.packName("Odd", 12)).toBe("-Odd")
+    expect({ prices.unpackName("2Goblin Rocket Helmet") }).toEqual({ "Goblin Rocket Helmet", 2 })
+    local n, q = prices.unpackName("-Linen Cloth")
+    expect(n).toBe("Linen Cloth")
+    expect(q).toBeNil()
+    expect(prices.unpackName(nil)).toBeNil()
+    expect(prices.unpackName("2")).toBeNil()
+    -- kept: a change only when it differs
+    expect(prices.keepName(GEM, "Test Store Gem", 3)).toBe(true)
+    expect(prices.keepName(GEM, "Test Store Gem", 3)).toBe(false)
+    expect(prices.keepName(GEM, "Test Store Gem", nil)).toBe(false)
+    expect(assert(prices.data().names)[GEM]).toBe("3Test Store Gem")
+    expect(prices.keepName(GEM, "Test Store Gem Renamed", nil)).toBe(true)
+    expect(assert(prices.data().names)[GEM]).toBe("3Test Store Gem Renamed")
+    expect(prices.keepName(HIDE, nil, 1)).toBe(false)
+    expect(prices.keepName(HIDE, "", 1)).toBe(false)
+    -- read: the kept one, else the client's cache (a read keeps nothing)
+    expect({ prices.nameOf(GEM) }).toEqual({ "Test Store Gem Renamed", 3 })
+    expect({ prices.nameOf(ORE) }).toEqual({ "Test Store Ore", 1 })
+    expect(assert(prices.data().names)[ORE]).toBeNil()
+    expect(prices.nameOf(BAR)).toBeNil()
+    expect({ SuuUI.Prices.Name(ORE) }).toEqual({ "Test Store Ore", 1 })
+    expect(SuuUI.Prices.KeptName(ORE)).toBeNil()
+    -- the prune: the names of items in no prices go
+    prices.record(GEM, 50, 0, 1, 1)
+    prices.keepName(HIDE, "Test Store Hide", 1)
+    expect(prices.pruneNames()).toBe(1)
+    expect(assert(prices.data().names)[HIDE]).toBeNil()
+    expect(assert(prices.data().names)[GEM]).toBe("3Test Store Gem Renamed")
+end
+
+@test(
+    "Scan all's looks: the first slice now, the rest a slice a frame, the names kept; told once when all are; a second scan finishes the first"
+)
+local function scanAll()
+    local here = SuuUI.Ruleset()
+    local told = heard()
+    local n = prices.SCAN_SLICE * 2 + 5
+    local looks: number[] = {}
+    for i = 1, n do
+        for _, v in ipairs({ 3500000 + i, 100 + i, 0, 2, 1 }) do
+            looks[#looks + 1] = v
+        end
+    end
+    prices.recordScan(looks, n, { [3500001] = "Test Scanned One" }, { [3500001] = 2 })
+    expect(prices.scanning()).toBe(true)
+    expect(prices.itemCount()).toBe(prices.SCAN_SLICE)
+    expect({ prices.keptName(3500001) }).toEqual({ "Test Scanned One", 2 })
+    expect(told).toEqual({})
+    mock.advanceFrames(1)
+    expect(prices.itemCount()).toBe(prices.SCAN_SLICE * 2)
+    mock.advanceFrames(1)
+    expect(prices.scanning()).toBe(false)
+    expect(prices.itemCount()).toBe(n)
+    expect(told).toEqual({ "scanned " .. here .. " " .. n })
+    expect(assert(prices.latest(3500000 + n)).low).toBe(100 + n)
+    -- one while another is kept: the first finished at once, both told
+    prices.recordScan(looks, n)
+    local again: number[] = { 3600001, 7, 0, 1, 1 }
+    prices.recordScan(again, 1)
+    expect(prices.scanning()).toBe(false)
+    expect(told).toEqual({ "scanned " .. here .. " " .. n, "scanned " .. here .. " " .. n, "scanned " .. here .. " 1" })
+    -- a look without a price: skipped
+    prices.recordScan({ 3600002, 0, 0, 1, 1 }, 1)
+    expect(prices.latest(3600002)).toBeNil()
+end
+
+@test(
+    "the prune: looks older than 60 days dropped once a day, a slice a frame; the names no prices need; told per ruleset with the items gone"
+)
+local function prune()
+    local here = SuuUI.Ruleset()
+    prices.record(ORE, 100, 0, 1, 1, nil, nil, time() - 70 * DAY)
+    prices.record(BAR, 100, 0, 1, 1, nil, nil, time() - 70 * DAY)
+    prices.record(BAR, 200, 0, 1, 1)
+    for i = 1, prices.PRUNE_SLICE + 100 do
+        prices.record(3700000 + i, 100, 0, 1, 1, nil, nil, time() - 61 * DAY)
+    end
+    prices.keepName(ORE, "Test Store Ore", 1)
+    prices.keepName(BAR, "Test Store Bar", 2)
+    -- another ruleset's
+    assert(prices.map("Another", true))[GEM] = pack.record(nil, days.dayOf() - 65, 1, 5, 0, 1, 1)
+    expect(prices.needsPrune()).toBe(true)
+    local told = heard()
+    prices.prune()
+    mock.advanceFrames(1)
+    expect(prices.needsPrune()).toBe(false)
+    -- (not done yet: a slice a frame)
+    expect(told).toEqual({})
+    mock.advanceFrames(2)
+    expect(prices.latest(ORE)).toBeNil()
+    expect(assert(prices.latest(BAR)).low).toBe(200)
+    expect(#prices.looks(BAR)).toBe(1)
+    expect(prices.latest(3700000 + 1)).toBeNil()
+    expect(prices.latest(GEM, "Another")).toBeNil()
+    expect(told).toEqual({ "pruned Another 1", "pruned " .. here .. " " .. (prices.PRUNE_SLICE + 101) })
+    expect(assert(prices.data().names)[ORE]).toBeNil()
+    expect(assert(prices.data().names)[BAR]).toBe("2Test Store Bar")
+    -- once a day
+    prices.prune()
+    mock.advanceFrames(2)
+    expect(#told).toBe(2)
+end
+
+@test("the API: anyone reads; only SuuUI's own modules write (the auction house's looks)")
+local function api()
+    local P = SuuUI.Prices
+    -- a built-in module writes
+    expect(P.Record(AH, ORE, 120, 0, 40, 2, "Test Store Ore", 1)).toBe(true)
+    expect(assert(P.Latest(ORE)).low).toBe(120)
+    expect(P.Usual(ORE)).toBe(120)
+    expect(P.Items()).toEqual({ ORE })
+    expect(P.ItemCount()).toBe(1)
+    expect(P.Known(ORE)).toBe(true)
+    expect(P.Rulesets()).toEqual({ SuuUI.Ruleset() })
+    expect(#P.Looks(ORE)).toBe(1)
+    expect(#(P.DailyLows(ORE, 7))).toBe(7)
+    expect(P.KEEP_DAYS).toBe(60)
+    expect(P.KeepName(AH, GEM, "Test Store Gem", 3)).toBe(true)
+    P.RecordScan(AH, { BAR, 30, 0, 1, 1 }, 1)
+    expect(assert(P.Latest(BAR)).low).toBe(30)
+    -- a plugin's module reads, never writes
+    local plugin = modules.register({ id = "zzpriceplugin", addon = "Plugin" })
+    for _, write in ipairs({
+        function()
+            P.Record(plugin, ORE, 1)
+        end,
+        function()
+            P.RecordScan(plugin, { ORE, 1, 0, 1, 1 }, 1)
+        end,
+        function()
+            P.KeepName(plugin, ORE, "Wrong", 1)
+        end,
+        function()
+            P.Record((nil :: unknown) :: modules.AnyModule, ORE, 1)
+        end,
+    }) do
+        expect(write).toThrow("only SuuUI's own modules write prices")
+    end
+    expect(assert(P.Latest(ORE)).low).toBe(120)
+    -- the calendar and the number format
+    local C = SuuUI.Calendar
+    local today, period = C.DayOf()
+    expect({ today, period }).toEqual({ days.dayOf() })
+    expect(C.DayNumber(C.DateOf(today))).toBe(today)
+    expect(C.Weekday(20775)).toBe(3)
+    expect(C.PeriodOfHour(12)).toBe(C.NOON)
+    expect(C.PERIODS[C.EVENING]).toBe("Evening")
+    expect(C.WEEKDAYS[1]).toBe("Monday")
+    expect(C.TimeOf(today, period) <= time()).toBe(true)
+    expect({ C.NIGHT, C.MORNING }).toEqual({ 1, 2 })
+    local s = SuuUI.PackNumber(50175)
+    expect(#s).toBe(3)
+    expect({ SuuUI.UnpackNumber(s, 1) }).toEqual({ 50175, 4 })
+end
+
+@test(
+    "the auction house module off: its looks kept stay readable; the Ledger off: the auction house still keeps and reads its looks"
+)
+local function modulesOff()
+    -- (the Ledger off: tested with the Ledger, Units/Ledger; here the store
+    -- alone, as either module reads it)
+    AH:Seen(ORE, 120, 40)
+    expect(assert(AH:LowestSeen(ORE)).price).toBe(120)
+    expect(assert(prices.latest(ORE)).low).toBe(120)
+    -- nothing of it per character
+    expect((AH:CharData() :: { [string]: unknown }).seen).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- The migration
+--------------------------------------------------------------------------------
+
+@test(
+    "merging an item's looks: as they are when none are kept (or the same); else each one recorded, the same period's lowest kept; again changes nothing"
+)
+local function mergeInto()
+    local today = days.dayOf()
+    local m: store.PriceMap = {}
+    local a = pack.record(pack.record(nil, today - 2, 1, 100, 0, 1, 1), today - 1, 2, 90, 0, 1, 1)
+    prices.mergeInto(m, ORE, a)
+    expect(m[ORE]).toBe(a)
+    prices.mergeInto(m, ORE, a)
+    expect(m[ORE]).toBe(a)
+    -- another string: a look of its own and one of the same period, lower
+    local b = pack.record(pack.record(nil, today - 1, 2, 80, 0, 1, 1), today, 3, 70, 0, 1, 1)
+    prices.mergeInto(m, ORE, b)
+    local looks = store.looks(m[ORE], today - 5)
+    expect(#looks).toBe(3)
+    expect({ looks[1].low, looks[2].low, looks[3].low }).toEqual({ 70, 80, 100 })
+    local merged = m[ORE]
+    prices.mergeInto(m, ORE, b)
+    expect(m[ORE]).toBe(merged)
+end
+
+@test(
+    "a seen entry: a look when newer than the newest kept (its day and period), else dropped; one older than the kept days dropped"
+)
+local function mergeSeen()
+    local today = days.dayOf()
+    local m: store.PriceMap = {}
+    local noon = days.timeOf(today, days.NOON) + 600
+    expect(prices.mergeSeen(m, ORE, { price = 100, at = noon, qty = 5, n = 2, most = 130 }, today)).toBe(true)
+    expect(store.latest(m[ORE])).toEqual({ day = today, period = days.NOON, low = 100, most = 130, qty = 5, n = 2 })
+    -- the same period (another character's look, later): dropped
+    expect(prices.mergeSeen(m, ORE, { price = 50, at = noon + 60 }, today)).toBe(false)
+    -- older: dropped
+    expect(prices.mergeSeen(m, ORE, { price = 50, at = noon - DAY }, today)).toBe(false)
+    -- newer: a look in front
+    expect(prices.mergeSeen(m, ORE, { price = 90, at = days.timeOf(today, days.EVENING) }, today)).toBe(true)
+    expect(assert(store.latest(m[ORE])).low).toBe(90)
+    -- before the kept days, no price, no time: nothing
+    expect(prices.mergeSeen(m, BAR, { price = 5, at = time() - 70 * DAY }, today)).toBe(false)
+    expect(prices.mergeSeen(m, BAR, { price = 0, at = noon }, today)).toBe(false)
+    expect(prices.mergeSeen(m, BAR, { price = 5 }, today)).toBe(false)
+    expect(prices.mergeSeen(m, BAR, "nonsense", today)).toBe(false)
+    expect(m[BAR]).toBeNil()
+end
+
+@test(
+    "moved in: the Ledger's prices, names and prune days unchanged; every character's seen merged in time order, then gone; a second run changes nothing"
+)
+local function migrate()
+    local here = SuuUI.Ruleset()
+    local today = days.dayOf()
+    local yesterday = days.timeOf(today - 1, days.NOON)
+    -- the Ledger's, as it kept them
+    local oreLooks = pack.record(pack.record(nil, today - 3, 2, 1100, 0, 4, 2), today - 1, 3, 1000, 1200, 6, 3)
+    local barLooks = pack.record(nil, today - 2, 4, 500, 0, 1, 1)
+    local l = ledgerData()
+    l.prices = { [here] = { [ORE] = oreLooks, [BAR] = barLooks }, ["Another"] = { [GEM] = barLooks } }
+    l.names = { [ORE] = "1Test Store Ore", [BAR] = "2Test Store Bar" }
+    l.pruned = { [here] = today - 1 }
+    l.goal = { name = "Test Goal", amount = 100 }
+    -- the characters' seen: this one's (newer than the Ledger's newest ore
+    -- look: kept), an alt's on the same ruleset said by its key (the same
+    -- period later: dropped; a gem only it saw: kept), one's on another
+    -- ruleset, one's older than the kept days
+    local mine = AH:CharData() :: { [string]: unknown }
+    mine.seen = {
+        [ORE] = { price = 950, at = days.timeOf(today, days.MORNING) + 60, qty = 7, n = 2 },
+        [BAR] = { price = 400, at = yesterday - 3 * DAY },
+    }
+    oldChar("Altplayer - " .. here, {
+        seen = {
+            [ORE] = { price = 900, at = days.timeOf(today, days.MORNING) + 120 },
+            [HIDE] = { price = 77, at = yesterday, qty = 3 },
+        },
+        posted = { [ORE] = { price = 1300, at = yesterday } },
+    })
+    oldChar("Farplayer - Elsewhere", { ruleset = "Far Ruleset", seen = { [GEM] = { price = 10, at = yesterday } } })
+    oldChar("Oldplayer - " .. here, { seen = { [GEM] = { price = 5, at = time() - 70 * DAY } } })
+    local moved = prices.migrate()
+    expect(moved).toEqual({ ledgerItems = 3, names = 2, seenLooks = 3, dropped = 3, chars = 4 })
+    -- the Ledger's moved unchanged, and gone from it
+    expect(assert(prices.map("Another"))[GEM]).toBe(barLooks)
+    expect(assert(prices.map())[BAR]).toBe(barLooks)
+    expect(l.prices).toBeNil()
+    expect(l.names).toBeNil()
+    expect(l.pruned).toBeNil()
+    expect(assert(l.goal)).toEqual({ name = "Test Goal", amount = 100 })
+    expect(assert(prices.data().pruned)[here]).toBe(today - 1)
+    expect({ prices.keptName(BAR) }).toEqual({ "Test Store Bar", 2 })
+    -- this character's ore look in front of the Ledger's; the alt's in the
+    -- same period dropped
+    local ore = prices.looks(ORE)
+    expect(#ore).toBe(3)
+    expect(ore[1]).toEqual({ day = today, period = days.MORNING, low = 950, most = 0, qty = 7, n = 2 })
+    expect(ore[2].low).toBe(1000)
+    expect(store.looks(assert(prices.map())[ORE], 0)[2].most).toBe(1200)
+    expect(assert(prices.latest(HIDE)).low).toBe(77)
+    expect(assert(prices.latest(GEM, "Far Ruleset")).low).toBe(10)
+    expect(prices.latest(GEM)).toBeNil()
+    -- seen gone from every character; the rest of their data stays
+    expect(mine.seen).toBeNil()
+    for _, key in ipairs(addedChars) do
+        expect(tbl.field(charData()[key], "auctionhouse", "seen")).toBeNil()
+    end
+    local posted = tbl.field(charData()["Altplayer - " .. here], "auctionhouse", "posted") :: {
+        [number]: { price: number },
+    }
+    expect(assert(posted[ORE]).price).toBe(1300)
+    -- a second run: nothing left to move, nothing changed
+    local before: { [number]: string } = {}
+    for id, s in pairs(assert(prices.map())) do
+        before[id] = s
+    end
+    expect(prices.migrate()).toEqual({ ledgerItems = 0, names = 0, seenLooks = 0, dropped = 0, chars = 0 })
+    expect(assert(prices.map())).toEqual(before)
+end
+
+@test(
+    "a migration that stopped half way (the Ledger's prices in, its source still there, seen not merged yet): run again, nothing lost or doubled"
+)
+local function halfWay()
+    local here = SuuUI.Ruleset()
+    local today = days.dayOf()
+    local oreLooks = pack.record(pack.record(nil, today - 3, 2, 1100, 0, 4, 2), today - 1, 3, 1000, 0, 6, 3)
+    local l = ledgerData()
+    -- (as if the first run had copied the ore and stopped)
+    assert(prices.map(here, true))[ORE] = oreLooks
+    l.prices = { [here] = { [ORE] = oreLooks, [BAR] = oreLooks } }
+    local mine = AH:CharData() :: { [string]: unknown }
+    mine.seen = { [ORE] = { price = 900, at = days.timeOf(today, days.EVENING) } }
+    prices.migrate()
+    expect(#prices.looks(ORE)).toBe(3)
+    expect(assert(prices.latest(ORE)).low).toBe(900)
+    expect(assert(prices.map())[BAR]).toBe(oreLooks)
+    expect(l.prices).toBeNil()
+    expect(mine.seen).toBeNil()
+    -- the seen part again (as if its source had stayed): its look is no
+    -- longer newer, nothing doubles
+    mine.seen = { [ORE] = { price = 900, at = days.timeOf(today, days.EVENING) } }
+    local was = assert(prices.map())[ORE]
+    expect(prices.migrate().dropped).toBe(1)
+    expect(assert(prices.map())[ORE]).toBe(was)
+    expect(mine.seen).toBeNil()
+end
+
+@test("data saved without the Ledger (only the auction house's seen) moves in too")
+local function seenOnly()
+    local here = SuuUI.Ruleset()
+    local today = days.dayOf()
+    local mine = AH:CharData() :: { [string]: unknown }
+    mine.seen = {
+        [ORE] = { price = 120, at = days.timeOf(today - 2, days.NOON), qty = 40, n = 3, most = 150 },
+        -- (a key as a string, as a hand-written file may have it)
+        [tostring(BAR) :: unknown] = { price = 60, at = days.timeOf(today, days.NIGHT) },
+    }
+    oldChar("Altplayer - " .. here, { seen = { [ORE] = { price = 110, at = days.timeOf(today - 1, days.NOON) } } })
+    expect(ledgerData().prices).toBeNil()
+    local moved = prices.migrate()
+    expect(moved.seenLooks).toBe(3)
+    expect(moved.chars).toBe(2)
+    local ore = prices.looks(ORE)
+    expect(#ore).toBe(2)
+    expect(ore[1].low).toBe(110)
+    expect(ore[2]).toEqual({ day = today - 2, period = days.NOON, low = 120, most = 150, qty = 40, n = 3 })
+    expect(assert(prices.latest(BAR)).low).toBe(60)
+    expect(mine.seen).toBeNil()
+end
+
+@test("kept across a /reload: the store's looks and names, read the same after it")
+local function acrossReload()
+    if mock.reloads() == 0 then
+        prices.record(ORE, 321, 0, 4, 1, "Test Store Ore", 1)
+        mock.reloadUI()
+    end
+    expect(mock.reloads()).toBe(1)
+    expect(assert(prices.latest(ORE)).low).toBe(321)
+    expect({ prices.keptName(ORE) }).toEqual({ "Test Store Ore", 1 })
+    -- (nothing left to move in at load)
+    expect(prices.lastMigration()).toEqual({ ledgerItems = 0, names = 0, seenLooks = 0, dropped = 0, chars = 0 })
+end
+
+--------------------------------------------------------------------------------
+-- The saved size before and after
+--------------------------------------------------------------------------------
+
+-- How many bytes WoW writes for `v` as the value of a key at `depth` (tabs
+-- before each line inside it, a SavedVariables file's layout).
+local function savedSize(v: unknown, depth: number): number
+    if type(v) == "table" then
+        local n = 2 -- "{\n"
+        for k, x in pairs(v :: { [unknown]: unknown }) do
+            local key = type(k) == "number" and ("[" .. tostring(k) .. "]") or ("[\"" .. tostring(k) .. "\"]")
+            n += depth + 1 + #key + 3 + savedSize(x, depth + 1) + 2 -- tabs, key, " = ", value, ",\n"
+        end
+        return n + depth + 1 -- tabs, "}"
+    elseif type(v) == "string" then
+        return #v + 2
+    end
+    return #tostring(v)
+end
+
+-- A small fixed random sequence (the test's own: the same every run).
+local seed = 4242
+local function random(): number
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+end
+
+@test(
+    "7,000 items on one ruleset, three characters scanning: the saved size before (the Ledger's prices and names, three copies of seen) and after (one store)"
+)
+local function sizes()
+    local here = SuuUI.Ruleset()
+    local today, period = days.dayOf()
+    local ITEMS, DAYS = 7000, 60
+    -- the Ledger's 60 days of looks (one or two a day) and names, as it kept them
+    local ledgerPrices: { [number]: string } = {}
+    local ledgerNames: { [number]: string } = {}
+    local base: number[] = {}
+    for i = 1, ITEMS do
+        local r = random()
+        base[i] = r < 0.5 and (100 + random() * 9900) or r < 0.85 and (10000 + random() * 490000) or
+            (500000 + random() * 4500000)
+        ledgerNames[4000000 + i] = prices.packName("Test Item Name " .. i, i % 5)
+    end
+    for d = today - DAYS + 1, today do
+        for i = 1, ITEMS do
+            local id = 4000000 + i
+            local p0 = d == today and period or 2
+            local low = math.floor(base[i] * (0.9 + random() * 0.2))
+            local qty = math.floor(1 + random() * 200)
+            ledgerPrices[id] = pack.record(
+                ledgerPrices[id],
+                d,
+                p0,
+                low,
+                i % 4 == 0 and math.floor(low * 1.3) or 0,
+                qty,
+                math.floor(1 + qty / 10)
+            )
+            if d ~= today and random() < 0.5 then
+                ledgerPrices[id] = pack.record(ledgerPrices[id], d, 4, low, 0, qty, 1)
+            end
+        end
+    end
+    -- three characters, each with its last Scan all's look of every item
+    -- (the newest: today's, yesterday's, three days ago)
+    local seenOf: { [string]: { [number]: unknown } } = {}
+    for c, back in ipairs({ 0, 1, 3 }) do
+        local seen: { [number]: unknown } = {}
+        for i = 1, ITEMS do
+            local look = assert(store.latest(ledgerPrices[4000000 + i]))
+            seen[4000000 + i] = {
+                price = look.low,
+                at = time() - back * DAY - (i % 600),
+                qty = look.qty,
+                n = look.n,
+                most = look.most > 0 and look.most or nil,
+            }
+        end
+        local key = ("Scanner%d - %s"):format(c, here)
+        seenOf[key] = seen
+    end
+    -- before: SuuUILedger.prices[ruleset] (depth 2: its items at 3) and
+    -- .names (depth 1), each character's SuuUIDB.charData[char]
+    -- .auctionhouse.seen (depth 4: its entries at 5)
+    local ledgerBytes = savedSize(ledgerPrices, 2)
+    local namesBytes = savedSize(ledgerNames, 1)
+    local seenBytes = 0
+    for _, seen in pairs(seenOf) do
+        seenBytes += savedSize(seen, 4)
+    end
+    -- the migration
+    local l = ledgerData()
+    l.prices = { [here] = ledgerPrices }
+    l.names = ledgerNames
+    for key, seen in pairs(seenOf) do
+        oldChar(key, { ruleset = here, seen = seen })
+    end
+    local moved = prices.migrate()
+    expect(moved.ledgerItems).toBe(ITEMS)
+    expect(moved.seenLooks).toBe(0)
+    expect(moved.dropped).toBe(ITEMS * 3)
+    -- after: SuuUIPrices.prices[ruleset] and .names, the same depths
+    local d = prices.data()
+    local afterBytes = savedSize(assert(d.prices)[here], 2) + savedSize(d.names, 1)
+    local beforeBytes = ledgerBytes + namesBytes + seenBytes
+    print(
+        ("Prices for %d items, 3 scanning characters: before %.0f KB (the Ledger's prices %.0f KB, names %.0f KB, seen %.0f KB: %.0f KB a character, %.0f bytes an item), after %.0f KB"):format(
+            ITEMS,
+            beforeBytes / 1024,
+            ledgerBytes / 1024,
+            namesBytes / 1024,
+            seenBytes / 1024,
+            seenBytes / 3 / 1024,
+            seenBytes / 3 / ITEMS,
+            afterBytes / 1024
+        )
+    )
+    -- (measured 2026-11-19: before 7,670 KB: the Ledger's prices 4,887 KB,
+    -- names 259 KB, seen 2,524 KB, 841 KB a character, 123 bytes an item
+    -- with all its fields; after 5,146 KB, a third less. One character's
+    -- seen in game was 567 KB for 6,907 items, 84 bytes an item.)
+    expect(seenBytes / 3 / ITEMS > 60 and seenBytes / 3 / ITEMS < 140).toBe(true)
+    expect(afterBytes).toBe(ledgerBytes + namesBytes)
+    expect(beforeBytes - afterBytes).toBe(seenBytes)
+end

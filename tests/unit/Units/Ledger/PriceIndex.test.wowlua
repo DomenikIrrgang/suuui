@@ -8,8 +8,10 @@
 import test, expect from "wowlua:test"
 import * as mock from "wowlua:mock"
 import PriceIndex, PASS_ITEMS from "/Units/Ledger/PriceIndex"
-import type PriceMap from "/Units/Ledger/Store"
-import * as pack from "/Units/Ledger/Pack"
+import * as store from "/Core/Prices/Store"
+import type PriceMap from "/Core/Prices/Store"
+import type PriceLook from "/Core/API"
+import * as pack from "/Core/Prices/Pack"
 import * as days from "/Units/Ledger/Days"
 import expectNoErrors from "../../../helpers"
 
@@ -40,9 +42,20 @@ local function rig(n: number): Rig
         map[id] = pack.record(s, today, 2, i % 10 == 0 and 600 or 1000, 0, 4, 2)
     end
     local r: Rig = { map = map, done = 0, vendorAsks = 0, pct = 25, vendorOn = true, vendors = {} } :: Rig
+    -- (over a map of its own, read as the Ledger reads the price store's)
     r.idx = PriceIndex.new({
-        map = function(): PriceMap?
-            return r.map
+        items = function(): number[]
+            local out: number[] = {}
+            for id in pairs(r.map) do
+                out[#out + 1] = id
+            end
+            return out
+        end,
+        latest = function(itemID: number): PriceLook?
+            return store.latest(r.map[itemID])
+        end,
+        usual = function(itemID: number): number?
+            return store.usualOf(r.map[itemID], days.dayOf())
         end,
         settings = function(): (number, boolean)
             return r.pct, r.vendorOn
@@ -100,6 +113,33 @@ local function few()
     -- (nothing ran in the background)
     expect(r.idx.ticker).toBeNil()
     expect(#r.idx:Deals()).toBe(1)
+    expectNoErrors()
+end
+
+@test("the items worked out since the pass began (a Scan all's, as it was read) skipped: ready at once when that's all of them; the rest a slice a frame, the skipped not counted")
+local function skipsWorkedOut()
+    local n = PASS_ITEMS * 2 + 50
+    local r = rig(n)
+    local idx = r.idx
+    idx:Check()
+    -- (as the Ledger reads a scan of every item: each one touched)
+    for i = 1, n do
+        idx:Touch(BASE + i, true)
+    end
+    expect(idx:Prepare(0)).toBe(true)
+    expect(idx.ticker).toBeNil()
+    expect(r.done).toBe(0)
+    -- a scan that found only some: those skipped, the others a slice a frame
+    local other = rig(n)
+    local oi = other.idx
+    oi:Check()
+    for i = 1, PASS_ITEMS + 60 do
+        oi:Touch(BASE + i, true)
+    end
+    expect(oi:Prepare(0)).toBe(false)
+    mock.advanceFrames(1)
+    expect(oi:Ready()).toBe(true)
+    expect(other.done).toBe(1)
     expectNoErrors()
 end
 

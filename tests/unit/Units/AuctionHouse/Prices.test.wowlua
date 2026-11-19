@@ -10,6 +10,10 @@ import internal M as Ledger from "/Units/Ledger"
 import ORE, BLADE, RING, setUp, tearDown, plain from "./AuctionHouseHelpers"
 import * as ahPrices from "/Units/AuctionHouse/Prices"
 import * as events from "/Core/Events"
+import * as settings from "/Core/Settings"
+import * as prices from "/Core/Prices"
+import * as pack from "/Core/Prices/Pack"
+import * as priceStore from "../../Core/Prices/PricesHelpers"
 
 const LISTENER = { name = "AuctionHousePricesTest" }
 
@@ -64,7 +68,8 @@ local function tooltips()
     expect(hasLine(oreTooltip(), "^Auction house")).toBe(false)
     M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 }, { price = 160, qty = 90 } }))
     local lines = oreTooltip()
-    expect(hasLine(lines, "^Auction house · today %d%d:%d%d$")).toBe(true)
+    -- (when: by the time of day, as the price store keeps it)
+    expect(hasLine(lines, "^Auction house · " .. SuuUI.Prices.When(time()) .. "$")).toBe(true)
     expect(hasLine(lines, "^Lowest buyout = 1s each$")).toBe(true)
     expect(hasLine(lines, "^Most sell it for = 1s 50c each$")).toBe(true)
     expect(hasLine(lines, "^Offered = 300 in 3 auctions$")).toBe(true)
@@ -105,12 +110,21 @@ local function tooltips()
     M:HookTooltips()
 end
 
-@test("the price memory called directly: a price seen, the newest look read back; what a list of offers says, past a cheap few")
+@test("the price memory called directly: a price seen, kept in the price store, the newest look read back; what a list of offers says, past a cheap few")
 local function memory()
     ahPrices.recordSeen(M, ORE, 120, 40)
     local e = assert(ahPrices.lowestSeen(M, ORE))
     expect(e.price).toBe(120)
     expect(e.qty).toBe(40)
+    expect(e.most).toBeNil()
+    expect(e.n).toBeNil()
+    -- kept in the store, on this ruleset, nothing per character
+    expect(assert(prices.latest(ORE)).low).toBe(120)
+    expect((M:CharData() :: { [string]: unknown }).seen).toBeNil()
+    -- when: the start of the time of day it was seen in
+    local today, period = SuuUI.Calendar.DayOf()
+    expect(e.at).toBe(SuuUI.Calendar.TimeOf(today, period))
+    expect(e.at <= time()).toBe(true)
     expect(ahPrices.lowestSeen(M, nil)).toBeNil()
     expect(ahPrices.lastPosted(M, ORE)).toBeNil()
     -- 10 at 1s under 200 at 1s 50c: a cheap few (25 % under, at most 10 % of all)
@@ -121,9 +135,16 @@ local function memory()
     expect(m.total).toBe(210)
     expect(m.n).toBe(2)
     expect(ahPrices.market(M, {})).toBeNil()
-    -- kept as a market: what most sell it for too
+    -- kept as a market: what most sell it for too, the period's lowest
     ahPrices.recordSeen(M, ORE, m)
-    expect(assert(ahPrices.lowestSeen(M, ORE)).most).toBe(150)
+    local merged = assert(ahPrices.lowestSeen(M, ORE))
+    expect(merged.most).toBe(150)
+    expect(merged.price).toBe(100)
+    expect(merged.qty).toBe(210)
+    expect(merged.n).toBe(2)
+    -- a dearer look later in the same time of day: the lowest stays
+    ahPrices.recordSeen(M, ORE, 130, 20)
+    expect(assert(ahPrices.lowestSeen(M, ORE)).price).toBe(100)
     -- the check off: the cheapest sets the price
     M:Set("cheapCheck", false)
     local cheapest = assert(ahPrices.market(M, { { price = 150, qty = 200 }, { price = 100, qty = 10 } }))
@@ -133,12 +154,11 @@ end
 
 @test("the Ledger's usual price after what most sell it for, while it is on and its setting says so")
 local function usualLine()
-    local d = Ledger:Data()
-    d.prices = nil
+    priceStore.wipe()
     Ledger:DropIndexes()
     -- four days before at 1s 10c … 1s 40c, and today's 1s: usual 1s 20c
     for k, low in ipairs({ 110, 120, 130, 140 }) do
-        Ledger:RecordLook(ORE, low, 0, 10, 2, time() - k * 86400)
+        priceStore.look(ORE, low, 0, 10, 2, time() - k * 86400)
     end
     M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 } }))
     local lines = oreTooltip()
@@ -156,10 +176,28 @@ local function usualLine()
     Ledger:Set("tipUsual", false)
     expect(hasLine(oreTooltip(), "^Usual price")).toBe(false)
     Ledger:Reset("tipUsual")
-    -- never seen by the Ledger: no line
-    d.prices = nil
+    -- never seen: no line
+    priceStore.wipe()
     Ledger:DropIndexes()
     expect(hasLine(oreTooltip(), "^Usual price")).toBe(false)
+end
+
+@test("the Ledger off: the looks still kept and read (the tooltip block without the usual price); on again, the Ledger reads the history built meanwhile")
+local function ledgerOff()
+    settings.set("ledger", "enabled", false)
+    for k, low in ipairs({ 110, 120, 130, 140 }) do
+        priceStore.look(ORE, low, 0, 10, 2, time() - k * 86400)
+    end
+    M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 } }))
+    expect(assert(M:LowestSeen(ORE)).price).toBe(100)
+    local lines = oreTooltip()
+    expect(hasLine(lines, "^Lowest buyout")).toBe(true)
+    expect(hasLine(lines, "^Usual price")).toBe(false)
+    settings.set("ledger", "enabled", true)
+    expect(assert(Ledger:Latest(ORE)).low).toBe(100)
+    expect(Ledger:Usual(ORE)).toBe(120)
+    expect(#Ledger:Looks(ORE)).toBe(5)
+    expect(hasLine(oreTooltip(), "^Usual price")).toBe(true)
 end
 
 @test("each look told (0.48): SUUUI_AUCTION_SEEN with the lowest, what most sell it for, how many; not Scan all's")
@@ -175,8 +213,7 @@ local function told()
     M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 }, { price = 160, qty = 90 } }))
     M:Seen(BLADE, 50000, 2)
     M:Seen(RING, 3000)
-    -- one of Scan all's (told with the rest), nothing, no price
-    M:Seen(ORE, 90, nil, true)
+    -- nothing, no price
     M:Seen(nil, 5)
     M:Seen(ORE, 0)
     expect(heard).toEqual({
@@ -186,7 +223,7 @@ local function told()
     })
 end
 
-@test("the price memory reads the characters on this ruleset only; one saved before says it by its key's realm")
+@test("the price memory: one per ruleset (the price store's), whoever scanned; the posted prices read from the characters on this ruleset only, one saved before by its key's realm")
 local function rulesets()
     local here = SuuUI.Ruleset()
     local real = M.AllCharData
@@ -199,31 +236,37 @@ local function rulesets()
         -- on another ruleset: newer, but another house
         entries["Otherplayer - Elsewhere"] = {
             ruleset = "Elsewhere",
-            seen = { [ORE] = { price = 1, at = later } },
             posted = { [ORE] = { price = 2, at = later } },
             scanAt = later,
             scanSeconds = 99,
             scanCount = 5,
         }
         -- saved before it said its ruleset: its key's realm is this one
-        entries["Thirdplayer - " .. here] = { seen = { [BLADE] = { price = 3, at = 1 } } }
+        entries["Thirdplayer - " .. here] = { posted = { [BLADE] = { price = 3, at = 1 } } }
         -- saved before, on another
-        entries["Fourthplayer - Elsewhere"] = { seen = { [RING] = { price = 4, at = 1 } } }
+        entries["Fourthplayer - Elsewhere"] = { posted = { [RING] = { price = 4, at = 1 } } }
         return entries
     end)
+    -- another ruleset's look (another character's, there): not this house's
+    local today, period = SuuUI.Calendar.DayOf()
+    assert(prices.map("Elsewhere", true))[RING] = pack.record(nil, today, period, 4, 0, 1, 1)
+    priceStore.look(BLADE, 3, 0, 1, 1)
     M:Seen(ORE, 120, 40)
     expect(assert(M:LowestSeen(ORE)).price).toBe(120)
     expect(M:LastPosted(ORE)).toBeNil()
     expect(assert(M:LowestSeen(BLADE)).price).toBe(3)
+    expect(assert(M:LastPosted(BLADE)).price).toBe(3)
     expect(M:LowestSeen(RING)).toBeNil()
-    -- this character's data says its ruleset now
-    expect(M:CharData().ruleset).toBe(here)
+    expect(M:LastPosted(RING)).toBeNil()
+    -- this character's data says its ruleset (what it posts is read by it)
+    expect(M:Saved().ruleset).toBe(here)
     -- the last scan and its size: this ruleset's house
     expect(M:LastScan()).toBeNil()
     expect(M:LastScanSize()).toBeNil()
     -- the game's wait between two Scan alls is per account: every character's
     expect(M:NextScanAt()).toBe(later + 15 * 60)
-    -- the service's price too
+    -- the service's price too, and when (the start of its time of day)
     local price = assert(assert(SuuUI.UseService(SuuUI.Services.AUCTION_HOUSE)).Price)(ORE)
     expect(assert(price).price).toBe(120)
+    expect(assert(price).at).toBe(SuuUI.Calendar.TimeOf(today, period))
 end

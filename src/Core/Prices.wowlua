@@ -1,0 +1,712 @@
+-- Core/Prices.wowlua
+-- The price store (asked 2026-11-19: one shared store instead of two): what
+-- the auction house showed, one copy per ruleset (SuuUI.Ruleset(): each has
+-- its own house), owned by neither the auction house module nor the Ledger.
+-- The auction house module writes every look into it (a search's at once,
+-- Scan all's a slice a frame) and reads its latest price from it (the Sell
+-- page, the tooltips, the Writs, the auctionhouse service's Price); the
+-- Ledger reads the history, the latest look, the usual price and the names
+-- from it and keeps no prices of its own. Either module works without the
+-- other: with the Ledger off the history keeps building, so turning it on
+-- later shows the earlier scans; with the auction house off the Ledger shows
+-- what is kept. Modules and plugins reach it through SuuUI.Prices (Core/API);
+-- only SuuUI's own modules write.
+--
+-- Where it lives: its own SavedVariable, SuuUIPrices (account-wide). Not
+-- SuuUIDB: the settings, profiles and characters' data stay light, and a
+-- profile export or reset never touches a few megabytes of prices. Not
+-- SuuUILedger: that is the Ledger module's file, and the prices belong to
+-- neither module (the auction house fills them with the Ledger off).
+--
+--   prices   per ruleset, per item, the looks of the last 60 days (Prices/
+--            Pack: one short string an item): per day and time of day
+--            (Prices/Days: Night 0–6, Morning 6–10, Noon 10–16, Evening
+--            16–24 by the computer's clock) the lowest buyout per unit seen
+--            in that period, what most sell it for, how many offered in how
+--            many auctions (the period's latest counts).
+--   names    per item, its name and quality ("2Goblin Rocket Helmet"; "-"
+--            for a quality not known), for every ruleset: from the house's
+--            scans and searches, and from the client for the Ledger's
+--            pages. The names of items no longer in any prices are dropped
+--            with the prune.
+--   pruned   per ruleset, the day its looks older than 60 days were last
+--            dropped (once a day, a slice a frame, after login's rush).
+--
+-- Told on SuuUI's bus: SUUUI_PRICE_CHANGED(ruleset, itemID) when a search's
+-- look changed what is kept; SUUUI_PRICES_SCANNED(ruleset, looks, items, at)
+-- when a Scan all's looks are all kept; SUUUI_PRICES_PRUNED(ruleset, gone)
+-- after the prune (`gone`: the items with no look left).
+--
+-- Moved in once, at load (migrate): SuuUILedger's prices, names and prune
+-- days (the Ledger kept them before), unchanged; then each character's
+-- auction house `seen` (the newest look it saw per item, kept per character
+-- before: 567 KB for one character's 6,907 items, a copy of the Ledger's
+-- newest look): a seen entry newer than the newest kept look of its item
+-- becomes a look on its day and period, any other is dropped; then `seen`
+-- goes from every character. Each source is removed only after it is all in,
+-- and merging one again changes nothing, so a second load or one that
+-- stopped half way loses nothing.
+
+import onLoad, onLogin from "wowlua:lifecycle"
+import after, every from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
+import * as DB from "./DB"
+import * as events from "./Events"
+import * as fault from "./Fault"
+import * as rulesets from "./Rulesets"
+import * as days from "./Prices/Days"
+import * as store from "./Prices/Store"
+import * as pack from "./Prices/Pack"
+import type Look, PriceMap from "./Prices/Store"
+
+export type NameMap = { [number]: string }
+-- What SuuUIPrices holds (see the top).
+export type PriceData = { prices?: { [string]: PriceMap }, names?: NameMap, pruned?: { [string]: number } }
+
+export const KEEP_DAYS = store.KEEP_DAYS
+
+-- Scan all's looks kept a slice a frame, and the prune the same way: at
+-- most this many items and milliseconds a frame.
+export const SCAN_SLICE = 500
+local SCAN_MS = 4
+export const PRUNE_SLICE = 500
+local PRUNE_MS = 4
+-- the prune waits this long after login
+export const PRUNE_AFTER = 10
+
+export function data(): PriceData
+    return DB.prices :: unknown :: PriceData
+end
+
+-- A ruleset's prices (nil: this character's): nil when it has none and
+-- `make` isn't set.
+export function map(ruleset: string?, make: boolean?): PriceMap?
+    local d = data()
+    local all = d.prices
+    if not all then
+        if not make then
+            return nil
+        end
+        all = {}
+        d.prices = all
+    end
+    local key = ruleset or rulesets.current()
+    local m = all[key]
+    if not m and make then
+        m = {}
+        all[key] = m
+    end
+    return m
+end
+
+-- The rulesets with prices, this character's first, then by name.
+export function rulesetList(): string[]
+    local here = rulesets.current()
+    local out: string[] = { here }
+    for key, m in pairs(data().prices or {}) do
+        if key ~= here and next(m) ~= nil then
+            out[#out + 1] = key
+        end
+    end
+    table.sort(out, function(a: string, b: string): boolean
+        if a == here or b == here then
+            return a == here and b ~= here
+        end
+        return a < b
+    end)
+    return out
+end
+
+-- The items with prices on a ruleset.
+export function items(ruleset: string?): number[]
+    local out: number[] = {}
+    for itemID in pairs(map(ruleset) or {}) do
+        out[#out + 1] = itemID
+    end
+    return out
+end
+
+export function itemCount(ruleset: string?): number
+    local n = 0
+    for _ in pairs(map(ruleset) or {}) do
+        n += 1
+    end
+    return n
+end
+
+-- Whether an item has prices on any ruleset.
+export function known(itemID: number): boolean
+    for _, m in pairs(data().prices or {}) do
+        if m[itemID] then
+            return true
+        end
+    end
+    return false
+end
+
+-- An item's kept looks (Prices/Pack), nil: none.
+export function packed(itemID: number, ruleset: string?): string?
+    local m = map(ruleset)
+    return m and m[itemID]
+end
+
+--------------------------------------------------------------------------------
+-- Reading
+--------------------------------------------------------------------------------
+
+-- The newest look (nil: none on that ruleset).
+export function latest(itemID: number, ruleset: string?): Look?
+    return store.latest(packed(itemID, ruleset))
+end
+
+-- The usual price today (nil: no look kept).
+export function usual(itemID: number, ruleset: string?): number?
+    return store.usualOf(packed(itemID, ruleset), days.dayOf())
+end
+
+-- The daily lows of the last `count` days (index `count` today; 0: no look
+-- that day) and what most sold it for at each day's lowest look.
+export function dailyLows(itemID: number, count: number, ruleset: string?): (number[], number[])
+    return store.dailyLows(packed(itemID, ruleset), days.dayOf(), count)
+end
+
+-- Every look of the last `count` days (all kept: nil), the newest first.
+export function looks(itemID: number, count: number?, ruleset: string?): Look[]
+    local today = days.dayOf()
+    return store.looks(packed(itemID, ruleset), today - math.min(count or KEEP_DAYS, KEEP_DAYS) + 1)
+end
+
+-- When a look was, as the auction house and the tooltips say it: today by
+-- the time of day ("this morning"; a look keeps its day and period, not
+-- the minute), then "yesterday", "3 days ago".
+local TODAY_TEXT: string[] = { "last night", "this morning", "around midday", "this evening" }
+export function whenText(at: number): string
+    local today = days.dayOf()
+    local day, period = days.dayOf(at)
+    local back = today - day
+    if back <= 0 then
+        return TODAY_TEXT[period] or "today"
+    elseif back == 1 then
+        return "yesterday"
+    end
+    return back .. " days ago"
+end
+
+--------------------------------------------------------------------------------
+-- Names
+--------------------------------------------------------------------------------
+
+-- "2Goblin Rocket Helmet"
+export function packName(name: string, quality: number?): string
+    local q = (quality and quality >= 0 and quality <= 9) and tostring(math.floor(quality)) or "-"
+    return q .. name
+end
+
+export function unpackName(s: string?): (string?, number?)
+    if not s or #s < 2 then
+        return nil, nil
+    end
+    return s:sub(2), tonumber(s:sub(1, 1))
+end
+
+-- The kept name and quality (nil: none).
+export function keptName(itemID: number): (string?, number?)
+    local names = data().names
+    return unpackName(names and names[itemID])
+end
+
+-- A name learned; whether that changed what is kept (a quality not known
+-- keeps the one kept).
+export function keepName(itemID: number, name: string?, quality: number?): boolean
+    if not name or name == "" then
+        return false
+    end
+    local d = data()
+    local names = d.names
+    if not names then
+        names = {}
+        d.names = names
+    end
+    local was = names[itemID]
+    if was then
+        local n, q = unpackName(was)
+        if quality == nil then
+            quality = q
+        end
+        if n == name and q == quality then
+            return false
+        end
+    end
+    names[itemID] = packName(name, quality)
+    return true
+end
+
+-- What the client's item cache has of an item: its name and quality (nil
+-- when it isn't cached: nothing is asked).
+export function cachedName(itemID: number): (string?, number?)
+    if not C_Item.IsItemDataCachedByID(itemID) then
+        return nil, nil
+    end
+    local name, _, quality = C_Item.GetItemInfo(itemID)
+    return secret.asString(name), secret.asNumber(quality)
+end
+
+-- An item's name and quality: the kept one, else the client's cache's (not
+-- kept: a read changes nothing), else nil.
+export function nameOf(itemID: number): (string?, number?)
+    local name, quality = keptName(itemID)
+    if name then
+        return name, quality
+    end
+    return cachedName(itemID)
+end
+
+-- The names of items in no ruleset's prices dropped; how many.
+export function pruneNames(): number
+    local names = data().names
+    if not names then
+        return 0
+    end
+    local gone: number[] = {}
+    for id in pairs(names) do
+        if not known(id) then
+            gone[#gone + 1] = id
+        end
+    end
+    for _, id in ipairs(gone) do
+        names[id] = nil
+    end
+    return #gone
+end
+
+--------------------------------------------------------------------------------
+-- Recording
+--------------------------------------------------------------------------------
+
+-- One look (a search's) on this character's ruleset, now (or at `at`), and
+-- the item's name when the house told it. -> whether it changed what is
+-- kept (then SUUUI_PRICE_CHANGED).
+export function record(
+    itemID: number,
+    low: number,
+    most: number?,
+    qty: number?,
+    n: number?,
+    name: string?,
+    quality: number?,
+    at: number?
+): boolean
+    if not (itemID and low and low > 0) then
+        return false
+    end
+    if name then
+        keepName(itemID, name, quality)
+    end
+    local ruleset = rulesets.current()
+    local day, period = days.dayOf(at)
+    local changed = store.record(assert(map(ruleset, true)), itemID, day, period, low, most or 0, qty or 0, n or 0)
+    if changed then
+        events.emit("SUUUI_PRICE_CHANGED", ruleset, itemID)
+    end
+    return changed
+end
+
+-- A Scan all being kept: its looks (five numbers an item: itemID, low,
+-- most, qty, n), how many, the names the house told; where it is.
+type ScanJob = {
+    ruleset: string,
+    list: number[],
+    count: number,
+    names?: { [number]: string },
+    qualities?: { [number]: number },
+    at: number,
+    day: number,
+    period: number,
+    i: number,
+    ticker?: TickerHandle,
+}
+
+local job: ScanJob? = nil
+
+-- A slice of a scan's looks kept (`all`: the rest at once). -> whether
+-- it's done.
+local function scanSlice(j: ScanJob, all: boolean?): boolean
+    local m = assert(map(j.ruleset, true))
+    local list, names, qualities = j.list, j.names, j.qualities
+    local stop = all and j.count or math.min(j.count, j.i + SCAN_SLICE)
+    local deadline = debugprofilestop() + SCAN_MS
+    local k = j.i
+    while k < stop do
+        local b = k * 5
+        k += 1
+        local itemID, low = list[b + 1], list[b + 2]
+        if itemID and low and low > 0 then
+            local name = names and names[itemID]
+            if name then
+                keepName(itemID, name, qualities and qualities[itemID])
+            end
+            store.record(m, itemID, j.day, j.period, low, list[b + 3] or 0, list[b + 4] or 0, list[b + 5] or 0)
+            if not all and debugprofilestop() > deadline then
+                break
+            end
+        end
+    end
+    j.i = k
+    return k >= j.count
+end
+
+local function scanDone(j: ScanJob)
+    local t = j.ticker
+    if t then
+        t:Cancel()
+    end
+    if job == j then
+        job = nil
+    end
+    events.emit("SUUUI_PRICES_SCANNED", j.ruleset, j.list, j.count, j.at)
+end
+
+-- Scan all's looks kept on this character's ruleset: the first slice now,
+-- the rest a slice a frame, then SUUUI_PRICES_SCANNED. A scan still being
+-- kept is finished first.
+export function recordScan(
+    list: number[],
+    count: number,
+    names: { [number]: string }?,
+    qualities: { [number]: number }?,
+    at: number?
+)
+    local prev = job
+    if prev then
+        scanSlice(prev, true)
+        scanDone(prev)
+    end
+    local t = at or time()
+    local day, period = days.dayOf(t)
+    local j: ScanJob = {
+        ruleset = rulesets.current(),
+        list = list,
+        count = count,
+        names = names,
+        qualities = qualities,
+        at = t,
+        day = day,
+        period = period,
+        i = 0,
+    }
+    if scanSlice(j) then
+        scanDone(j)
+        return
+    end
+    job = j
+    j.ticker = every(0, function()
+        local ok, done = fault.call("Prices: Scan all", scanSlice, j)
+        if not ok or done then
+            scanDone(j)
+        end
+    end)
+end
+
+-- Whether a Scan all's looks are still being kept.
+export function scanning(): boolean
+    return job ~= nil
+end
+
+--------------------------------------------------------------------------------
+-- The prune: looks older than 60 days dropped, once a day per ruleset
+--------------------------------------------------------------------------------
+
+local pruneTicker: TickerHandle? = nil
+
+-- Whether a ruleset's prices weren't pruned today yet.
+export function needsPrune(): boolean
+    local today = days.dayOf()
+    local d = data()
+    local pruned = d.pruned or {}
+    for ruleset in pairs(d.prices or {}) do
+        if pruned[ruleset] ~= today then
+            return true
+        end
+    end
+    return false
+end
+
+-- Every kept look older than 60 days dropped, a slice of items a frame,
+-- once a day per ruleset; then the names no prices need, and
+-- SUUUI_PRICES_PRUNED per ruleset.
+export function prune()
+    local today = days.dayOf()
+    local d = data()
+    local pruned = d.pruned or {}
+    d.pruned = pruned
+    local queue: { ruleset: string, itemID: number }[] = {}
+    local gone: { [string]: number[] } = {}
+    local order: string[] = {}
+    for ruleset, m in pairs(d.prices or {}) do
+        if pruned[ruleset] ~= today then
+            pruned[ruleset] = today
+            gone[ruleset] = {}
+            order[#order + 1] = ruleset
+            for itemID in pairs(m) do
+                queue[#queue + 1] = { ruleset = ruleset, itemID = itemID }
+            end
+        end
+    end
+    if #order == 0 or pruneTicker then
+        return
+    end
+    table.sort(order)
+    local i = 0
+    local function slice(): boolean
+        local stop = math.min(#queue, i + PRUNE_SLICE)
+        local deadline = debugprofilestop() + PRUNE_MS
+        local all = data().prices or {}
+        local k = i
+        while k < stop do
+            k += 1
+            local q = queue[k]
+            local m = all[q.ruleset]
+            if m and store.prune(m, q.itemID, today) and not m[q.itemID] then
+                local list = assert(gone[q.ruleset])
+                list[#list + 1] = q.itemID
+            end
+            if debugprofilestop() > deadline then
+                break
+            end
+        end
+        i = k
+        return i >= #queue
+    end
+    local function finish()
+        local t = pruneTicker
+        if t then
+            t:Cancel()
+        end
+        pruneTicker = nil
+        pruneNames()
+        for _, ruleset in ipairs(order) do
+            local list = assert(gone[ruleset])
+            table.sort(list)
+            events.emit("SUUUI_PRICES_PRUNED", ruleset, list)
+        end
+    end
+    pruneTicker = every(0, function()
+        local ok, done = fault.call("Prices: prune", slice)
+        if not ok or done then
+            finish()
+        end
+    end)
+end
+
+-- (after login's rush, when the kept prices need it then)
+@onLogin
+local function pruneLater()
+    if needsPrune() then
+        after(PRUNE_AFTER, function()
+            fault.call("Prices: prune", prune)
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Moving in (once, at load): the Ledger's prices and names, every
+-- character's auction house `seen`
+--------------------------------------------------------------------------------
+
+-- An item's looks `s` merged into what `m` keeps of it: as they are when
+-- it has none (or the same), else each look recorded into it (the same
+-- period merged: the lowest price kept). Merging the same again changes
+-- nothing.
+export function mergeInto(m: PriceMap, itemID: number, s: string)
+    local was = m[itemID]
+    if not was or was == s then
+        m[itemID] = s
+        return
+    end
+    local p = pack.decode(s, pack.newPoints())
+    local out = was
+    for k = p.count, 1, -1 do
+        out = pack.record(out, p.day[k], p.period[k], p.low[k], p.most[k], p.qty[k], p.n[k])
+    end
+    m[itemID] = out
+end
+
+local function num(v: unknown): number?
+    return type(v) == "number" and v or nil
+end
+
+-- An item ID kept as a key (a number; a string of one, as a hand-written
+-- file may have it).
+local function idOf(k: unknown): number?
+    if type(k) == "number" then
+        return k
+    elseif type(k) == "string" then
+        return tonumber(k)
+    end
+    return nil
+end
+
+-- One character's seen entry: a look when it is newer than the newest
+-- kept look of its item (and within the kept days), else nothing.
+-- -> whether it became one.
+export function mergeSeen(m: PriceMap, itemID: number, e: unknown, today: number): boolean
+    local price, at = num(tbl.field(e, "price")), num(tbl.field(e, "at"))
+    if not (price and price > 0 and at) then
+        return false
+    end
+    local day, period = days.dayOf(at)
+    if day < store.oldestKept(today) then
+        return false
+    end
+    local s = m[itemID]
+    local d0, p0 = pack.newest(s)
+    if d0 and (day < d0 or (day == d0 and period <= p0)) then
+        return false
+    end
+    m[itemID] = pack.record(
+        s,
+        day,
+        period,
+        price,
+        num(tbl.field(e, "most")) or 0,
+        num(tbl.field(e, "qty")) or 0,
+        num(tbl.field(e, "n")) or 0
+    )
+    return true
+end
+
+-- What the migration did (tests, /suu): items moved from the Ledger, names,
+-- seen entries that became looks, those dropped, characters cleared.
+export type Moved = { ledgerItems: number, names: number, seenLooks: number, dropped: number, chars: number }
+
+-- The Ledger's prices, names and prune days (SuuUILedger: the Ledger
+-- module's SavedVariable, read here by its global, the only place Core
+-- touches it), each part removed once it is all in.
+local function moveLedger(d: PriceData, moved: Moved)
+    local ledger = tbl.field(_G, "SuuUILedger")
+    if type(ledger) ~= "table" then
+        return
+    end
+    local l = ledger :: { prices?: { [string]: PriceMap }, names?: NameMap, pruned?: { [string]: number } }
+    local old = l.prices
+    if type(old) == "table" then
+        local rulesetKeys: string[] = {}
+        for ruleset in pairs(old) do
+            rulesetKeys[#rulesetKeys + 1] = ruleset
+        end
+        for _, ruleset in ipairs(rulesetKeys) do
+            local from = old[ruleset] :: unknown
+            if type(from) == "table" then
+                local m = assert(map(ruleset, true))
+                for key, s in pairs(from :: { [unknown]: unknown }) do
+                    local itemID = idOf(key)
+                    if itemID and type(s) == "string" then
+                        mergeInto(m, itemID, s)
+                        moved.ledgerItems += 1
+                    end
+                end
+            end
+            old[ruleset] = nil
+        end
+        l.prices = nil
+    end
+    local oldNames = l.names
+    if type(oldNames) == "table" then
+        local names = d.names or {}
+        d.names = names
+        for key, s in pairs(oldNames :: { [unknown]: unknown }) do
+            local itemID = idOf(key)
+            if itemID and type(s) == "string" and not names[itemID] then
+                names[itemID] = s
+                moved.names += 1
+            end
+        end
+        l.names = nil
+    end
+    local oldPruned = l.pruned
+    if type(oldPruned) == "table" then
+        local pruned = d.pruned or {}
+        d.pruned = pruned
+        for ruleset, day in pairs(oldPruned) do
+            if type(day) == "number" and day > (pruned[ruleset] or 0) then
+                pruned[ruleset] = day
+            end
+        end
+        l.pruned = nil
+    end
+end
+
+-- A seen entry with where it goes and when it was.
+type SeenAt = { ruleset: string, itemID: number, e: unknown, at: number }
+
+-- Every character's auction house `seen` (SuuUIDB.charData[char]
+-- .auctionhouse.seen): the entries of all of them in time order, each a
+-- look when newer than its item's newest; then `seen` gone from each.
+local function moveSeen(moved: Moved)
+    local charData = tbl.field(DB.db, "charData")
+    if type(charData) ~= "table" then
+        return
+    end
+    local entries: SeenAt[] = {}
+    local holders: { [string]: unknown }[] = {}
+    for charKey, cd in pairs(charData :: { [string]: unknown }) do
+        local ah = tbl.field(cd, "auctionhouse")
+        local seen = tbl.field(ah, "seen")
+        if type(seen) == "table" then
+            local ruleset = secret.asString(tbl.field(ah, "ruleset")) or rulesets.ofCharKey(charKey)
+            if not ruleset then
+                ruleset = rulesets.current()
+            end
+            for key, e in pairs(seen :: { [unknown]: unknown }) do
+                local itemID, at = idOf(key), num(tbl.field(e, "at"))
+                if itemID and at then
+                    entries[#entries + 1] = { ruleset = ruleset, itemID = itemID, e = e, at = at }
+                end
+            end
+            holders[#holders + 1] = ah :: { [string]: unknown }
+        end
+    end
+    if #holders == 0 then
+        return
+    end
+    table.sort(entries, function(a: SeenAt, b: SeenAt): boolean
+        return a.at < b.at
+    end)
+    local today = days.dayOf()
+    for _, en in ipairs(entries) do
+        if mergeSeen(assert(map(en.ruleset, true)), en.itemID, en.e, today) then
+            moved.seenLooks += 1
+        else
+            moved.dropped += 1
+        end
+    end
+    for _, ah in ipairs(holders) do
+        ah.seen = nil
+        moved.chars += 1
+    end
+end
+
+local lastMoved: Moved? = nil
+
+-- What the last migration moved (nil: none ran).
+export function lastMigration(): Moved?
+    return lastMoved
+end
+
+-- The migration: whatever of the old places is still there moved in (a
+-- no-op once they are empty).
+export function migrate(): Moved
+    local moved: Moved = { ledgerItems = 0, names = 0, seenLooks = 0, dropped = 0, chars = 0 }
+    local d = data()
+    moveLedger(d, moved)
+    moveSeen(moved)
+    lastMoved = moved
+    return moved
+end
+
+-- (the SavedVariables are in: SuuUIPrices, SuuUILedger and SuuUIDB alike)
+@onLoad
+local function migrateAtLoad()
+    fault.call("Prices: moving the old prices in", migrate)
+end
