@@ -5,6 +5,10 @@ whole test suite and the release and readable builds. Nothing in it was run
 in the game. These are the checks only the client can settle, most important
 first. Each names what to do and what to see.
 
+Where `/suu probe all` has answered part of a check, the check says so
+("Probe:"); every probe answer and what is still open are in
+`Docs/plans/open-probes.md`.
+
 ## Lifecycle
 
 1. **Mouseover bindings off and on.** Bind a key and a Shift-click, move
@@ -17,14 +21,18 @@ first. Each names what to do and what to see.
    have them leave the group, so the frame hides under the mouse. Press a
    mouseover key while pointing at the world: it does its normal job, and
    world mouseover casting works without first entering another unit frame.
-   Repeat in combat.
+   Repeat in combat. *Probe (2026-11-15):* `OnLeave` fires during `Hide()`
+   when a frame hides under the mouse, so the stuck state this guards
+   against can't arise; the check itself is still to do.
 3. **Loot rolls at a reload.** In a group, `/reload` while a roll is open:
    the roll tray shows the roll at once.
 4. **A module off at login gives its CVars back.** Turn Nameplates off,
    `/reload`: the nameplate alpha and scale CVars and `nameplateShowEnemies`
    are the game's defaults again (coming from an earlier version) or your
    own values (set on this branch). `/suu probe cvars` in a dev build records
-   them.
+   them. *Probe (2026-11-15):* of the 24 CVars SuuUI's modules write, the
+   game keeps 11 per character, 9 per account and 3 for the machine (1
+   unknown); the check itself is still to do.
 5. **Two characters and a shared CVar.** With Guild on, log in on a second
    character, turn Guild off there, `/reload`: `communitiesShowOffline` is
    what it was before SuuUI on the first character, and turning Guild off on
@@ -41,12 +49,14 @@ first. Each names what to do and what to see.
 
 ## Addon messages
 
-9. **How Forever names group members in `CHAT_MSG_ADDON`**, also members
-   from another realm. The pull countdown is accepted only from the raid's
-   leader or an assistant, matched by that name; a sender who can't be
-   matched is refused. Have an assistant start a pull: your countdown runs.
-   Have a plain member try: nothing. Have someone outside the group whisper
-   the message: nothing.
+9. **How Forever names group members in `CHAT_MSG_ADDON`.** *Answered by
+   the probe (COMM-senders, 2026-11-15 and 16):* "Name Surname", the same
+   as `GetUnitName(unit, true)`, which Core/Comm's rank check compares
+   first. (Forever has no realms; an older note here asked about members
+   of another realm.) Still to see in game: the pull countdown is accepted
+   only from the raid's leader or an assistant. Have an assistant start a
+   pull: your countdown runs. Have a plain member try: nothing. Have
+   someone outside the group whisper the message: nothing.
 10. **Older clients.** With one client on 0.17.0 and one on this branch:
     marks, convergences, campfires, raid specs and readiness still arrive in
     both directions.
@@ -65,8 +75,11 @@ first. Each names what to do and what to see.
     talents dialog): closing the question leaves the dialog's dimming.
 15. **The filter menu's size** at a UI scale where SuuUI's root and UIParent
     differ: it matches the other popups.
-16. Whether `SetPropagateKeyboardInput` is refused in lockdown. If it is not,
-    `UI/Dismiss` can be simplified (its header says how).
+16. ~~Whether `SetPropagateKeyboardInput` is refused in lockdown. If it is
+    not, `UI/Dismiss` can be simplified (its header says how).~~
+    *Answered by the probe (KEYS-combat, 2026-11-15):* it is refused in
+    combat lockdown (`EnableKeyboard` is allowed), so `UI/Dismiss` stays as
+    it is.
 
 ## Lists and windows
 
@@ -106,7 +119,10 @@ emulator can't answer for the game in several places
     places a **real** bid and a **real** buyout. Then `/reload` and read
     `SuuUIProbe.ahBid`: whether `PlaceBid` from SuuUI's button was refused
     (BAG-32), and which events and payloads followed (is `BID_ADDED`'s ID
-    the auction's?).
+    the auction's?). *Done on 2026-11-17 for a buyout:* `PlaceBid` from
+    SuuUI's own button was not refused (the purchase completed, the money
+    went), and Buy out now works that way (`06ef3747`). The auction took
+    no bids, so a bid under the buyout and `BID_ADDED` are still to see.
 25. **The bid flow.** Search an item with several auctions that take
     bids. Select one, let the list refresh (search again), press Bid: a
     question asks first, and the bid lands on the auction you chose. Type an
@@ -122,7 +138,9 @@ emulator can't answer for the game in several places
     you already carry, and a stack of something else, the unique one in the
     middle. Collect all: it skips the unique item, takes the rest and says
     what was left and why. With full bags: items aren't asked for, money is
-    still taken.
+    still taken. *Probe (2026-11-16 and 17):* a refused take came as red
+    error text only (`UI_ERROR_MESSAGE`), never as `MAIL_FAILED`; Collect
+    moves on by that text.
 27. **COD after the inbox changed.** Open a COD mail, press its item, and
     before confirming, have a new mail arrive or delete another one; then
     confirm: the money paid is the amount shown, and only that mail's item
@@ -153,7 +171,9 @@ emulator can't answer for the game in several places
     Finder a few times (its key, the micro menu, out of and in a fight),
     `/suu probe lfg opens off`, `/reload`: `SuuUIProbe.lfg.opens` says, per
     opening, how it was opened and whether the search on opening was
-    refused.
+    refused. *Done in part (LFG-opens, 2026-11-15 to 18):* 5 openings by
+    the key binding, out of combat, none refused. The micro menu and an
+    opening in a fight were not seen.
 
 ## Performance fixes of 2026-11-16
 
