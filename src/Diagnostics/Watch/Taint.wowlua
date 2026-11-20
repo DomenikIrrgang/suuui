@@ -8,8 +8,9 @@
 -- listeners run through secureexecuterange: their taint stays theirs), secure
 -- post-hooks on SuuUI's own module (Chat's OpenChatSettings), on two
 -- Blizzard globals the scan doesn't check (PaperDollFrame_SetPet,
--- PaperDollFrame_SetSidebar) and on the game's tell functions
--- (ChatFrameUtil.SendTell/SendTellWithMessage: hooksecurefunc leaves the
+-- PaperDollFrame_SetSidebar) and on the game's tell functions and its chat
+-- line chooser (ChatFrameUtil.SendTell/SendTellWithMessage,
+-- ChooseBoxForSend: hooksecurefunc leaves the
 -- field secure, and the game's code after the call runs with its own taint
 -- again once the hook returns; the hook only reads the stack and an edit
 -- box's chat type), a script hook on SuuUI's own windows
@@ -488,14 +489,18 @@ const WHISPER_TYPES: { [string]: boolean } = { WHISPER = true, BN_WHISPER = true
 const EVIDENCE = 5
 const STACK_LINES = 10
 
--- The game's functions that open a whisper line (SuuUI's chat.whisper
--- calls ChatFrameUtil.SendTell, which calls SendTellWithMessage); the old
--- globals where they aren't aliases of these.
-const TELLS: { owner?: string, name: string }[] = {
+-- The game's functions that open a whisper line (another addon's whisper,
+-- or SuuUI's before wowlua's chat.whisper aimed instead), and the chat line
+-- chooser SuuUI's chat.whisper reads before it aims that line at a whisper
+-- (its chat type and target, for the player's Enter: `aim`, the type read a
+-- moment later); the old globals where they aren't aliases of these.
+const TELLS: { owner?: string, name: string, aim?: boolean }[] = {
     { owner = "ChatFrameUtil", name = "SendTellWithMessage" },
     { owner = "ChatFrameUtil", name = "SendTell" },
+    { owner = "ChatFrameUtil", name = "ChooseBoxForSend", aim = true },
     { name = "ChatFrame_SendTellWithMessage" },
     { name = "ChatFrame_SendTell" },
+    { name = "ChatEdit_ChooseBoxForSend", aim = true },
 }
 
 -- The chat type of an edit box ("unreadable" when it can't be read).
@@ -509,9 +514,11 @@ local function chatTypeOf(box: unknown): string
     return ok and asString(t) or "unreadable"
 end
 
--- The edit box the game has active (or had last).
+-- The edit box the game has active (or had last; else the main chat's,
+-- the one its line chooser falls back to).
 local function activeBox(): unknown
     return tbl.field(_G, "ACTIVE_CHAT_EDIT_BOX") or tbl.field(_G, "LAST_ACTIVE_CHAT_EDIT_BOX")
+        or tbl.field(_G, "DEFAULT_CHAT_FRAME", "editBox")
 end
 
 -- Who last wrote what a whisper's opening writes: the edit boxes' fields
@@ -587,7 +594,8 @@ local function armWhisper(w: Watch)
     end
 
     -- A whisper opened out of combat: by one of the game's tell functions
-    -- (a whisper by definition), or an edit box shown or focused (one when
+    -- (a whisper by definition), a line aimed at one (the chooser, the type
+    -- a moment later), or an edit box shown or focused (one when
     -- its chat type is, now or once the game has set its text: OpenChat
     -- sets it in the box's next OnUpdate, and a name the auto-complete
     -- knows can keep it "SAY" until more is typed).
@@ -629,8 +637,9 @@ local function armWhisper(w: Watch)
         if type(fn) == "function" and not seen[fn] then
             seen[fn] = true
             local label = owner and (owner .. "." .. tell.name) or tell.name
+            local isTell = not tell.aim
             local body = function()
-                opened("hook " .. label, nil, true)
+                opened("hook " .. label, nil, isTell)
             end
             local ok: boolean
             if owner then
