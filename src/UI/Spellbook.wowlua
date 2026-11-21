@@ -16,7 +16,8 @@
 --   book:SetSwitches(showUnlearned, allRanks); book.onSwitch = fn(key, on)
 --   book:SetSpells(list)   -- { label, rank, sub, icon, status = "learned" |
 --                          -- "passive" | "trainable" | "future" }, a page's worth
---   book:SetPage(page, pages); book.onPage = fn(delta)
+--   book:SetPage(page, pages); book.onPage = fn(delta)   -- the pager's
+--                          -- arrows, and the wheel over the page (down: on)
 --   book.cells[i].button   -- a SecureActionButton (the owner sets what it casts)
 --   book:FitRows()         -- rows to the page's height (a page holds rows × 2)
 --   book:SetWidest(px)     -- the longest name anywhere: columns as wide on every page
@@ -31,7 +32,8 @@
 -- the cells at the page shown, so the schools and pages switch in combat
 -- too: the tabs and the pager's arrows each carry an invisible secure
 -- button over them that takes the click (the game lets only secure code
--- change what a button casts in combat). In combat the page changes only
+-- change what a button casts in combat), and the wheel over the page turns
+-- it through the page's secure wheel handler. In combat the page changes only
 -- its look: nothing secure is moved, shown or hidden (an empty slot's
 -- content goes see-through instead).
 --   book:SetCasts(schools, perPage[, clicks])   -- schools[s][i] = spellID,
@@ -229,6 +231,22 @@ local ROUTE = [=[
             b:SetAttribute("type2", "")
             b:SetAttribute("macrotext2", nil)
         end
+    end
+]=]
+
+-- The wheel over the page (its secure wheel handler, before the look): a
+-- page back (up) or on (down) within the school's pages, as the arrows'
+-- secure buttons turn it.
+local WHEEL = [=[
+    local r = self:GetFrameRef("router")
+    local s = r:GetAttribute("school")
+    if not s then return end
+    local p = r:GetAttribute("page") or 1
+    local n = r:GetAttribute("pages" .. s) or 1
+    local q = p + (delta > 0 and -1 or 1)
+    if q < 1 then q = 1 elseif q > n then q = n end
+    if q ~= p then
+        r:SetAttribute("page", q)
     end
 ]=]
 
@@ -485,8 +503,11 @@ export class Spellbook extends Frame
         rule:SetWidth(1)
         rule:SetPoint("TOPLEFT", self.tabColumn, "TOPRIGHT", 0, 0)
         rule:SetPoint("BOTTOMLEFT", self.tabColumn, "BOTTOMRIGHT", 0, 0)
-        -- the main column
-        local main = CreateFrame("Frame", nil, self)
+        -- the main column (a secure wheel handler: the wheel over the page
+        -- turns it, in combat too; see the end)
+        local main = CreateFrame("Frame", nil, self, "SecureHandlerMouseWheelTemplate") :: Frame & FrameRefs
+        -- (no size of its own: the template's 2×2 off, its anchors size it)
+        main:SetSize(0, 0)
         draw.layout(self, function()
             main:SetPoint("TOPLEFT", self.tabColumn, "TOPRIGHT", S["space-5"], 0)
         end)
@@ -710,6 +731,29 @@ export class Spellbook extends Frame
                 o:SetPoint("LEFT", self.pager, "RIGHT", S["space-5"], 0)
             end
         end
+        -- The wheel over the page (the spells, the space between them, the
+        -- head and the pager): down a page on, up a page back, as the arrows.
+        -- The page takes the wheel its children leave (they take clicks,
+        -- drags and hovers as before; bind mode's covers keep the wheel for
+        -- bindings). The page is a secure wheel handler: the router turns
+        -- first (WHEEL, in combat too), then the look, through onPage as an
+        -- arrow's click. (Not a wrap of a plain frame's wheel: the game runs
+        -- a wrap's snippet only for an explicitly protected frame, found in
+        -- its SecureHandlers code.) The page held the cells' secure buttons
+        -- already, so it was restricted in combat before too.
+        main:SetFrameRef("router", self.router)
+        main:SetAttribute("_onmousewheel", WHEEL)
+        main:HookScript("OnMouseWheel", function(_: Frame, delta: number)
+            local step = delta > 0 and -1 or 1
+            local arrow = step < 0 and self.prev or self.next
+            if self.onPage and arrow:IsEnabled() then
+                self.onPage(step)
+            end
+        end)
+        -- (the bindings list over the page keeps the wheel from the page
+        -- under it; its own list takes the wheel first)
+        view:EnableMouseWheel(true)
+        view:SetScript("OnMouseWheel", function() end)
     end
 
     function SetCooldown(i: number, active: unknown, gcd: unknown, duration: LuaDurationObject?)

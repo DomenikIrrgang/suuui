@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+### New
+
+- Spellbook: scroll the mouse wheel over the spells to turn the pages (down for the next page, up for the previous one), in combat too.
+
 ### Fixed
 
 - Since the game's update of 2026-11-21 the game no longer tells addons your realm, and SuuUI saw every character you logged in with as a new one: its settings (click-casting, your profile choice) and saved data seemed gone, item counts in tooltips listed the character twice, the auction house's prices were kept apart, and the Ledger showed your rulesets as "?". SuuUI now remembers each character by itself, so this can't happen again, and on your first login it puts the data of the update day back with the character it belongs to: your settings and older data stay, and that day's bags, mail, auctions, gold, transactions and prices are added.
+- Auction house: the tooltip of an item with a random enchant ("of the Bear") in the list now shows the enchant's stats.
 
 ## 0.22.0 (2026-11-19)
 
