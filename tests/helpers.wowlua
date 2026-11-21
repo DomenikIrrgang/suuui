@@ -57,6 +57,37 @@ import * as holdingsRegistry from "/Core/Holdings"
 import * as visibility from "/UI/Visibility"
 import * as sectionRegistry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
+import onLogin from "wowlua:lifecycle"
+import asEditBox from "wowlua:frames"
+
+-- A fresh account sees SuuUI's first-run welcome two seconds in, its dim
+-- over the whole screen taking every click (as in the game since wowlua's
+-- mock.click finds the frame on top): the tests start past it. The welcome's
+-- own tests take it back.
+onLogin(function()
+    SuuUI.AccountData("welcome").seen = true
+end)
+
+-- Where the chat line is aimed: wowlua's chat.whisper opens nothing, it
+-- sets the line's chat type and target for the player's next Enter (an open
+-- line switches at once). "WHISPER Tamsin Ashford"; nil when no whisper is
+-- aimed. clearAim() takes it back to the line's own.
+export function aimedChat(): string?
+    local box = asEditBox(ChatFrameUtil.ChooseBoxForSend())
+    local target = box and box:GetAttribute("tellTarget")
+    if box == nil or type(target) ~= "string" then
+        return nil
+    end
+    return `{tostring(box:GetAttribute("chatType"))} {target}`
+end
+
+export function clearAim()
+    local box = asEditBox(ChatFrameUtil.ChooseBoxForSend())
+    if box then
+        box:SetAttribute("chatType", "SAY")
+        box:SetAttribute("tellTarget", nil)
+    end
+end
 
 export function errorsSoFar(): string[]
     local out: string[] = {}

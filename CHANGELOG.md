@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.24.0 (2026-11-21)
+
+### Changed
+
+- Whisper (in menus, the chat, Social, Guild, the raid planner and friend notifications) now sets your chat line to whisper that player instead of opening it: press Enter to start typing, or the open line switches at once. Opening the chat line from SuuUI could block every message you sent in a fight until `/reload`.
+- Link (Professions, the dressing room's outfit) puts the link into your open chat line. With none open, a message asks you to open it first (Enter) instead of opening one.
+
+### Fixed
+
+- Popups in SuuUI's look: the Accept button's text keeps its colour; it fell back to the font's.
+- Talking to an NPC: after a stutter while the UI faded back, the next conversation no longer leaves the rest of the UI slightly faded.
+
 ## 0.23.0 (2026-11-21)
 
 ### New

@@ -1,9 +1,7 @@
 -- Diagnostics/Watch/OwnFrames.wowlua
 -- Questions answered on frames the probe makes itself, never on SuuUI's or
--- Blizzard's:
---   KEYS-combat  are SetPropagateKeyboardInput and EnableKeyboard refused in
---                combat lockdown (UI/Dismiss's header: whether it could be
---                simpler)? Tried on a hidden frame in the first fight.
+-- Blizzard's (KEYS-combat, answered 2026-11-15 and retired: in combat
+-- lockdown SetPropagateKeyboardInput is refused, EnableKeyboard allowed):
 --   CD-27.onleave  does OnLeave fire when a frame hides under the mouse (the
 --                mouse bindings' CD-27 fix assumes it may not)?
 --   CD-24        does OnDragStop fire for a frame hidden mid-drag (the
@@ -17,48 +15,6 @@ import * as kit from "./Kit"
 
 type Item = kit.Item
 type Watch = kit.Watch
-
---------------------------------------------------------------------------------
--- KEYS-combat
---------------------------------------------------------------------------------
-
-local keys: Frame? = nil
-
-local function testKeys(w: Watch)
-    local f = keys or CreateFrame("Frame")
-    keys = f
-    f:Hide()
-    local on = kit.attempt(function()
-        f:SetPropagateKeyboardInput(true)
-    end)
-    local off = kit.attempt(function()
-        f:SetPropagateKeyboardInput(false)
-    end)
-    local enable = kit.attempt(function()
-        f:EnableKeyboard(true)
-    end)
-    -- the frame stays hidden either way: it never takes a key
-    local disable = kit.attempt(function()
-        f:EnableKeyboard(false)
-    end)
-    w:finish(
-        ("in combat lockdown, on a hidden frame of the probe's: SetPropagateKeyboardInput %s, EnableKeyboard %s"):format(
-            kit.attemptWord(on),
-            kit.attemptWord(enable)
-        ),
-        { propagateOn = on, propagateOff = off, enableKeyboard = enable, disableKeyboard = disable }
-    )
-end
-
-local function armKeys(w: Watch)
-    w:on("PLAYER_REGEN_DISABLED", function()
-        w:after(1, function()
-            if InCombatLockdown() then
-                testKeys(w)
-            end
-        end)
-    end)
-end
 
 --------------------------------------------------------------------------------
 -- The square
@@ -240,15 +196,6 @@ end
 
 export function items(): Item[]
     return {
-        {
-            id = "KEYS-combat",
-            kind = kit.Kind.Armed,
-
-            when = "a fight",
-            question = "Are SetPropagateKeyboardInput and EnableKeyboard refused in combat lockdown (on a frame of the probe's own)?",
-            todo = "enter a fight (the probe tries both on its own hidden frame)",
-            arm = armKeys,
-        },
         {
             id = "CD-27.onleave",
             kind = kit.Kind.Armed,

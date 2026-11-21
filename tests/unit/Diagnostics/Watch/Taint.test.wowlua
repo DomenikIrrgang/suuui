@@ -180,44 +180,40 @@ end
 -- The watcher
 --------------------------------------------------------------------------------
 
-@test("a name clicked in SuuUI's chat out of combat: the whisper marked started, its evidence kept at once")
+@test("a name clicked in SuuUI's chat out of combat: the line aimed, the whisper marked started, its evidence kept")
 local function clicked()
     local w = arm()
     mock.spawnUnit({ name = NAME, class = "WARRIOR", player = true })
     local hooked = tbl.list(tbl.field(record(), "listening", "hooks"))
     expect(tbl.contains(hooked, "ChatFrameUtil.SendTellWithMessage")).toBe(true)
     expect(tbl.contains(hooked, "ChatFrameUtil.SendTell")).toBe(true)
+    expect(tbl.contains(hooked, "ChatFrameUtil.ChooseBoxForSend")).toBe(true)
     -- the old globals are aliases there: not hooked twice
     expect(tbl.contains(hooked, "ChatFrame_SendTell")).toBe(false)
     expect(tbl.contains(tbl.list(tbl.field(record(), "listening", "registry")), "ChatFrame.OnEditBoxFocusGained")).toBe(true)
     clickName()
-    -- at once: the record has it before any frame runs
-    local started = record().started
-    expect(type(started)).toBe("table")
-    expect(tbl.field(started, "source")).toBe("hook ChatFrameUtil.SendTellWithMessage")
-    expect(type(tbl.field(started, "checks", "editBoxFields"))).toBe("table")
+    -- the evidence at once: SuuUI's chat.whisper read the chat line to aim
     local list = openings()
     expect(#list).toBe(1)
     local e = list[1]
     expect(e.bySuuUI).toBe(true)
-    local sources = tbl.list(e.sources)
-    expect(tbl.contains(sources, "hook ChatFrameUtil.SendTellWithMessage")).toBe(true)
-    expect(tbl.contains(sources, "hook ChatFrameUtil.SendTell")).toBe(true)
+    expect(tbl.list(e.sources)[1]).toBe("hook ChatFrameUtil.ChooseBoxForSend")
     expect(type(e.chatType)).toBe("string")
-    -- the focus event's stack first; the hook's reaches SuuUI's chat
-    expect(tbl.list(e.sources)[1]).toBe("ChatFrame.OnEditBoxFocusGained")
-    expect(anyLine(e.stack, "ChatFrameEditBox")).toBe(true)
-    expect(anyLine(e.hookStack, "SuuUI/src/Units/Chat/Panel.lua")).toBe(true)
-    expect(anyLine(e.stack, "Diagnostics")).toBe(false)
-    expect(anyLine(e.hookStack, "Diagnostics")).toBe(false)
-    -- the chat type once the game has set the line's text (in the edit
-    -- box's next OnUpdate)
+    expect(anyLine(e.stack, "SuuUI/src/Units/Chat/Panel.lua")).toBe(true)
+    -- (the probe's own frames left out; the test's file is on it)
+    expect(anyLine(e.stack, "src/Diagnostics")).toBe(false)
+    -- started once the line's chat type says whisper (aimed, not opened)
     mock.advanceFrames(30)
     expect(e.chatTypeLater).toBe("WHISPER")
+    local started = record().started
+    expect(type(started)).toBe("table")
+    expect(tbl.field(started, "source")).toBe("hook ChatFrameUtil.ChooseBoxForSend")
+    expect(type(tbl.field(started, "checks", "editBoxFields"))).toBe("table")
     expect(record().done).toBe(false)
     expect(w.active).toBe(true)
-    -- the hook leaves the game's functions secure
+    -- the hooks leave the game's functions secure
     expect((issecurevariable(ChatFrameUtil, "SendTellWithMessage"))).toBe(true)
+    expect((issecurevariable(ChatFrameUtil, "ChooseBoxForSend"))).toBe(true)
     expectNoErrors()
 end
 
