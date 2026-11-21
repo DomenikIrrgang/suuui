@@ -1,0 +1,209 @@
+-- Core/Realm: the player's realm when the client tells none (Forever's
+-- 1.60.1.71037: GetRealmName() and GetNormalizedRealmName() "",
+-- GetRealmID() 0, the GUID still with the server's ID), and this
+-- character's key kept by its GUID.
+--
+-- The emulated client says "Realm", GUID "Player-4621-…" and GetRealmID()
+-- 4618. The empty realm is the emulator's own (mock.setPlayer's realm);
+-- GetRealmID() 0 and a normalized name with no name are stubbed (the
+-- emulator has no setting for them), and so is a missing GUID.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as realm from "/Core/Realm"
+import * as DB from "/Core/DB"
+import expectNoErrors from "../../helpers"
+
+type Map = { [string]: any }
+
+local function account(): Map
+    return DB.db.account :: any :: Map
+end
+
+-- The saved characters swapped for `chars` (charData emptied) while `fn`
+-- runs.
+local function withChars(chars: { [string]: string }, fn: () -> ())
+    local was, wasData = DB.db.chars, DB.db.charData
+    DB.db.chars, DB.db.charData = chars, {}
+    local ok, err = pcall(fn)
+    DB.db.chars, DB.db.charData = was, wasData
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- The client telling no realm (and GetRealmID() 0).
+local function noRealm()
+    mock.setPlayer({ name = "Player", realm = "" })
+    mock.stub(_G, "GetRealmID", function(): number
+        return 0
+    end)
+    realm.reset()
+end
+
+local savedRealms: unknown = nil
+local savedKeys: unknown = nil
+
+@afterEach
+local function restore()
+    mock.setPlayer({ name = "Player", realm = "Realm" })
+    local a = account()
+    if savedRealms ~= nil then
+        a.realms, savedRealms = savedRealms, nil
+    end
+    if savedKeys ~= nil then
+        a.charKeys, savedKeys = savedKeys, nil
+    end
+    a.charKeyMoves = nil
+    realm.reset()
+end
+
+-- The memory set aside (restored after the test).
+local function forget(realms: Map?, keys: Map?)
+    local a = account()
+    savedRealms = a.realms or {}
+    savedKeys = a.charKeys or {}
+    a.realms = realms or {}
+    a.charKeys = keys or {}
+end
+
+@test("the client's name is the realm, remembered for the server (the GUID's ID)")
+local function told()
+    realm.reset()
+    expect(realm.current()).toBe("Realm")
+    expect(realm.known()).toBe(true)
+    expect(realm.serverID()).toBe("4621")
+    expect(tbl.field(account(), "realms", "4621")).toBe("Realm")
+    expectNoErrors()
+end
+
+@test("no name from the client: the one remembered for the server")
+local function remembered()
+    forget({ ["4621"] = "Home" })
+    noRealm()
+    expect(GetRealmName()).toBe("")
+    expect(realm.current()).toBe("Home")
+    expect(realm.known()).toBe(true)
+    expectNoErrors()
+end
+
+@test("a normalized name alone: turned back into the remembered name")
+local function normalized()
+    forget({ ["9"] = "CAMWOW EU5 Realm 3 PvE" })
+    noRealm()
+    mock.stub(_G, "GetNormalizedRealmName", function(): string
+        return "CAMWOWEU5Realm3PvE"
+    end)
+    expect(realm.current()).toBe("CAMWOW EU5 Realm 3 PvE")
+    -- one nothing remembers is the realm as it is, the last resort
+    account().realms = {}
+    realm.reset()
+    withChars({}, function()
+        expect(realm.current()).toBe("CAMWOWEU5Realm3PvE")
+        expect(realm.known()).toBe(false)
+    end)
+    expectNoErrors()
+end
+
+@test("nothing remembered: what the saved keys say, remembered for the server")
+local function inferred()
+    forget()
+    noRealm()
+    -- a key with this character's name
+    withChars({ ["Player - Home"] = "A", ["Other - Away"] = "B", ["Player - "] = "C" }, function()
+        expect(realm.current()).toBe("Home")
+        expect(tbl.field(account(), "realms", "4621")).toBe("Home")
+    end)
+    -- every key on one realm
+    account().realms = {}
+    realm.reset()
+    withChars({ ["Other - Away"] = "B", ["Third - Away"] = "B" }, function()
+        expect(realm.current()).toBe("Away")
+    end)
+    -- this character's GUID's key first
+    account().realms = {}
+    account().charKeys = { [assert(realm.guid())] = "Player - Indexed" }
+    realm.reset()
+    withChars({ ["Player - Home"] = "A" }, function()
+        expect(realm.current()).toBe("Indexed")
+    end)
+    expectNoErrors()
+end
+
+@test("nothing to go by: \"realm:<server ID>\", never \"\" or \"?\"; not remembered")
+local function lastResort()
+    forget()
+    noRealm()
+    withChars({ ["Other - Away"] = "B", ["Third - Far"] = "C" }, function()
+        expect(realm.current()).toBe("realm:4621")
+        expect(realm.known()).toBe(false)
+    end)
+    expect(tbl.field(account(), "realms", "4621")).toBeNil()
+    expectNoErrors()
+end
+
+@test("no GUID: GetRealmID()'s server; neither: \"?\"")
+local function noGuid()
+    forget({ ["4618"] = "Byid" })
+    mock.setPlayer({ name = "Player", realm = "" })
+    mock.stub(_G, "UnitGUID", function(): string?
+        return nil
+    end)
+    realm.reset()
+    expect(realm.guid()).toBeNil()
+    expect(realm.serverID()).toBe("4618")
+    expect(realm.current()).toBe("Byid")
+    mock.stub(_G, "GetRealmID", function(): number
+        return 0
+    end)
+    realm.reset()
+    expect(realm.serverID()).toBeNil()
+    withChars({}, function()
+        expect(realm.current()).toBe("?")
+    end)
+    expectNoErrors()
+end
+
+@test("the character's key: the one its GUID was given, whatever the client tells")
+local function charKey()
+    local guid = assert(realm.guid())
+    forget()
+    realm.reset()
+    -- none given: "Name - Realm", given to the GUID
+    expect(realm.charKey("Player")).toBe("Player - Realm")
+    expect(tbl.field(account(), "charKeys", guid)).toBe("Player - Realm")
+    -- given: kept, the realm told now or not
+    account().charKeys = { [guid] = "Player - Oldhome" }
+    expect(realm.charKey("Player")).toBe("Player - Oldhome")
+    noRealm()
+    expect(realm.charKey("Player")).toBe("Player - Oldhome")
+    -- a broken key given is never kept
+    account().charKeys = { [guid] = "Player - " }
+    account().realms = { ["4621"] = "Home" }
+    realm.reset()
+    expect(realm.charKey("Player")).toBe("Player - Home")
+    expect(tbl.field(account(), "charKeys", guid)).toBe("Player - Home")
+    -- the last resort's key isn't given to the GUID
+    account().charKeys, account().realms = {}, {}
+    realm.reset()
+    withChars({}, function()
+        expect(realm.charKey("Player")).toBe("Player - realm:4621")
+    end)
+    expect(tbl.field(account(), "charKeys", guid)).toBeNil()
+    expectNoErrors()
+end
+
+@test("keys: split, broken realms, moves remembered")
+local function keys()
+    expect({ realm.split("Aster - Home Realm") }).toEqual({ "Aster", "Home Realm" })
+    expect({ realm.split("Aster - ") }).toEqual({ "Aster", "" })
+    expect(realm.split("Aster")).toBeNil()
+    expect(realm.brokenRealm("")).toBe(true)
+    expect(realm.brokenRealm("realm:6945")).toBe(true)
+    expect(realm.brokenRealm("CAMWOW EU5 Realm 3 PvE")).toBe(false)
+    expect(realm.movedKey("Aster - ")).toBeNil()
+    realm.recordMove("Aster - ", "Aster - Home")
+    expect(realm.movedKey("Aster - ")).toBe("Aster - Home")
+    expectNoErrors()
+end

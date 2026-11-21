@@ -1,0 +1,111 @@
+-- Units/Ledger/Rekey: the Ledger's gold, books and mail of a character
+-- split by Forever's update of 2026-11-21 ("Testchar - " beside
+-- "Testchar - Home") moved under the key SuuUI moved it to; what was kept
+-- under the ruleset "?" into this character's ruleset.
+
+import test, expect from "wowlua:test"
+import * as tbl from "wowlua:table"
+import * as rekey from "/Units/Ledger/Rekey"
+import * as books from "/Units/Ledger/Books"
+import type Tx from "/Units/Ledger/Books"
+import type RekeyData, RekeyWays from "/Units/Ledger/Rekey"
+import expectNoErrors from "../../../helpers"
+
+const OLD = "Testchar - Home"
+const NEW = "Testchar - "
+const DAY = 20778
+
+local function ways(): RekeyWays
+    return {
+        moved = function(key: string): string?
+            return key == NEW and OLD or nil
+        end,
+        rulesetOf = function(key: string): string?
+            return key:match("^.- %- (.+)$")
+        end,
+        here = "Home",
+    }
+end
+
+local function tx(at: number, amount: number): Tx
+    return { at = at, kind = "vendor", amount = amount }
+end
+
+local function split(): RekeyData
+    local t0 = 1795219200
+    return {
+        gold = {
+            [OLD] = {
+                name = "Testchar",
+                class = "PALADIN",
+                ruleset = "Home",
+                seen = 100,
+                days = { [DAY - 2] = 50, [DAY - 1] = 60, [DAY] = 1 },
+            },
+            [NEW] = { name = "Testchar", class = "PALADIN", ruleset = "?", seen = 200, days = { [DAY] = 70 } },
+            ["Altchar - Home"] = { name = "Altchar", ruleset = "?", seen = 5, days = {} },
+        },
+        books = {
+            [OLD] = {
+                [DAY - 1] = assert(books.encodeDay({ tx(t0 - 3600, 5) })),
+                [DAY] = assert(books.encodeDay({ tx(t0 + 10, 1) })),
+            },
+            [NEW] = { [DAY] = assert(books.encodeDay({ tx(t0 + 7200, 2), tx(t0 + 3600, 3) })) },
+        },
+        mail = { [OLD] = { money = 0, sales = 0, at = 10 }, [NEW] = { money = 5, sales = 1, at = 20 } },
+        scans = { ["?"] = { at = 30 }, Home = { at = 20 } },
+        watches = { ["?"] = { [7] = { target = 1 }, [8] = { target = 2 } }, Home = { [7] = { target = 9 } } },
+    }
+end
+
+@test("a split character's gold, books and mail under the old key; \"?\"'s scan and watches into this ruleset")
+local function moved()
+    local d = split()
+    expect(rekey.repair(d, ways())).toBe(3)
+    local gold = assert(d.gold)
+    expect(gold[NEW]).toBeNil()
+    local c = assert(gold[OLD])
+    -- a day both have: the one seen later
+    expect(c.days).toEqual({ [DAY - 2] = 50, [DAY - 1] = 60, [DAY] = 70 })
+    expect(c.seen).toBe(200)
+    expect(c.ruleset).toBe("Home")
+    -- any character's ruleset "?" from its key
+    expect(assert(gold["Altchar - Home"]).ruleset).toBe("Home")
+    -- books: a day both have, as one day, the newest first
+    local all = assert(d.books)
+    expect(all[NEW]).toBeNil()
+    local day = books.decodeDay(assert(all[OLD])[DAY])
+    local amounts: number[] = {}
+    for i, t in ipairs(day) do
+        amounts[i] = t.amount
+    end
+    expect(amounts).toEqual({ 2, 3, 1 })
+    expect(#books.decodeDay(assert(all[OLD])[DAY - 1])).toBe(1)
+    -- mail: the later look
+    expect(assert(d.mail)[OLD]).toEqual({ money = 5, sales = 1, at = 20 })
+    expect(assert(d.mail)[NEW]).toBeNil()
+    -- the later scan; your watches kept, the others added
+    expect(d.scans).toEqual({ Home = { at = 30 } })
+    expect(d.watches).toEqual({ Home = { [7] = { target = 9 }, [8] = { target = 2 } } })
+    expectNoErrors()
+end
+
+@test("again, or with nothing split: nothing changes")
+local function again()
+    local d = split()
+    rekey.repair(d, ways())
+    local once = tbl.copy(d)
+    expect(rekey.repair(d, ways())).toBe(0)
+    expect(d).toEqual(once)
+    -- a character only the broken key knew: moved whole
+    local only: RekeyData = { gold = { [NEW] = { name = "Testchar", ruleset = "?", seen = 1, days = { [DAY] = 3 } } } }
+    rekey.repair(only, ways())
+    expect(only.gold).toEqual({ [OLD] = { name = "Testchar", ruleset = "Home", seen = 1, days = { [DAY] = 3 } } })
+    -- this ruleset still unknown: "?" stays
+    local w = ways()
+    w.here = "?"
+    local d2: RekeyData = { scans = { ["?"] = { at = 1 } } }
+    rekey.repair(d2, w)
+    expect(d2.scans).toEqual({ ["?"] = { at = 1 } })
+    expectNoErrors()
+end

@@ -1,0 +1,147 @@
+-- Units/Ledger/Rekey.wowlua
+-- The Ledger's part of putting back the characters Forever's update of
+-- 2026-11-21 split (the client told no realm: a character logged in then
+-- was keyed "Name - ", its ruleset "?"). SuuUI moves the characters' own
+-- data at load and says where each broken key went (SuuUI.MovedCharKey);
+-- SuuUILedger is the Ledger's, so it moves its part here, each time it
+-- turns on (a no-op once nothing is left):
+--   gold     the days of both (a day both have: the one seen later), the
+--            later seen, the name and class kept, the ruleset the key's
+--   books    each day moved; a day both have, their rows as one day
+--   mail     the later look
+-- and what was kept under the ruleset "?": the last Scan all (the later
+-- one) and the watches (yours kept, the others added) into this
+-- character's ruleset, and any character's gold ruleset "?" set from its
+-- key.
+
+import * as books from "./Books"
+import type GoldMap from "./Gold"
+import type BookMap from "./Books"
+import type MailInfo from "./BookStore"
+
+-- What it moves of SuuUILedger.
+export type RekeyData = {
+    gold?: GoldMap,
+    books?: BookMap,
+    mail?: { [string]: MailInfo },
+    scans?: { [string]: { at: number } },
+    watches?: { [string]: { [number]: unknown } },
+}
+
+-- Where the move goes: a broken key's new key, a key's ruleset, and this
+-- character's ruleset.
+export type RekeyWays = { moved: (key: string) -> string?, rulesetOf: (key: string) -> string?, here: string }
+
+local function keysOf<V>(t: { [string]: V }?): string[]
+    local out: string[] = {}
+    for k in pairs(t or {}) do
+        out[#out + 1] = k
+    end
+    table.sort(out)
+    return out
+end
+
+local function broken(ruleset: string?): boolean
+    return ruleset == nil or ruleset == "" or ruleset == "?"
+end
+
+-- The move (see the top). -> how many characters' gold, books and mail
+-- moved.
+export function repair(d: RekeyData, ways: RekeyWays): number
+    local count = 0
+    local gold = d.gold
+    if gold then
+        for _, from in ipairs(keysOf(gold)) do
+            local to = ways.moved(from)
+            local c = gold[from]
+            if to and c then
+                local into = gold[to]
+                if not into then
+                    gold[to] = c
+                else
+                    local later = (c.seen or 0) > (into.seen or 0)
+                    into.days = into.days or {}
+                    for day, money in pairs(c.days or {}) do
+                        if into.days[day] == nil or later then
+                            into.days[day] = money
+                        end
+                    end
+                    into.seen = math.max(into.seen or 0, c.seen or 0)
+                    into.class = into.class or c.class
+                end
+                gold[from] = nil
+                count += 1
+            end
+        end
+        for key, c in pairs(gold) do
+            if broken(c.ruleset) then
+                c.ruleset = ways.rulesetOf(key) or ways.here
+            end
+        end
+    end
+    local all = d.books
+    if all then
+        for _, from in ipairs(keysOf(all)) do
+            local to = ways.moved(from)
+            local book = all[from]
+            if to and book then
+                local into = all[to]
+                if not into then
+                    all[to] = book
+                else
+                    for day, s in pairs(book) do
+                        local was = into[day]
+                        if was then
+                            local list = books.decodeDay(was)
+                            books.decodeDay(s, list)
+                            into[day] = books.encodeDay(list)
+                        else
+                            into[day] = s
+                        end
+                    end
+                end
+                all[from] = nil
+                count += 1
+            end
+        end
+    end
+    local mail = d.mail
+    if mail then
+        for _, from in ipairs(keysOf(mail)) do
+            local to = ways.moved(from)
+            local m = mail[from]
+            if to and m then
+                local into = mail[to]
+                if not into or (m.at or 0) > (into.at or 0) then
+                    mail[to] = m
+                end
+                mail[from] = nil
+                count += 1
+            end
+        end
+    end
+    if not broken(ways.here) then
+        local scans = d.scans
+        local lost = scans and scans["?"]
+        if scans and lost then
+            local kept = scans[ways.here]
+            if not kept or (lost.at or 0) > (kept.at or 0) then
+                scans[ways.here] = lost
+            end
+            scans["?"] = nil
+        end
+        local watches = d.watches
+        local lostWatches = watches and watches["?"]
+        if watches and lostWatches then
+            local mine = watches[ways.here] or {}
+            watches[ways.here] = mine
+            for itemID, w in pairs(lostWatches) do
+                if mine[itemID] == nil then
+                    mine[itemID] = w
+                end
+            end
+            watches["?"] = nil
+        end
+    end
+    return count
+end

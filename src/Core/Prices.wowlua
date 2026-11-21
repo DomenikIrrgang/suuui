@@ -45,7 +45,9 @@
 -- becomes a look on its day and period, any other is dropped; then `seen`
 -- goes from every character. Each source is removed only after it is all in,
 -- and merging one again changes nothing, so a second load or one that
--- stopped half way loses nothing.
+-- stopped half way loses nothing. Then the looks kept under "?" (no
+-- ruleset: the client told no realm after Forever's update of 2026-11-21)
+-- merge into this character's ruleset (mergeUnknown).
 
 import onLoad, onLogin from "wowlua:lifecycle"
 import after, every from "wowlua:timer"
@@ -705,8 +707,41 @@ export function migrate(): Moved
     return moved
 end
 
+-- The looks kept under "?" (Forever's update of 2026-11-21 told no realm,
+-- so no ruleset: Core/Realm) merged into this character's ruleset, each
+-- the same period merged as mergeInto does (the lowest price, the latest
+-- counts); "?" gone from the prices and the prune days. -> how many items
+-- (0: nothing to do, or the ruleset still unknown).
+export function mergeUnknown(): number
+    local d = data()
+    local here = rulesets.current()
+    local all = d.prices
+    local lost = all and all["?"]
+    if here == "?" then
+        return 0
+    end
+    local count = 0
+    if all and lost then
+        local m = assert(map(here, true))
+        for key, s in pairs(lost :: { [unknown]: unknown }) do
+            local itemID = idOf(key)
+            if itemID and type(s) == "string" then
+                mergeInto(m, itemID, s)
+                count += 1
+            end
+        end
+        all["?"] = nil
+    end
+    local pruned = d.pruned
+    if pruned then
+        pruned["?"] = nil
+    end
+    return count
+end
+
 -- (the SavedVariables are in: SuuUIPrices, SuuUILedger and SuuUIDB alike)
 @onLoad
 local function migrateAtLoad()
     fault.call("Prices: moving the old prices in", migrate)
+    fault.call("Prices: the prices without a ruleset moved", mergeUnknown)
 end

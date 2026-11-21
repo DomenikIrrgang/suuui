@@ -12,6 +12,7 @@ import SuuUI from "/Core/API"
 import * as DB from "/Core/DB"
 import * as events from "/Core/Events"
 import * as settings from "/Core/Settings"
+import * as realm from "/Core/Realm"
 import internal ownOf from "/Core/Modules"
 import expectNoErrors, newParent from "../../../helpers"
 import hasLine from "../../SettingsUI/UiSettingsHelpers"
@@ -107,6 +108,26 @@ local function tipLines(id: number): string[]
     })
     M:AddCounts(tip, { id = id })
     return lines
+end
+
+@test("no realm from the client (Forever's update of 2026-11-21): yours kept as SuuUI's realm; a realm saved as \"\" names none in the counts")
+local function noRealm()
+    mock.setPlayer({ name = "Player", realm = "" })
+    mock.stub(_G, "GetRealmID", function(): number
+        return 0
+    end)
+    realm.reset()
+    -- (others() saves the other character with the client's realm: "")
+    others()
+    M:SaveMe()
+    expect(M:Char().realm).toBe(SuuUI.Realm())
+    expect(SuuUI.Realm()).toBe("Realm")
+    local lines = tipLines(CLOTH)
+    expect(hasLine(lines, "Otherplayer")).toBe(true)
+    expect(hasLine(lines, "Otherplayer-")).toBe(false)
+    mock.setPlayer({ name = "Player", realm = "Realm" })
+    realm.reset()
+    expectNoErrors()
 end
 
 @test("item counts with the mail: each character's mail (the mail module's) beside Bags and Bank, in the total; an expired mail's gone; none with the mail module off")

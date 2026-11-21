@@ -496,6 +496,36 @@ local function seenOnly()
     expect(mine.seen).toBeNil()
 end
 
+@test("the looks kept under \"?\" (no realm told: Forever's update of 2026-11-21) merge into this ruleset; again: nothing")
+local function unknownRuleset()
+    local here = SuuUI.Ruleset()
+    local today = days.dayOf()
+    local d = prices.data()
+    -- the realm's ore from before; the same day's lower look and a bar
+    -- only "?" has, from the session without a realm
+    assert(prices.map(here, true))[ORE] = pack.record(nil, today - 1, 3, 1000, 0, 6, 3)
+    local lost = {
+        [ORE] = pack.record(pack.record(nil, today - 1, 3, 950, 0, 9, 4), today, 2, 990, 0, 2, 1),
+        [BAR] = pack.record(nil, today, 2, 60, 0, 1, 1),
+    }
+    d.prices = d.prices or {}
+    assert(d.prices)["?"] = lost
+    d.pruned = { ["?"] = today, [here] = today - 1 }
+    expect(prices.mergeUnknown()).toBe(2)
+    local ore = prices.looks(ORE)
+    expect(#ore).toBe(2)
+    expect(ore[1]).toEqual({ day = today, period = 2, low = 990, most = 0, qty = 2, n = 1 })
+    -- the same period: the lowest price, the latest counts
+    expect(ore[2]).toEqual({ day = today - 1, period = 3, low = 950, most = 0, qty = 9, n = 4 })
+    expect(assert(prices.latest(BAR)).low).toBe(60)
+    expect(assert(d.prices)["?"]).toBeNil()
+    expect(d.pruned).toEqual({ [here] = today - 1 })
+    expect(prices.rulesetList()).toEqual({ here })
+    -- nothing left: nothing to do
+    expect(prices.mergeUnknown()).toBe(0)
+    expect(#prices.looks(ORE)).toBe(2)
+end
+
 @test("kept across a /reload: the store's looks and names, read the same after it")
 local function acrossReload()
     if mock.reloads() == 0 then

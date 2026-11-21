@@ -52,6 +52,8 @@ import * as fault from "./Fault"
 import * as events from "./Events"
 import * as DB from "./DB"
 import * as vision from "./Vision"
+import * as realm from "./Realm"
+import * as keyRepair from "./KeyRepair"
 
 -- The keys of `t` sorted as strings (plugin data may mix key types).
 local function sortedKeys<K, V>(t: { [K]: V }): K[]
@@ -1470,12 +1472,20 @@ export const profiles = {
 -- The SavedVariables are in: the colour vision preset first, before
 -- anything draws (Vision.wowlua), then SuuUI's store binds to SuuUIDB for
 -- this character (the migrations and vetoes of every file of SuuUI are in
--- by now).
+-- by now). Its key is Core/Realm's (kept by its GUID, the realm there even
+-- when the client tells none), and the characters Forever's update of
+-- 2026-11-21 split are put back together first (Core/KeyRepair), before
+-- anything reads a character's data.
 @onLoad
 local function bind()
     local data = DB.db
     vision.apply(secret.asString(tbl.field(data, "account", "colorVision")))
-    store:bind(data, secret.known(UnitName("player"), "?") .. " - " .. GetRealmName())
+    local name = secret.known(UnitName("player"), "?")
+    local key = realm.charKey(name)
+    fault.call("Settings: characters split by the realm put back", function()
+        keyRepair.run(data, key, name)
+    end)
+    store:bind(data, key)
 end
 
 --------------------------------------------------------------------------------

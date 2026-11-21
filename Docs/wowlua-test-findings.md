@@ -127,6 +127,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V61](#v61) | VM | medium | open | A trade has no money and never completes |
 | [V62](#v62) | VM | low | open | `GetSendMailPrice` leaves out the money attached; a send can't fail |
 | [V63](#v63) | VM | low | open | A loot window has no coin |
+| [V64](#v64) | VM | low | open (unverified in game) | `mock.wheel` reaches only the frame it is given |
 
 ## Test runner and mock issues
 
@@ -1101,6 +1102,14 @@ On Forever `GetSendMailPrice()` after `SetSendMailMoney(1)` answers 31 (the 30 c
 *Status: open (0.13.15).*
 
 `player:loot(corpse)` fills the window with items only. In the game a corpse's coin is slot 1 (`GetLootSlotType` = `Enum.LootSlotType.Money`, `GetLootSlotInfo`'s text "7 Copper", quantity 0); taking it clears the slot (`LOOT_SLOT_CLEARED(1)` twice), the window closes, `PLAYER_MONEY` comes about 0.1 s later and the "You loot 7 Copper" line (`CHAT_MSG_MONEY`) 0.76 s after the money; in a party the share's line came 0.8 s after it (`/suu probe ledger` 2026-11-18). The Ledger's test fakes the three slot functions and plays the events (`tests/unit/Units/Ledger/Recorder.test.wowlua`). Wanted: a corpse's coin in the window, paid when taken, and its chat line. (the Ledger's transactions 2026-11-18)
+
+<a id="v64"></a>
+
+### V64. `mock.wheel` reaches only the frame it is given
+
+*Status: open (unverified in game).*
+
+`mock.wheel(child, delta)` over a child without the wheel enabled (a mouse-enabled button) runs nothing: the wheel never goes on to a parent that has it enabled (wowlua 0.13.15). In the game the wheel over such a child is taken to be the parent's (the Spellbook page's wheel over its spells' secure buttons relies on it, as the Macros icon picker's grid over its cells). The Spellbook tests turn the page itself (`mock.wheel(book.main, …)`) and check that the cells leave the wheel. (spellbook wheel 2026-11-17)
 
 ## Not bugs (for test writers)
 

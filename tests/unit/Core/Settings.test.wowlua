@@ -12,6 +12,7 @@ import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
 import * as DB from "/Core/DB"
+import * as realm from "/Core/Realm"
 import internal parse, show, splitPath, bind from "/Core/Settings"
 import FakeReporter, FakeNotifier from "../../fakes"
 import expectNoErrors from "../../helpers"
@@ -258,6 +259,40 @@ local function missingMapped()
     bind()
     expect(profiles.current()).toBe("Main")
     DB.db.profiles[key] = nil
+end
+
+@test("at load: the key its GUID was given, when the client tells no realm; the character split by it put back")
+local function realmGone()
+    local key = settings.getCharKey() :: string
+    local db = savedDB()
+    expect(field(db, "account", "charKeys", UnitGUID("player") :: string)).toBe(key)
+    -- a session with the realm "" (Forever's update of 2026-11-21) left
+    -- "Player - " beside the character's key
+    db.chars["Player - "] = "Player - "
+    db.profiles["Player - "] = {}
+    db.charData["Player - "] = { zzsa = { split = true } }
+    mock.setPlayer({ name = "Player", realm = "" })
+    mock.stub(_G, "GetRealmID", function(): number
+        return 0
+    end)
+    realm.reset()
+    bind()
+    expect(settings.getCharKey()).toBe(key)
+    expect(profiles.current()).toBe("Main")
+    expect(settings.charKnownAtLoad()).toBe(true)
+    expect(db.chars["Player - "]).toBeNil()
+    expect(db.profiles["Player - "]).toBeNil()
+    expect(db.charData["Player - "]).toBeNil()
+    expect(settings.charData("zzsa").split).toBe(true)
+    expect(field(db, "account", "charKeyMoves", "Player - ")).toBe(key)
+    -- the client telling the realm again: the same key
+    mock.setPlayer({ name = "Player", realm = "Realm" })
+    realm.reset()
+    bind()
+    expect(settings.getCharKey()).toBe(key)
+    db.charData[key].zzsa = nil
+    tbl.recordAt(db, "account").charKeyMoves = nil
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------
