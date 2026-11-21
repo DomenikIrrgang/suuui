@@ -204,6 +204,31 @@ In `wowlua test` (0.13.15) the direct call leaves no trace: a raid with two
 pets laid out by the direct call, then one pet gone (or a member left) in
 combat, gives no refusals.
 
+<a id="v7"></a>
+
+### V7. Forever 1.60.1.71037 tells no realm; the emulator tells one unless asked not to
+
+Seen in game 2026-11-21, after Forever's update to 1.60.1.71037, all session
+(also after PLAYER_ENTERING_WORLD): `GetRealmName()` and
+`GetNormalizedRealmName()` answer `""`, `GetRealmID()` answers `0`;
+`UnitGUID("player")` still carries the server's ID (`"Player-6945-…"`), and
+the client's own WTF folders still use 6945. On 70959 (probed 2026-11-19)
+the name was `"CAMWOW EU5 Realm 3 PvE"`, the normalized name
+`"CAMWOWEU5Realm3PvE"`, and `GetRealmID()`, `GetNativeRealmID()` and the
+GUID's ID were all 6945. SuuUI keys characters `"Name - Realm"` and rulesets
+by the realm's name, so every character split into a `"Name - "` key and
+every ruleset became `"?"`. Core/Realm now works the realm out (the name
+remembered per server ID from the GUID, else the saved keys) and keeps each
+character's key by its GUID; Core/KeyRepair and Units/Ledger/Rekey merge the
+split data back.
+
+In `wowlua test` (0.13.16) the realm is `"Realm"` unless the profile's
+`character.realm` or `mock.setPlayer({ realm = "" })` says otherwise (both
+blank `GetRealmName()` and `GetNormalizedRealmName()`; `setPlayer` without a
+`name` also renames the player to "Unit"). `GetRealmID()` can't be set (the
+tests stub it to 0), and it differs from the GUID's ID (4618 against
+`Player-4621-…`), where the game gave the same number for both.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not

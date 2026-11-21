@@ -1,0 +1,71 @@
+-- Saved data split by Forever's update of 2026-11-21 (the client told no
+-- realm, so a character logged in then was keyed "Player - " and its
+-- ruleset was "?"): tests/profiles/realm-split.json has this character's
+-- old key and its broken one, an alt's two keys, the Ledger's gold and mail
+-- under both, and a price kept under "?". The emulated client tells no
+-- realm either (the profile's realm ""), and nothing remembers one: SuuUI
+-- reads it from the saved keys. At load the characters are put back
+-- together, and a /reload changes nothing.
+
+import test, expect, config from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import * as settings from "/Core/Settings"
+import * as prices from "/Core/Prices"
+import * as DB from "/Core/DB"
+import internal M as Ledger from "/Units/Ledger"
+import errorsSoFar from "../helpers"
+
+config({ profile = "realm-split" })
+
+const REALM = "Home Realm 3 PvE"
+const KEY = "Player - Home Realm 3 PvE"
+const BAR = 991302
+
+@test(
+    "the split characters put back at load: the old key, its profile and data, the session's added; the ruleset again; after a /reload the same"
+)
+local function putBack()
+    expect(GetRealmName()).toBe("")
+    expect(SuuUI.Realm()).toBe(REALM)
+    expect(SuuUI.Ruleset()).toBe(REALM)
+    expect(SuuUI.RulesetName()).toBe("Normal Ruleset")
+    expect(settings.getCharKey()).toBe(KEY)
+    expect(settings.charKnownAtLoad()).toBe(true)
+    expect(settings.profiles.current()).toBe("Tank")
+    local db = DB.db
+    expect(tbl.field(db, "account", "charKeys", UnitGUID("player") :: string)).toBe(KEY)
+    -- the broken keys are gone everywhere
+    for _, part in ipairs({ "chars", "profiles", "charData", "lastRoles" }) do
+        expect(tbl.field(db, part, "Player - ")).toBeNil()
+        expect(tbl.field(db, part, "Altchar - ")).toBeNil()
+    end
+    -- the alt, by its only key with a realm
+    expect(tbl.field(db, "charData", "Altchar - " .. REALM, "mail", "realm")).toBe(REALM)
+    -- this character's data: the old, the session's added
+    expect(tbl.field(db, "charData", KEY, "marks", "nextID")).toBe(12)
+    local sent = tbl.field(db, "charData", KEY, "mail", "sent") :: { { to: string } }
+    expect(sent[1].to).toBe("Friendtwo")
+    expect(sent[2].to).toBe("Friendone")
+    expect(tbl.field(db, "charData", KEY, "auctionhouse", "ruleset")).toBe(REALM)
+    expect(tbl.field(db, "charData", KEY, "mail", "realm")).toBe(REALM)
+    -- the Ledger's gold and mail under the old key
+    local ledger = tbl.field(_G, "SuuUILedger")
+    expect(tbl.field(ledger, "gold", "Player - ")).toBeNil()
+    expect(tbl.field(ledger, "gold", KEY, "seen")).toBeTruthy()
+    expect(tbl.field(ledger, "gold", KEY, "ruleset")).toBe(REALM)
+    expect(tbl.field(ledger, "mail", "Player - ")).toBeNil()
+    expect(tbl.field(ledger, "mail", KEY, "money")).toBe(500)
+    expect(Ledger:IsEnabled()).toBe(true)
+    -- the price kept under "?" is this ruleset's
+    expect(prices.packed(BAR, REALM)).toBe("iqt/jV#")
+    expect(tbl.field(prices.data(), "prices", "?")).toBeNil()
+    expect(tbl.field(prices.data(), "pruned", "?")).toBeNil()
+    expect(prices.rulesetList()).toEqual({ REALM })
+    expect(errorsSoFar()).toEqual({})
+    if mock.reloads() == 0 then
+        mock.reloadUI()
+    end
+    expect(mock.reloads()).toBe(1)
+end

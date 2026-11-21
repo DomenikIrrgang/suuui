@@ -1,0 +1,277 @@
+-- Core/Realm.wowlua
+-- The player's realm, and this character's key ("Name - Realm",
+-- Core/Settings), even when the client stops telling the realm.
+--
+-- Forever's 1.60.1.71037 (2026-11-21) answers GetRealmName() and
+-- GetNormalizedRealmName() with "" and GetRealmID() with 0, all session;
+-- UnitGUID("player") still carries the server's ID ("Player-6945-…").
+-- Before it, the name was the server behind the ruleset ("CAMWOW EU5 Realm
+-- 3 PvE", ID 6945; Core/Rulesets). A character keyed "Name - " then is a
+-- new character to SuuUI, and every ruleset "?".
+--
+-- current(), the realm, asks in this order:
+--   1. GetRealmName(), when it says something (remembered for its server);
+--   2. GetNormalizedRealmName(), turned back into a remembered name;
+--   3. the name remembered for this server: SuuUIDB.account.realms, server
+--      ID -> name, written whenever the client told a name;
+--   4. the saved data: the realm of a key "<this name> - <realm>", else the
+--      one realm every saved key has (remembered for the server then);
+--   5. the normalized name as it is, else "realm:<server ID>".
+-- It is never "" or "?" while the server's ID is known. The server's ID is
+-- the GUID's (what the game kept giving); GetRealmID() when there is no
+-- GUID.
+--
+-- charKey(name): SuuUIDB.account.charKeys, player GUID -> character key,
+-- keeps a character's key once it had one with a realm's name, whatever
+-- the client tells later. A key made from the last resort ("realm:…") is
+-- not kept there, so a character takes the real name once it is known.
+--
+-- movedKey(key): where Core/KeyRepair moved a key the update broke
+-- ("Name - " -> "Name - Realm"), for data kept outside SuuUIDB (the
+-- Ledger's).
+
+import * as secret from "wowlua:secret"
+import * as DB from "./DB"
+
+type Map = { [string]: string }
+
+-- SuuUIDB.account's part `key` (a map of strings), made when `make`.
+local function accountMap(key: string, make: boolean?): Map?
+    if not DB.loaded() then
+        return nil
+    end
+    local account = DB.db.account
+    if type(account) ~= "table" then
+        if not make then
+            return nil
+        end
+        account = {}
+        DB.db.account = account
+    end
+    local a = account :: any :: { [string]: unknown }
+    local m = a[key]
+    if type(m) ~= "table" then
+        if not make then
+            return nil
+        end
+        m = {}
+        a[key] = m
+    end
+    return m :: any :: Map
+end
+
+-- Whether a key's realm part is one the update broke: empty, or the last
+-- resort ("realm:6945").
+export function brokenRealm(realm: string): boolean
+    return realm == "" or realm:sub(1, 6) == "realm:"
+end
+
+-- A key's name and realm ("Name - Realm"; the realm may be ""), nil when
+-- it isn't such a key.
+export function split(key: string): (string?, string?)
+    return key:match("^(.-) %- (.*)$")
+end
+
+-- The player's GUID, nil when the client has none yet.
+export function guid(): string?
+    local g = secret.asString(UnitGUID("player"))
+    if g and g ~= "" then
+        return g
+    end
+    return nil
+end
+
+-- The server's ID ("6945"): the GUID's, else GetRealmID()'s; nil: neither.
+export function serverID(): string?
+    local g = guid()
+    local id = g and g:match("^Player%-(%d+)%-")
+    if id then
+        return id
+    end
+    local rid = secret.asNumber(GetRealmID())
+    if rid and rid > 0 then
+        return tostring(math.floor(rid))
+    end
+    return nil
+end
+
+-- What the client tells (nil: ""): the name; the normalized name.
+local function told(): string?
+    local name = secret.asString(GetRealmName())
+    return name ~= "" and name or nil
+end
+local function toldNormal(): string?
+    local normal = secret.asString(GetNormalizedRealmName())
+    return normal ~= "" and normal or nil
+end
+
+-- The name remembered for the server (`id`).
+local function remember(id: string?, name: string)
+    if not id then
+        return
+    end
+    local realms = accountMap("realms", true)
+    if realms and realms[id] ~= name then
+        realms[id] = name
+    end
+end
+
+-- The saved keys' realms (characters' data, profiles' owners), only those
+-- with a name: by realm, how many keys; for `name`, its realms.
+local function savedRealms(name: string?): ({ [string]: boolean }, { [string]: boolean })
+    local all: { [string]: boolean }, mine: { [string]: boolean } = {}, {}
+    if not DB.loaded() then
+        return all, mine
+    end
+    local function look(map: unknown)
+        if type(map) ~= "table" then
+            return
+        end
+        for key in pairs(map :: { [unknown]: unknown }) do
+            if type(key) == "string" then
+                local n, r = split(key)
+                if n and r and not brokenRealm(r) then
+                    all[r] = true
+                    if n == name then
+                        mine[r] = true
+                    end
+                end
+            end
+        end
+    end
+    look(DB.db.charData)
+    look(DB.db.chars)
+    return all, mine
+end
+
+-- The one key of a set (nil: none or several).
+local function only(set: { [string]: boolean }): string?
+    local one: string? = nil
+    for k in pairs(set) do
+        if one then
+            return nil
+        end
+        one = k
+    end
+    return one
+end
+
+-- The realm the saved data says (see the top): the realm of this
+-- character's indexed key, of a key with this name, else the one realm of
+-- every key.
+export function inferred(): string?
+    local g = guid()
+    local index = accountMap("charKeys")
+    local indexed = g and index and index[g]
+    if indexed then
+        local _, r = split(indexed)
+        if r and not brokenRealm(r) then
+            return r
+        end
+    end
+    local all, mine = savedRealms(secret.asString(UnitName("player")))
+    return only(mine) or only(all)
+end
+
+-- The answer when the client tells no name, worked out once a session
+-- (the saved data is in by then).
+local fallback: string? = nil
+local fallbackReal = false
+-- the client's name last remembered (once a name, not every call)
+local rememberedName: string? = nil
+
+local function resolve(): (string, boolean)
+    local name = told()
+    if name then
+        if name ~= rememberedName and DB.loaded() then
+            remember(serverID(), name)
+            rememberedName = name
+        end
+        fallback = nil
+        return name, true
+    end
+    if fallback then
+        return fallback, fallbackReal
+    end
+    local normal, id = toldNormal(), serverID()
+    local realms = accountMap("realms")
+    local answer: string? = nil
+    local real = true
+    if normal and realms then
+        for _, r in pairs(realms) do
+            if r:gsub("[%s%-]", "") == normal then
+                answer = r
+                break
+            end
+        end
+    end
+    if not answer and id and realms then
+        answer = realms[id]
+    end
+    if not answer then
+        answer = inferred()
+        if answer then
+            remember(id, answer)
+        end
+    end
+    if not answer then
+        real = false
+        answer = normal or (id and ("realm:" .. id)) or "?"
+    end
+    if DB.loaded() then
+        fallback, fallbackReal = answer, real
+    end
+    return answer, real
+end
+
+-- The player's realm (see the top).
+export function current(): string
+    local r = resolve()
+    return r
+end
+
+-- Whether current() is a realm's name (the client's, remembered or
+-- inferred), not the last resort.
+export function known(): boolean
+    local _, real = resolve()
+    return real
+end
+
+-- This character's key: the one its GUID was given, else "Name - Realm"
+-- (given to the GUID when the realm is a name).
+export function charKey(name: string): string
+    local g = guid()
+    local index = accountMap("charKeys", true)
+    local kept = g and index and index[g]
+    if kept then
+        local _, r = split(kept)
+        if r and not brokenRealm(r) then
+            return kept
+        end
+    end
+    local realm, real = resolve()
+    local key = name .. " - " .. realm
+    if g and index and real then
+        index[g] = key
+    end
+    return key
+end
+
+-- Where the repair moved a broken key (nil: it didn't).
+export function movedKey(key: string): string?
+    local moves = accountMap("charKeyMoves")
+    return moves and moves[key]
+end
+
+-- The repair moved `from` to `to`.
+export function recordMove(from: string, to: string)
+    local moves = accountMap("charKeyMoves", true)
+    if moves then
+        moves[from] = to
+    end
+end
+
+-- (tests) Work the answer out again.
+export function reset()
+    fallback, fallbackReal, rememberedName = nil, false, nil
+end

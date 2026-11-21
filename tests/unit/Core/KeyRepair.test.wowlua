@@ -1,0 +1,223 @@
+-- Core/KeyRepair: characters split by Forever's update of 2026-11-21
+-- ("Name - " next to "Name - Realm") put back together. The fixture is
+-- shaped like a real split: the old key with weeks of data, the broken key
+-- with one session's (newer bags, inbox, auctions, a few new lists), a
+-- profile made for the broken key that nobody uses.
+
+import test, expect, afterEach from "wowlua:test"
+import * as tbl from "wowlua:table"
+import * as keyRepair from "/Core/KeyRepair"
+import * as realm from "/Core/Realm"
+import * as DB from "/Core/DB"
+import expectNoErrors from "../../helpers"
+
+type Map = { [string]: any }
+
+const OLD = "Testchar - Home Realm 3 PvE"
+const NEW = "Testchar - "
+
+@afterEach
+local function forgetMoves()
+    (DB.db.account :: any :: Map).charKeyMoves = nil
+end
+
+local function split(): Map
+    local sent: Map[] = {}
+    for i = 1, 50 do
+        sent[i] = { to = "Friend" .. i, subject = "old " .. i, at = 1000 - i }
+    end
+    local typedOld: string[] = {}
+    for i = 1, 50 do
+        typedOld[i] = "/say old " .. i
+    end
+    return {
+        chars = { [OLD] = "Tank", [NEW] = "Tank", ["Altchar - Home Realm 3 PvE"] = "Altchar - Home Realm 3 PvE" },
+        charRoles = {},
+        lastRoles = { [OLD] = "TANK", [NEW] = "TANK" },
+        roleProfiles = { TANK = "Tank" },
+        profiles = {
+            Tank = { __layouts = { ["1920x1080"] = {} }, frames = { scale = 1 } },
+            [NEW] = { __layouts = { ["2560x1440"] = {} }, __migrated = { ["x/y"] = true } },
+            ["Altchar - Home Realm 3 PvE"] = {},
+        },
+        charData = {
+            [OLD] = {
+                bags = {
+                    name = "Testchar",
+                    realm = "Home Realm 3 PvE",
+                    seen = 500,
+                    money = 10,
+                    level = 59,
+                    bags = { old = true },
+                    bank = { kept = true },
+                },
+                mail = { realm = "Home Realm 3 PvE", inbox = { at = 400, list = { "old" } }, sent = sent },
+                auctionhouse = {
+                    ruleset = "Home Realm 3 PvE",
+                    owned = { at = 300, list = { "old" } },
+                    posted = { [1] = { price = 5 } },
+                    writs = { a = 1 },
+                    history = { { text = "Ore" }, { text = "Hide" } },
+                    scanCount = 9,
+                },
+                chat = { history = typedOld },
+                marks = { nextID = 12, marks = {} },
+                mousebindings = { last = "2", specs = { ["2"] = { button1 = "heal" } } },
+                professions = { vendor = { [10] = 1 }, filters = { a = true } },
+                core = {
+                    cvarsSince = "upgrade",
+                    cvarSeeds = { nameplates = { nameplateMinAlpha = true } },
+                    cvars = { nameplates = { nameplateMinAlpha = "0.6" } },
+                },
+                collections = { learned = { 1, 2, 3 } },
+            },
+            [NEW] = {
+                bags = { name = "Testchar", realm = "", seen = 900, money = 20, level = 60, bags = { new = true } },
+                mail = {
+                    realm = "",
+                    inbox = { at = 800, list = { "new" } },
+                    sent = {
+                        { to = "Friendnew", subject = "new", at = 2000 },
+                        { to = "Friend1", subject = "old 1", at = 999 },
+                    },
+                },
+                auctionhouse = {
+                    ruleset = "?",
+                    owned = { at = 700, list = { "new" } },
+                    history = { { text = "Bar" }, { text = "ore" } },
+                },
+                chat = { history = { "/say old 50", "/say new 1" } },
+                marks = { nextID = 1, marks = {} },
+                mousebindings = { last = "2", specs = { ["2"] = {} } },
+                professions = { vendor = { [10] = 2, [11] = 3 } },
+                core = {
+                    cvarsSince = "fresh",
+                    cvars = { nameplates = { nameplateMinAlpha = "1", nameplateShowFriendlyNPCs = "1" } },
+                },
+                cooldowns = { recent = { spell = { 5 } } },
+            },
+            ["Altchar - Home Realm 3 PvE"] = { bags = { seen = 100 } },
+        },
+    }
+end
+
+@test("a split character: the old key's settings and data stay, the session's newer data joins, the broken key goes")
+local function merged()
+    local db = split()
+    local moved = keyRepair.run(db, OLD, "Testchar")
+    expect(moved).toEqual({ [NEW] = OLD })
+    expect(realm.movedKey(NEW)).toBe(OLD)
+    -- characters, roles, profiles
+    expect(db.chars).toEqual({ [OLD] = "Tank", ["Altchar - Home Realm 3 PvE"] = "Altchar - Home Realm 3 PvE" })
+    expect(db.lastRoles).toEqual({ [OLD] = "TANK" })
+    expect(db.profiles[NEW]).toBeNil()
+    expect(tbl.field(db, "profiles", "Tank", "__layouts")).toEqual({ ["1920x1080"] = {} })
+    local d = db.charData[OLD]
+    expect(db.charData[NEW]).toBeNil()
+    -- the bags' snapshot: the newer; the bank: the old
+    expect(d.bags).toEqual({
+        name = "Testchar",
+        realm = "Home Realm 3 PvE",
+        seen = 900,
+        money = 20,
+        level = 60,
+        bags = { new = true },
+        bank = { kept = true },
+    })
+    -- the inbox and the auctions: the newer; posted, writs, scans: the old
+    expect(d.mail.inbox).toEqual({ at = 800, list = { "new" } })
+    expect(d.mail.realm).toBe("Home Realm 3 PvE")
+    expect(d.auctionhouse.owned).toEqual({ at = 700, list = { "new" } })
+    expect(d.auctionhouse.ruleset).toBe("Home Realm 3 PvE")
+    expect(d.auctionhouse.posted).toEqual({ [1] = { price = 5 } })
+    expect(d.auctionhouse.scanCount).toBe(9)
+    -- lists of the newest joined, each letter or search once, kept to size
+    expect(#d.mail.sent).toBe(50)
+    expect(d.mail.sent[1]).toEqual({ to = "Friendnew", subject = "new", at = 2000 })
+    expect(d.mail.sent[2].to).toBe("Friend1")
+    expect(d.mail.sent[50].to).toBe("Friend49")
+    expect(d.auctionhouse.history).toEqual({ { text = "Bar" }, { text = "ore" }, { text = "Hide" } })
+    expect(#d.chat.history).toBe(50)
+    expect(d.chat.history[49]).toBe("/say old 50")
+    expect(d.chat.history[50]).toBe("/say new 1")
+    expect(d.chat.history[1]).toBe("/say old 2")
+    -- the larger mark ID; the old click-casting; the old CVars, new ones added
+    expect(d.marks.nextID).toBe(12)
+    expect(d.mousebindings.specs).toEqual({ ["2"] = { button1 = "heal" } })
+    expect(d.core).toEqual({
+        cvarsSince = "upgrade",
+        cvarSeeds = { nameplates = { nameplateMinAlpha = true } },
+        cvars = { nameplates = { nameplateMinAlpha = "0.6", nameplateShowFriendlyNPCs = "1" } },
+    })
+    expect(d.professions).toEqual({ vendor = { [10] = 1, [11] = 3 }, filters = { a = true } })
+    -- only the old's, only the new's
+    expect(d.collections).toEqual({ learned = { 1, 2, 3 } })
+    expect(d.cooldowns).toEqual({ recent = { spell = { 5 } } })
+    expectNoErrors()
+end
+
+@test("run again, nothing changes; no split, nothing changes")
+local function idempotent()
+    local db = split()
+    keyRepair.run(db, OLD, "Testchar")
+    local once = tbl.copy(db)
+    expect(keyRepair.run(db, OLD, "Testchar")).toEqual({})
+    expect(db).toEqual(once)
+    -- data that never split
+    local clean = split()
+    clean.chars[NEW], clean.charData[NEW], clean.profiles[NEW], clean.lastRoles[NEW] = nil, nil, nil, nil
+    local before = tbl.copy(clean)
+    expect(keyRepair.run(clean, OLD, "Testchar")).toEqual({})
+    expect(clean).toEqual(before)
+    expectNoErrors()
+end
+
+@test("another character's broken key: into its only key with a realm; several or none: it waits")
+local function others()
+    local db = split()
+    db.chars["Altchar - "] = "Altchar - "
+    db.profiles["Altchar - "] = { __layouts = { ["2560x1440"] = {} } }
+    db.charData["Altchar - "] = { bags = { seen = 200, realm = "" } }
+    db.chars["Newchar - "] = "Newchar - "
+    db.charData["Newchar - "] = { bags = { seen = 1 } }
+    db.chars["Twochar - A"], db.chars["Twochar - B"], db.chars["Twochar - "] = "x", "x", "x"
+    local moved = keyRepair.run(db, OLD, "Testchar")
+    expect(moved).toEqual({ [NEW] = OLD, ["Altchar - "] = "Altchar - Home Realm 3 PvE" })
+    local alt = db.charData["Altchar - Home Realm 3 PvE"]
+    expect(alt.bags).toEqual({ seen = 200, realm = "Home Realm 3 PvE" })
+    -- its own profile went; its layouts into the one it uses, which had none
+    expect(db.profiles["Altchar - "]).toBeNil()
+    expect(tbl.field(db, "profiles", "Altchar - Home Realm 3 PvE", "__layouts")).toEqual({ ["2560x1440"] = {} })
+    -- waiting for their logins
+    expect(db.chars["Newchar - "]).toBe("Newchar - ")
+    expect(db.chars["Twochar - "]).toBe("x")
+    expectNoErrors()
+end
+
+@test("a character only the broken key knew: renamed, its profile along")
+local function onlyNew()
+    local db: Map = {
+        chars = { [NEW] = NEW },
+        profiles = { [NEW] = { frames = { scale = 2 } } },
+        lastRoles = { [NEW] = "HEALER" },
+        charData = { [NEW] = { bags = { realm = "", seen = 5 }, auctionhouse = { ruleset = "?" } } },
+    }
+    keyRepair.run(db, OLD, "Testchar")
+    expect(db.chars).toEqual({ [OLD] = OLD })
+    expect(db.profiles).toEqual({ [OLD] = { frames = { scale = 2 } } })
+    expect(db.lastRoles).toEqual({ [OLD] = "HEALER" })
+    expect(db.charData).toEqual({
+        [OLD] = { bags = { realm = "Home Realm 3 PvE", seen = 5 }, auctionhouse = { ruleset = "Home Realm 3 PvE" } },
+    })
+    expectNoErrors()
+end
+
+@test("a broken key's profile some role or character uses stays")
+local function profileInUse()
+    local db = split()
+    db.roleProfiles.HEALER = NEW
+    keyRepair.run(db, OLD, "Testchar")
+    expect(db.profiles[NEW]).toBeTruthy()
+    expect(db.chars[NEW]).toBeNil()
+    expectNoErrors()
+end

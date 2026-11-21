@@ -1,20 +1,36 @@
 -- Core/Rulesets: this character's ruleset (for now the realm's name), its
 -- name as SuuUI shows it, and the ruleset of a character's key.
 
-import test, expect from "wowlua:test"
+import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as rulesets from "/Core/Rulesets"
+import * as realm from "/Core/Realm"
+import * as DB from "/Core/DB"
+import expectNoErrors from "../../helpers"
+
+@afterEach
+local function restore()
+    mock.setPlayer({ name = "Player", realm = "Realm" })
+    local account = DB.db.account :: any :: { [string]: unknown }
+    account.charKeyMoves = nil
+    realm.reset()
+end
 
 @test("the ruleset: the realm's name for now; shown as \"… Ruleset\"")
 local function current()
-    local realm = GetRealmName()
-    expect(rulesets.current()).toBe(realm)
+    local name = GetRealmName()
+    expect(rulesets.current()).toBe(name)
     expect(rulesets.displayName("PvP Roleplay")).toBe("PvP Roleplay Ruleset")
-    -- the client telling nothing
-    mock.stub(_G, "GetRealmName", function(): string
-        return ""
+    -- the client telling nothing (Forever's 1.60.1.71037): the realm
+    -- remembered for the server, never "?"
+    mock.setPlayer({ name = "Player", realm = "" })
+    mock.stub(_G, "GetRealmID", function(): number
+        return 0
     end)
-    expect(rulesets.current()).toBe("?")
+    realm.reset()
+    expect(GetRealmName()).toBe("")
+    expect(rulesets.current()).toBe(name)
+    expectNoErrors()
 end
 
 @test("a character's key says its ruleset by its realm")
@@ -22,6 +38,12 @@ local function ofCharKey()
     expect(rulesets.ofCharKey("Aster - Normal")).toBe("Normal")
     expect(rulesets.ofCharKey("Aster - PvP Roleplay")).toBe("PvP Roleplay")
     expect(rulesets.ofCharKey("Aster")).toBeNil()
+    -- a key the update of 2026-11-21 broke: the ruleset of where it moved
+    expect(rulesets.ofCharKey("Aster - ")).toBeNil()
+    realm.recordMove("Aster - ", "Aster - CAMWOW EU5 Realm 3 PvE")
+    expect(rulesets.ofCharKey("Aster - ")).toBe("CAMWOW EU5 Realm 3 PvE")
+    expect(rulesets.displayName(rulesets.ofCharKey("Aster - "))).toBe("Normal Ruleset")
+    expectNoErrors()
 end
 
 @test("the ruleset is the last word of Forever's server name")

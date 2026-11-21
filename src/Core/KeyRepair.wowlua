@@ -1,0 +1,323 @@
+-- Core/KeyRepair.wowlua
+-- Characters split by Forever's update of 2026-11-21 put back together,
+-- once, at load (Core/Settings' bind, before anything reads a character's
+-- data).
+--
+-- From that update the client told no realm (Core/Realm), so a character
+-- logged in with it was keyed "Name - " and SuuUI saw a new character: its
+-- own profile, empty data for every module, rulesets "?". A broken key
+-- (realm "" or the last resort "realm:<id>") goes into the right one:
+-- this character's into its key now; another character's into its only
+-- key with a realm's name (none, or several: it waits for that character's
+-- login). What is merged, where both keys have something:
+--   chars, charRoles, lastRoles  the right key's stay; a broken key's own
+--            profile (named after it) goes unless some character or role
+--            uses it (its layouts kept by the right key's profile when that
+--            has none); a character only the broken key knew takes its
+--            profile along.
+--   charData, per module         the right key's values stay, the broken
+--            key's added where the right one has none (inside tables too,
+--            lists left whole); but the newer of the two (by when it was
+--            read) for the bags' snapshot (bags, money, seen, level,
+--            equipped), the mail's inbox and the auction house's own
+--            auctions; lists of the newest joined (mail sent, the auction
+--            house's searches, the chat's typed lines), each kept to its
+--            size; the larger map mark ID; the realm and the ruleset the
+--            right key's.
+-- Each move is remembered (Realm.recordMove) for the data kept outside
+-- SuuUIDB (the Ledger's books and gold). Running it again on repaired data,
+-- or on data with no broken key, changes nothing.
+
+import * as realm from "./Realm"
+
+type Map = { [string]: any }
+
+-- The newest-first and oldest-first lists that are joined, and their
+-- sizes (the modules': Mail's SENT_MAX, the auction house's HISTORY_MAX,
+-- the chat's HISTORY_KEEP).
+const SENT_MAX = 50
+const SEARCHES_MAX = 5
+const TYPED_MAX = 50
+
+local function isList(t: Map): boolean
+    return t[1] ~= nil
+end
+
+-- `from`'s values added to `into` where it has none: inside tables that
+-- are maps on both sides; a list (or a value) `into` has stays.
+local function fill(into: Map, from: Map)
+    for k, v in pairs(from) do
+        local was = into[k]
+        if was == nil then
+            into[k] = v
+        elseif type(was) == "table" and type(v) == "table" and not isList(was :: Map) and not isList(v :: Map) then
+            fill(was :: Map, v :: Map)
+        end
+    end
+end
+
+local function num(v: unknown): number
+    return type(v) == "number" and v or 0
+end
+
+-- Newest first (`at`), the same letter once, at most SENT_MAX.
+local function joinSent(old: unknown, new: unknown): Map[]
+    local all: Map[] = {}
+    for _, list in ipairs({ new, old }) do
+        if type(list) == "table" then
+            for _, e in ipairs(list :: Map[]) do
+                if type(e) == "table" then
+                    all[#all + 1] = e
+                end
+            end
+        end
+    end
+    table.sort(all, function(a: Map, b: Map): boolean
+        return num(a.at) > num(b.at)
+    end)
+    local out: Map[], had: { [string]: boolean } = {}, {}
+    for _, e in ipairs(all) do
+        local id = tostring(e.at) .. "\0" .. tostring(e.to) .. "\0" .. tostring(e.subject)
+        if not had[id] and #out < SENT_MAX then
+            had[id] = true
+            out[#out + 1] = e
+        end
+    end
+    return out
+end
+
+-- The newer searches first, each text once (in any case), at most
+-- SEARCHES_MAX.
+local function joinSearches(old: unknown, new: unknown): Map[]
+    local out: Map[], had: { [string]: boolean } = {}, {}
+    for _, list in ipairs({ new, old }) do
+        if type(list) == "table" then
+            for _, e in ipairs(list :: Map[]) do
+                local text = type(e) == "table" and e.text
+                if type(text) == "string" and not had[text:lower()] and #out < SEARCHES_MAX then
+                    had[text:lower()] = true
+                    out[#out + 1] = e
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Oldest first: the older lines, then the newer, a line not twice in a
+-- row, the last TYPED_MAX.
+local function joinTyped(old: unknown, new: unknown): string[]
+    local all: string[] = {}
+    for _, list in ipairs({ old, new }) do
+        if type(list) == "table" then
+            for _, line in ipairs(list :: unknown[]) do
+                if type(line) == "string" and all[#all] ~= line then
+                    all[#all + 1] = line
+                end
+            end
+        end
+    end
+    local out: string[] = {}
+    for i = math.max(1, #all - TYPED_MAX + 1), #all do
+        out[#out + 1] = all[i]
+    end
+    return out
+end
+
+-- A table field read newer: whose `at` is later.
+local function newerByAt(old: Map, new: Map, field: string)
+    local o, n = old[field], new[field]
+    if type(n) == "table" and (type(o) ~= "table" or num((n :: Map).at) > num((o :: Map).at)) then
+        old[field] = n
+    end
+end
+
+const SNAPSHOT: string[] = { "bags", "money", "seen", "level", "equipped" }
+
+-- One module's data of a broken key (`new`) into the right key's (`old`).
+local function mergeNamespace(namespace: string, old: Map, new: Map)
+    if namespace == "bags" then
+        if num(new.seen) > num(old.seen) then
+            for _, f in ipairs(SNAPSHOT) do
+                if new[f] ~= nil then
+                    old[f] = new[f]
+                end
+            end
+        end
+    elseif namespace == "mail" then
+        newerByAt(old, new, "inbox")
+        if new.sent ~= nil then
+            old.sent = joinSent(old.sent, new.sent)
+        end
+    elseif namespace == "auctionhouse" then
+        newerByAt(old, new, "owned")
+        if new.history ~= nil then
+            old.history = joinSearches(old.history, new.history)
+        end
+    elseif namespace == "chat" then
+        if new.history ~= nil then
+            old.history = joinTyped(old.history, new.history)
+        end
+    elseif namespace == "marks" then
+        if type(new.nextID) == "number" and num(old.nextID) < new.nextID then
+            old.nextID = new.nextID
+        end
+    end
+    fill(old, new)
+end
+
+-- The realm and ruleset fields of a character's data, where the update
+-- left them broken ("", "?", "realm:…"), set to its key's realm.
+local function fixRealms(data: Map, realmName: string)
+    for _, at in ipairs({ { "bags", "realm" }, { "mail", "realm" }, { "auctionhouse", "ruleset" } }) do
+        local values = data[at[1]]
+        if type(values) == "table" then
+            local v = (values :: Map)[at[2]]
+            if type(v) == "string" and (v == "?" or realm.brokenRealm(v)) then
+                (values :: Map)[at[2]] = realmName
+            end
+        end
+    end
+end
+
+-- A map of the saved data (made when missing is no help: nil).
+local function part(db: Map, key: string): Map?
+    local t = db[key]
+    return type(t) == "table" and t :: Map or nil
+end
+
+-- Whether a profile name is in use: a character's or a role's.
+local function inUse(db: Map, profileName: string): boolean
+    for _, key in ipairs({ "chars", "roleProfiles" }) do
+        for _, v in pairs(part(db, key) or {}) do
+            if v == profileName then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Broken key `from` into `to`.
+local function merge(db: Map, from: string, to: string)
+    local chars, profiles = part(db, "chars"), part(db, "profiles")
+    if chars then
+        local mine, theirs = chars[from], chars[to]
+        if theirs == nil and type(mine) == "string" then
+            if mine == from then
+                chars[to] = to
+                if profiles and profiles[to] == nil then
+                    profiles[to] = profiles[from]
+                    profiles[from] = nil
+                end
+            else
+                chars[to] = mine
+            end
+        end
+        chars[from] = nil
+    end
+    local own = profiles and profiles[from]
+    if profiles and type(own) == "table" and not inUse(db, from) then
+        local used = chars and chars[to]
+        local target = type(used) == "string" and profiles[used]
+        local layouts = (own :: Map).__layouts
+        if type(target) == "table" and (target :: Map).__layouts == nil and layouts ~= nil then
+            (target :: Map).__layouts = layouts
+        end
+        profiles[from] = nil
+    end
+    for _, key in ipairs({ "charRoles", "lastRoles" }) do
+        local roles = part(db, key)
+        if roles then
+            if roles[to] == nil then
+                roles[to] = roles[from]
+            end
+            roles[from] = nil
+        end
+    end
+    local charData = part(db, "charData")
+    local broken = charData and charData[from]
+    if charData and type(broken) == "table" then
+        local right = charData[to]
+        if type(right) ~= "table" then
+            charData[to] = broken
+        else
+            for namespace, values in pairs(broken :: Map) do
+                local old = (right :: Map)[namespace]
+                if type(old) ~= "table" then
+                    (right :: Map)[namespace] = values
+                elseif type(values) == "table" then
+                    mergeNamespace(namespace, old :: Map, values :: Map)
+                end
+            end
+        end
+        charData[from] = nil
+    end
+    local _, r = realm.split(to)
+    local data = charData and charData[to]
+    if r and not realm.brokenRealm(r) and type(data) == "table" then
+        fixRealms(data :: Map, r)
+    end
+end
+
+-- The saved keys by name, only those with a realm's name.
+local function keysByName(db: Map): { [string]: { [string]: boolean } }
+    local out: { [string]: { [string]: boolean } } = {}
+    for _, key in ipairs({ "chars", "charData" }) do
+        for k in pairs(part(db, key) or {}) do
+            if type(k) == "string" then
+                local n, r = realm.split(k)
+                if n and r and not realm.brokenRealm(r) then
+                    local set = out[n] or {}
+                    out[n] = set
+                    set[k] = true
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function only(set: { [string]: boolean }?): string?
+    local one: string? = nil
+    for k in pairs(set or {}) do
+        if one then
+            return nil
+        end
+        one = k
+    end
+    return one
+end
+
+-- The repair (see the top) on SuuUIDB `db`, for this character (`name`,
+-- its key now `key`): broken key -> where it went.
+export function run(db: Map, key: string, name: string): { [string]: string }
+    local broken: { [string]: string } = {}
+    for _, which in ipairs({ "chars", "charData", "charRoles", "lastRoles", "profiles" }) do
+        for k in pairs(part(db, which) or {}) do
+            if type(k) == "string" then
+                local n, r = realm.split(k)
+                if n and r and realm.brokenRealm(r) then
+                    broken[k] = n
+                end
+            end
+        end
+    end
+    local order: string[] = {}
+    for k in pairs(broken) do
+        order[#order + 1] = k
+    end
+    table.sort(order)
+    local named = keysByName(db)
+    local moved: { [string]: string } = {}
+    for _, from in ipairs(order) do
+        local n = broken[from] :: string
+        local to = (n == name) and key or only(named[n])
+        if to and to ~= from then
+            merge(db, from, to)
+            realm.recordMove(from, to)
+            moved[from] = to
+        end
+    end
+    return moved
+end
