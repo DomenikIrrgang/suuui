@@ -23,6 +23,7 @@ import * as lazyData from "/Core/Data"
 import type FilterValues from "/UI/FilterMenu"
 import type TextField from "/UI/Inputs"
 import internal M, numbers from "/Units/Professions"
+import ENCHANTING from "/Units/Professions/RecipeLabel"
 import expectNoErrors, captureConfirm from "../../helpers"
 import type Confirms from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
@@ -335,6 +336,85 @@ local function sorting()
     for i = 2, #cats do
         expect((cats[i - 1].name or "") <= (cats[i].name or "")).toBe(true)
     end
+end
+
+@test(
+    "enchanting's recipes listed without \"Enchant \"; search, the page and the tooltip keep the name; the setting off"
+)
+local function enchantLabels()
+    openSmithing()
+    -- another profession's names stay as they are
+    for _, r in ipairs(allRecipes()) do
+        expect(r.label).toBeNil()
+    end
+    -- the emulated client records no Enchanting window: Blacksmithing's
+    -- list under Enchanting's skill line, its first recipe renamed
+    local id = recipeAt(1).id
+    local realBase, realInfo = C_TradeSkillUI.GetBaseProfessionInfo, C_TradeSkillUI.GetRecipeInfo
+    mock.stub(C_TradeSkillUI, "GetBaseProfessionInfo", function(): unknown
+        local base: { [string]: unknown } = {}
+        for k, v in pairs(realBase() :: table) do
+            base[k] = v
+        end
+        base.professionID = ENCHANTING
+        return base
+    end)
+    mock.stub(C_TradeSkillUI, "GetRecipeInfo", function(rid: number): unknown
+        local info: { [string]: unknown } = {}
+        for k, v in pairs(realInfo(rid) :: table) do
+            info[k] = v
+        end
+        if rid == id then
+            info.name = "Enchant 2H Weapon - Greater Impact"
+        end
+        return info
+    end)
+    M:Render()
+    local function find(): RecipeEntry?
+        for _, r in ipairs(allRecipes()) do
+            if r.id == id then
+                return r
+            end
+        end
+        return nil
+    end
+    local rec = assert(find())
+    expect(rec.label).toBe("2H Weapon - Greater Impact")
+    expect(rec.name).toBe("Enchant 2H Weapon - Greater Impact")
+    for _, r in ipairs(allRecipes()) do
+        if r.id ~= id then
+            expect(r.label).toBeNil()
+        end
+    end
+    -- an enchant makes no item: the page's title is the full name
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return { reagentSlotSchematics = {} }
+    end)
+    expect(assert(M:Recipe(id)).name).toBe("Enchant 2H Weapon - Greater Impact")
+    -- search: the short name and the full one both find it
+    local search = assert(view().onSearch)
+    for _, text in ipairs({ "greater impact", "enchant 2h" }) do
+        search(text)
+        mock.advanceTime(0.2)
+        expect(find() ~= nil).toBe(true)
+    end
+    search("")
+    mock.advanceTime(0.2)
+    -- hovered, an enchant (no item) shows its full name
+    assert(view().onRecipeEnter)(assert(find()), UIParent)
+    expect(GameTooltip:IsShown()).toBe(true)
+    expect(mock.tooltipLines()[1]).toBe("Enchant 2H Weapon - Greater Impact")
+    GameTooltip:Hide()
+    -- the setting off: the full name in the list, at once
+    M:Set("shortEnchantNames", false)
+    mock.advanceTime(0.2)
+    expect(assert(find()).label).toBeNil()
+    M:Reset("shortEnchantNames")
+    mock.advanceTime(0.2)
+    expect(assert(find()).label).toBe("2H Weapon - Greater Impact")
+    -- what the stubbed skill line left in the saved data
+    assert(M:Char().recipes)[ENCHANTING] = nil
+    M.chosen[ENCHANTING] = nil
 end
 
 @test("choosing a recipe; tracking it; creating one or all; links into chat")

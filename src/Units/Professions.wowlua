@@ -26,6 +26,7 @@ import * as frames from "wowlua:frames"
 import * as items from "wowlua:item"
 import * as spells from "wowlua:spell"
 import * as chat from "wowlua:chat"
+import recipeLabel from "/Units/Professions/RecipeLabel"
 
 local PROFESSIONS = SuuUI.Services.PROFESSIONS
 local AUCTION_HOUSE = SuuUI.Services.AUCTION_HOUSE
@@ -40,6 +41,8 @@ local asString, asNumber, flag, field = secret.asString, secret.asNumber, secret
 local DEFAULTS = {
     -- what a recipe costs to make and brings at the auction house
     craftValue = true,
+    -- enchanting's recipes listed without the "Enchant " they all start with
+    shortEnchantNames = true,
 }
 
 local SECTION: SettingsSection = {
@@ -56,6 +59,12 @@ local SECTION: SettingsSection = {
                     label = "Crafting cost and profit",
                     control = "toggle",
                     description = "The recipe you choose shows what its reagents cost, what it sells for and the profit. Prices come from your last auction house scan and from vendors you've visited; the profit counts the house's 5% cut. (Sorting by profit or cost works either way.)",
+                },
+                {
+                    key = "shortEnchantNames",
+                    label = "Short enchant names",
+                    control = "toggle",
+                    description = "Enchanting's recipe list leaves out the \"Enchant\" every recipe starts with (\"2H Weapon - Greater Impact\"), so the enchant's own name fits. Search with either; the recipe's page and its tooltip show the full name.",
                 },
             },
         },
@@ -176,6 +185,8 @@ type Recorded = { skill?: number, trainers: string[] }
 type Row = {
     id: number,
     name: string,
+    -- what the list shows instead of the name (RecipeLabel)
+    label?: string,
     difficulty: number,
     canMake: number,
     learned: boolean,
@@ -831,6 +842,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         -- crafting cost and profit: only to sort by (the list shows no prices:
         -- the chosen recipe's Market does, asked)
         local priced = self.sort == "profit" or self.sort == "cost"
+        local short = self:Get("shortEnchantNames") == true
         for _, id in ipairs(numbers(try(C_TradeSkillUI.GetAllRecipeIDs))) do
             local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
             if info and secret.readable(info.name) and not info.isDummyRecipe and self:InGame(info, profession) then
@@ -863,6 +875,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     cat.recipes[#cat.recipes + 1] = {
                         id = id,
                         name = info.name,
+                        label = short and recipeLabel(skillLine, info.name) or nil,
                         difficulty = diff,
                         canMake = can,
                         learned = info.learned and true or false,
@@ -1450,6 +1463,11 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             local sch = tryValue(C_TradeSkillUI.GetRecipeSchematic, rec.id, false)
             if sch and sch.outputItemID then
                 itemTip(owner, sch.outputItemID)
+            elseif rec.label and rec.name then
+                -- no item to show (an enchant): the name the list shortened
+                GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                GameTooltip_SetTitle(GameTooltip, rec.name)
+                GameTooltip:Show()
             end
         end
         view.onSearch = function(text: string)
@@ -1736,6 +1754,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             end)
         end
         self:Watch("craftValue", redraw)
+        self:Watch("shortEnchantNames", redraw)
         -- profession trainers: what they teach, recorded once they've listed it
         self:OnGameEvent("TRAINER_SHOW", function()
             self:After(0.3, function()
