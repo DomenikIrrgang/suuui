@@ -1,0 +1,117 @@
+-- The marketing images' caption bars (tests/marketing/README.md): a strip
+-- the screen's width and CAPTION_H pixels tall, drawn in SuuUI's own look
+-- (Design/tokens.json): the surface ground, a gilt hairline with the divider
+-- jewel in its middle, SuuUI's mark and name in Marcellus SC, the headline
+-- in gilt-text and a line under it in ink-muted, both Figtree. One picture per
+-- image (captions.wowlua); tools/marketing_caption.py puts each under its
+-- scene.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as scene from "./scene"
+import CAPTIONS from "./captions"
+
+config({ profile = "marketing-mage" })
+
+-- The bar's height in screen pixels (the images are 1920 wide), and where
+-- its hairline runs.
+const CAPTION_H = 138
+const TOP = 6
+
+const FONTS = "Interface\\AddOns\\SuuUI\\Media\\Fonts\\"
+const DISPLAY = "MarcellusSC-Regular.ttf"
+const MARK = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Mark.tga"
+
+-- Design/tokens.json's colours, as r, g, b, a.
+const SURFACE = { 0x13 / 255, 0x11 / 255, 0x16 / 255, 1 }
+const GILT = { 0xC9 / 255, 0xA7 / 255, 0x5A / 255, 1 }
+const GILT_LINE = { 0xC9 / 255, 0xA7 / 255, 0x5A / 255, 0.38 }
+const GILT_FAINT = { 0xC9 / 255, 0xA7 / 255, 0x5A / 255, 0.14 }
+const GILT_TEXT = { 0xE6 / 255, 0xCC / 255, 0x8A / 255, 1 }
+const INK_MUTED = { 0xA3 / 255, 0x9B / 255, 0x8B / 255, 1 }
+
+-- Screen pixels to the bar's units.
+local function px(n: number): number
+    return n * UIParent:GetHeight() / 1080
+end
+
+local function fill(f: Frame, layer: DrawLayer, c: number[]): Texture
+    local t = f:CreateTexture(nil, layer)
+    t:SetColorTexture(c[1], c[2], c[3], c[4])
+    return t
+end
+
+local function text(f: Frame, font: string, size: number, c: number[]): FontString
+    local s = f:CreateFontString(nil, "OVERLAY")
+    s:SetFont(FONTS .. font, px(size), "")
+    s:SetTextColor(c[1], c[2], c[3], c[4])
+    s:SetJustifyH("LEFT")
+    s:SetWordWrap(false)
+    return s
+end
+
+type Bar = { frame: Frame, headline: FontString, subline: FontString }
+local bar: Bar? = nil
+
+local function build(): Bar
+    local f = CreateFrame("Frame", "SuuMarketingCaption", UIParent)
+    f:SetFrameStrata("TOOLTIP")
+    f:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+    f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 0)
+    f:SetHeight(px(CAPTION_H))
+    fill(f, "BACKGROUND", SURFACE):SetAllPoints()
+    -- the gilt hairline near the top, the jewel in its middle (both inside
+    -- the bar: its picture is the screen's under it)
+    local line = fill(f, "BORDER", GILT_LINE)
+    line:SetPoint("TOPLEFT", 0, -px(TOP))
+    line:SetPoint("TOPRIGHT", 0, -px(TOP))
+    line:SetHeight(px(1))
+    local jewel = fill(f, "ARTWORK", GILT)
+    jewel:SetSize(px(8), px(8))
+    jewel:SetPoint("CENTER", f, "TOP", 0, -px(TOP))
+    jewel:SetRotation(math.pi / 4)
+    -- SuuUI's mark and name (Marcellus SC) on the left, a faint rule after
+    -- them. (The emulator draws Marcellus SC with a gap after some letters,
+    -- the S here: the name in two parts, set close.)
+    local mark = f:CreateTexture(nil, "ARTWORK")
+    mark:SetTexture(MARK)
+    mark:SetSize(px(52), px(52))
+    mark:SetPoint("LEFT", f, "LEFT", px(56), -px(TOP / 2) - px(1))
+    local s = text(f, DISPLAY, 30, GILT_TEXT)
+    s:SetPoint("LEFT", mark, "RIGHT", px(16), 0)
+    s:SetText("S")
+    local uui = text(f, DISPLAY, 30, GILT_TEXT)
+    uui:SetPoint("BOTTOMLEFT", s, "BOTTOMRIGHT", -px(6), 0)
+    uui:SetText("uuUI")
+    local rule = fill(f, "ARTWORK", GILT_FAINT)
+    rule:SetSize(px(1), px(70))
+    rule:SetPoint("LEFT", uui, "RIGHT", px(40), 0)
+    -- the headline (gilt-text, Figtree: the emulator spaces Marcellus SC's
+    -- longer lines unevenly) and the line under it
+    local headline = text(f, "Figtree-Bold.ttf", 34, GILT_TEXT)
+    headline:SetPoint("TOPLEFT", rule, "TOPLEFT", px(40), px(1))
+    local subline = text(f, "Figtree-Medium.ttf", 21, INK_MUTED)
+    subline:SetPoint("TOPLEFT", headline, "BOTTOMLEFT", 0, -px(10))
+    -- what SuuUI is, on the right
+    local forever = text(f, "Figtree-Medium.ttf", 19, INK_MUTED)
+    forever:SetJustifyH("RIGHT")
+    forever:SetPoint("RIGHT", f, "RIGHT", -px(56), -px(TOP / 2))
+    forever:SetText("A full interface for WoW Forever")
+    f:Show()
+    return { frame = f, headline = headline, subline = subline }
+end
+
+@if(features.marketing)
+@test("caption bars")
+local function captions()
+    scene.begin()
+    local b = bar or build()
+    bar = b
+    for _, c in ipairs(CAPTIONS) do
+        b.headline:SetText(c.headline)
+        b.subline:SetText(c.subline)
+        scene.frames(2)
+        mock.screenshot(c.file, b.frame)
+    end
+end

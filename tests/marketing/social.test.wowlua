@@ -1,0 +1,279 @@
+-- Marketing scenes: the social side in Goldshire. SuuUI's chat with its
+-- tabs and a busy evening's lines, the command palette over a typed /, the
+-- group finder with groups read from the LookingForGroup channel, and the
+-- guild's roster.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import internal M as micro from "/Units/MicroMenu"
+import SuuUI from "/Core/API"
+import * as scene from "./scene"
+import * as mage from "./mage"
+
+config({ profile = "marketing-mage" })
+
+const GENERAL = { index = 1, name = "General - Elwynn Forest" }
+const TRADE = { index = 2, name = "Trade - City" }
+const LFG = { index = 4, name = "LookingForGroup" }
+
+-- The evening's chat, oldest first.
+type Line = { event: string, who: string, text: string, channel?: { index: number, name: string } }
+const LINES: Line[] = {
+    { event = "CHAT_MSG_GUILD", who = "Odrik", text = "raid invites for Molten Core at 8, bring fire resist" },
+    { event = "CHAT_MSG_CHANNEL", who = "Harrow", text = "WTS Arcanite Bars, 6 in stock, whisper me", channel = TRADE },
+    { event = "CHAT_MSG_GUILD", who = "Maevria", text = "grats on the staff Elowyn!" },
+    { event = "CHAT_MSG_GUILD", who = "Seldra", text = "o/ evening all" },
+    {
+        event = "CHAT_MSG_CHANNEL",
+        who = "Dorrin",
+        text = "anyone know where the Defias Brotherhood quest starts?",
+        channel = GENERAL,
+    },
+    { event = "CHAT_MSG_CHANNEL", who = "Quillon", text = "Sentinel Hill in Westfall, ask Gryan", channel = GENERAL },
+    { event = "CHAT_MSG_SAY", who = "Brannoc", text = "anyone selling Runecloth?" },
+    { event = "CHAT_MSG_WHISPER", who = "Liraleth", text = "bring water for the raid pls <3" },
+    { event = "CHAT_MSG_CHANNEL", who = "Vexley", text = "LF enchanter for Crusader, tips paid", channel = TRADE },
+    { event = "CHAT_MSG_GUILD", who = "Thornvald", text = "I can tank Strat live after the raid" },
+    { event = "CHAT_MSG_GUILD", who = "Quillon", text = "anyone need Mooncloth? I have four" },
+    { event = "CHAT_MSG_WHISPER", who = "Odrik", text = "can you bring a portal after the raid?" },
+    { event = "CHAT_MSG_SAY", who = "Harrow", text = "nice robes, where are they from?" },
+    { event = "CHAT_MSG_GUILD", who = "Kestria", text = "summoning at the stone in 5" },
+    { event = "CHAT_MSG_GUILD", who = "Seldra", text = "omw" },
+}
+
+-- Groups and players posting in LookingForGroup (the group finder reads them).
+const POSTS: { who: string, text: string }[] = {
+    { who = "Corwen", text = "LFM Scholomance, need healer and 1 dps" },
+    { who = "Gorrim", text = "LF2M UBRS need heals and mage, have key" },
+    { who = "Nimbra", text = "LFG Stratholme live, rogue 60" },
+    { who = "Selvara", text = "LFM BRD emperor run, need tank" },
+    { who = "Torvik", text = "LF1M Dire Maul tribute, healer" },
+    { who = "Faelith", text = "mage LFG ZG or Strat UD" },
+    { who = "Bryndle", text = "LFM Molten Core, 32/40, need healers" },
+    { who = "Harrow", text = "LF tank for LBRS, then UBRS" },
+}
+
+local function setup()
+    scene.begin()
+    mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", subZone = "Goldshire", x = 0.42, y = 0.65, facing = 0.8 })
+    mage.dress()
+    mock.setChannels({
+        joined = {
+            { name = "General", fullName = "General - Elwynn Forest", category = "CHANNEL_CATEGORY_WORLD" },
+            { name = "Trade", fullName = "Trade - City", category = "CHANNEL_CATEGORY_WORLD" },
+            { name = "LocalDefense", fullName = "LocalDefense - Elwynn Forest", category = "CHANNEL_CATEGORY_WORLD" },
+            { name = "LookingForGroup", category = "CHANNEL_CATEGORY_WORLD" },
+        },
+    })
+    scene.seconds(1)
+    for _, p in ipairs(POSTS) do
+        scene.say("CHAT_MSG_CHANNEL", p.who, p.text, LFG)
+        scene.frames(20)
+    end
+    for _, l in ipairs(LINES) do
+        scene.say(l.event, l.who, l.text, l.channel)
+        scene.frames(10)
+    end
+    scene.seconds(2)
+end
+
+@if(features.marketing)
+@test("chat palette")
+local function chatPalette()
+    -- a taller chat (the setting), so its lines show above the palette
+    local chat = SuuUI.GetModule("chat")
+    if chat then
+        chat:Set("logHeight", 440)
+    end
+    setup()
+    mock.pressBinding("OPENCHATSLASH")
+    scene.frames(10)
+    -- "/r": the commands that start so, from every category
+    local box = frames.asEditBox(tbl.field(_G, "ChatFrame1EditBox"))
+    if box then
+        mock.typeText(box, "r")
+    end
+    scene.frames(30)
+    mock.screenshot("chat-palette")
+    mock.pressKey("ESCAPE")
+    if chat then
+        chat:Reset("logHeight")
+    end
+    scene.frames(10)
+end
+
+local function gameFrame(name: string): Frame?
+    return frames.asFrame(tbl.field(_G, name))
+end
+
+@if(features.marketing)
+@test("group finder")
+local function groupFinder()
+    -- the micro menu's Group Finder, clicked as a player does
+    local buttons = tbl.field(tbl.field(micro, "menu"), "buttons")
+    mock.click(frames.asButton(tbl.field(buttons, "groupfinder")))
+    scene.frames(10)
+    -- its Browse tab
+    mock.click(frames.asFrame(tbl.field(gameFrame("LFGParentFrame"), "BrowsingTab")))
+    mock.hover(nil)
+    scene.seconds(1)
+    mock.screenshot("group-finder")
+    local f = gameFrame("LFGParentFrame")
+    if f and f:IsShown() then
+        mock.click(frames.asButton(tbl.field(buttons, "groupfinder")))
+        mock.hover(nil)
+    end
+    scene.frames(10)
+end
+
+type Member = {
+    name: string,
+    class: string,
+    race: string,
+    rank: number,
+    zone: string,
+    note?: string,
+    online?: boolean,
+    status?: number,
+    away?: number[],
+}
+const GUILD: Member[] = {
+    {
+        name = "Odrik",
+        class = "WARRIOR",
+        race = "Dwarf",
+        rank = 0,
+        zone = "Ironforge",
+        note = "raid lead",
+        online = true,
+    },
+    {
+        name = "Maevria",
+        class = "DRUID",
+        race = "NightElf",
+        rank = 1,
+        zone = "Moonglade",
+        note = "officer, resto",
+        online = true,
+    },
+    {
+        name = "Thornvald",
+        class = "WARRIOR",
+        race = "Dwarf",
+        rank = 1,
+        zone = "Stormwind City",
+        note = "main tank",
+        online = true,
+    },
+    {
+        name = "Liraleth",
+        class = "PRIEST",
+        race = "NightElf",
+        rank = 2,
+        zone = "Elwynn Forest",
+        note = "healer",
+        online = true,
+    },
+    {
+        name = "Seldra",
+        class = "PALADIN",
+        race = "Human",
+        rank = 2,
+        zone = "Eastern Plaguelands",
+        note = "holy",
+        online = true,
+        status = 1,
+    },
+    {
+        name = "Brannoc",
+        class = "ROGUE",
+        race = "Human",
+        rank = 2,
+        zone = "Elwynn Forest",
+        note = "combat swords",
+        online = true,
+    },
+    { name = "Kestria", class = "HUNTER", race = "NightElf", rank = 2, zone = "Winterspring", online = true },
+    { name = "Quillon", class = "MAGE", race = "Gnome", rank = 3, zone = "Ironforge", note = "tailor", online = true },
+    {
+        name = "Morvaine",
+        class = "WARLOCK",
+        race = "Gnome",
+        rank = 3,
+        zone = "Burning Steppes",
+        online = true,
+        status = 2,
+    },
+    { name = "Caldren", class = "PALADIN", race = "Human", rank = 3, zone = "Stormwind City", online = true },
+    {
+        name = "Dorrin",
+        class = "MAGE",
+        race = "Gnome",
+        rank = 4,
+        zone = "Westfall",
+        note = "alt of Quillon",
+        online = true,
+    },
+    { name = "Vexley", class = "ROGUE", race = "Gnome", rank = 3, zone = "Stranglethorn Vale", online = true },
+    { name = "Gorrim", class = "WARRIOR", race = "Dwarf", rank = 3, online = false, zone = "", away = { 0, 0, 0, 5 } },
+    { name = "Sennia", class = "PRIEST", race = "Human", rank = 3, online = false, zone = "", away = { 0, 0, 1, 0 } },
+    {
+        name = "Fennick",
+        class = "DRUID",
+        race = "NightElf",
+        rank = 3,
+        online = false,
+        zone = "",
+        away = { 0, 0, 2, 0 },
+    },
+    { name = "Velmora", class = "WARLOCK", race = "Human", rank = 4, online = false, zone = "", away = { 0, 0, 4, 0 } },
+}
+
+@if(features.marketing)
+@test("guild")
+local function guild()
+    local members: mock.GuildMemberData[] = {}
+    for _, m in ipairs(GUILD) do
+        members[#members + 1] = {
+            name = m.name,
+            class = m.class,
+            race = m.race,
+            level = m.name == "Dorrin" and 47 or 60,
+            rank = m.rank,
+            zone = m.zone,
+            note = m.note,
+            online = m.online or false,
+            status = m.status,
+            lastOnline = m.away,
+        }
+    end
+    mock.joinGuild({
+        name = "Wardens of the Dawn",
+        rank = 2,
+        ranks = {
+            { name = "Guild Master" },
+            { name = "Officer" },
+            { name = "Raider" },
+            { name = "Member" },
+            { name = "Initiate" },
+        },
+        motd = "Molten Core tonight at 8. Bring fire resist and flasks!",
+        info = "A friendly raiding guild. Raids Wed, Sun.",
+        members = members,
+    })
+    mock.advanceTime(1)
+    scene.frames(10)
+    mock.pressBinding("TOGGLEGUILDTAB")
+    scene.frames(5)
+    -- its roster
+    local tab = frames.asButton(tbl.field(gameFrame("CommunitiesFrame"), "RosterTab"))
+    if tab and tab:IsShown() then
+        mock.click(tab)
+        mock.hover(nil)
+    end
+    scene.seconds(1)
+    mock.screenshot("guild")
+end

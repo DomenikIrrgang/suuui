@@ -1,0 +1,315 @@
+-- Marketing scenes: SuuUI's windows, opened one after the other as a player
+-- would, in Goldshire. Elowyn's character window (with its Gear category),
+-- her bags, the spellbook, the world map with her quest log, the
+-- collections and the settings.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import internal M as trackerModule from "/Units/ObjectiveTracker"
+import * as scene from "./scene"
+import * as mage from "./mage"
+
+config({ profile = "marketing-mage" })
+
+const BAGS: (scene.Stack | false)[] = {
+    -- backpack
+    { id = 6948, name = "Hearthstone" },
+    { id = 13444, name = "Major Mana Potion", count = 8, stack = 5 },
+    { id = 13446, name = "Major Healing Potion", count = 5, stack = 5 },
+    { id = 8008, name = "Mana Ruby" },
+    { id = 13512, name = "Flask of Supreme Power", count = 3 },
+    { id = 13454, name = "Greater Arcane Elixir", count = 6 },
+    { id = 20749, name = "Brilliant Wizard Oil", count = 4 },
+    { id = 12662, name = "Demonic Rune", count = 4 },
+    { id = 8079, name = "Conjured Crystal Water", count = 20 },
+    { id = 22895, name = "Conjured Cinnamon Roll", count = 20 },
+    { id = 13931, name = "Nightfin Soup", count = 10 },
+    { id = 17020, name = "Arcane Powder", count = 40, stack = 100 },
+    { id = 17031, name = "Rune of Teleportation", count = 10 },
+    { id = 17032, name = "Rune of Portals", count = 10 },
+    { id = 17056, name = "Light Feather", count = 20 },
+    { id = 14530, name = "Heavy Runecloth Bandage", count = 10 },
+    -- bag 1: gear and loot
+    { id = 16795, name = "Arcanist Crown", quality = 4, ilvl = 66 },
+    { id = 16800, name = "Arcanist Boots", quality = 4, ilvl = 66 },
+    { id = 18809, name = "Sash of Whispered Secrets", quality = 4, ilvl = 71 },
+    { id = 19145, name = "Robe of Volatile Power", quality = 4, ilvl = 71 },
+    { id = 18875, name = "Salamander Scale Pants", quality = 4, ilvl = 71 },
+    { id = 19136, name = "Mana Igniting Cord", quality = 4, ilvl = 71 },
+    { id = 19337, name = "The Black Book", quality = 4, ilvl = 75 },
+    { id = 20725, name = "Nexus Crystal", quality = 4 },
+    { id = 14344, name = "Large Brilliant Shard", quality = 3, count = 4 },
+    { id = 16203, name = "Greater Eternal Essence", quality = 2, count = 6 },
+    { id = 16204, name = "Illusion Dust", count = 18 },
+    { id = 12360, name = "Arcanite Bar", quality = 2, count = 2 },
+    { id = 13468, name = "Black Lotus", quality = 2 },
+    { id = 12811, name = "Righteous Orb", quality = 2, count = 3 },
+    { id = 7078, name = "Essence of Fire", quality = 2, count = 3 },
+    { id = 12803, name = "Living Essence", quality = 2, count = 5 },
+    -- bag 2: cloth and trade goods
+    { id = 14047, name = "Runecloth", count = 20 },
+    { id = 14047, name = "Runecloth", count = 20 },
+    { id = 14047, name = "Runecloth", count = 14 },
+    { id = 14048, name = "Bolt of Runecloth", count = 8 },
+    { id = 14341, name = "Rune Thread", count = 5 },
+    { id = 12809, name = "Guardian Stone", quality = 2, count = 2 },
+    { id = 7076, name = "Essence of Earth", quality = 2, count = 2 },
+    { id = 7082, name = "Essence of Air", quality = 2 },
+    { id = 7080, name = "Essence of Water", quality = 2, count = 3 },
+    { id = 12808, name = "Essence of Undeath", quality = 2, count = 4 },
+    { id = 19698, name = "Zulian Coin", quality = 2, count = 3 },
+    { id = 19707, name = "Red Hakkari Bijou", quality = 3 },
+    { id = 20520, name = "Dark Rune", quality = 2, count = 2 },
+    false,
+    false,
+    false,
+    -- bag 3: quest items and keepsakes
+    { id = 12820, name = "Winterfall Firewater", count = 5 },
+    { id = 18705, name = "Mature Black Dragon Sinew", quality = 2 },
+    { id = 7191, name = "Fused Wiring", count = 2 },
+    { id = 13702, name = "Doom Weed", count = 8 },
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+}
+
+-- The quest log: the zone's and the endgame's.
+type Quest = { title: string, zone: string, level: number, objective: string, required: number }
+const QUESTS: Quest[] = {
+    {
+        title = "Wanted: Lieutenant Fangore",
+        zone = "Eastern Plaguelands",
+        level = 58,
+        objective = "Lieutenant Fangore slain",
+        required = 1,
+    },
+    {
+        title = "Demon Dogs",
+        zone = "Eastern Plaguelands",
+        level = 54,
+        objective = "Plaguehound Runt slain",
+        required = 20,
+    },
+    {
+        title = "Blood Tinged Skies",
+        zone = "Eastern Plaguelands",
+        level = 54,
+        objective = "Plaguebat slain",
+        required = 30,
+    },
+    {
+        title = "The Scourge Cauldrons",
+        zone = "Western Plaguelands",
+        level = 52,
+        objective = "Felstone Field Cauldron Key",
+        required = 1,
+    },
+    {
+        title = "Winterfall Activity",
+        zone = "Winterspring",
+        level = 60,
+        objective = "Winterfall Shaman slain",
+        required = 8,
+    },
+    { title = "Wildkin of Elune", zone = "Winterspring", level = 57, objective = "Wildkin Feather", required = 15 },
+    {
+        title = "Broodling Essence",
+        zone = "Burning Steppes",
+        level = 59,
+        objective = "Broodling Essence",
+        required = 8,
+    },
+    {
+        title = "Attunement to the Core",
+        zone = "Blackrock Depths",
+        level = 60,
+        objective = "Core Fragment",
+        required = 1,
+    },
+}
+
+local function takeQuests()
+    for i, q in ipairs(QUESTS) do
+        local id = 9100 + i
+        local giver = mock.spawnUnit({ name = "Quartermaster", level = 60, reaction = "friendly", distance = 3 })
+        mock.defineQuest(id, {
+            title = q.title,
+            text = "Go, $N.",
+            objective = q.objective,
+            giver = giver,
+            level = q.level,
+            header = q.zone,
+            objectives = { { text = q.objective, required = q.required } },
+        })
+        mock.player:interact(giver)
+        mock.advanceTime(0.5)
+        scene.frames(3)
+        AcceptQuest()
+        mock.advanceTime(0.5)
+        scene.frames(3)
+        giver:despawn()
+    end
+end
+
+-- The mount journal: horses, sabers and rams from the Alliance's vendors,
+-- the Deathcharger, the swift ones (journal IDs as Forever's; the horses'
+-- creature displays for the preview).
+type Mount = { id: number, spell: number, name: string, display?: number, collected?: boolean, favorite?: boolean }
+const MOUNTS: Mount[] = {
+    { id = 9, spell = 470, name = "Black Stallion", display = 2402, collected = true, favorite = true },
+    { id = 6, spell = 458, name = "Brown Horse", display = 2404, collected = true },
+    { id = 11, spell = 472, name = "Pinto", display = 2409, collected = true },
+    { id = 18, spell = 6648, name = "Chestnut Mare", display = 2405, collected = true },
+    { id = 93, spell = 23229, name = "Swift Brown Steed", collected = true, favorite = true },
+    { id = 92, spell = 23228, name = "Swift White Steed", collected = true },
+    { id = 91, spell = 23227, name = "Swift Palomino" },
+    { id = 26, spell = 8394, name = "Striped Frostsaber", collected = true },
+    { id = 31, spell = 10789, name = "Spotted Frostsaber" },
+    { id = 34, spell = 10793, name = "Striped Nightsaber", collected = true },
+    { id = 55, spell = 17229, name = "Winterspring Frostsaber" },
+    { id = 85, spell = 23221, name = "Swift Frostsaber" },
+    { id = 87, spell = 23219, name = "Swift Mistsaber" },
+    { id = 21, spell = 6777, name = "Gray Ram", collected = true },
+    { id = 24, spell = 6898, name = "White Ram" },
+    { id = 25, spell = 6899, name = "Brown Ram" },
+    { id = 95, spell = 23239, name = "Swift Gray Ram" },
+    { id = 96, spell = 23240, name = "Swift White Ram" },
+    { id = 69, spell = 17481, name = "Deathcharger", collected = true, favorite = true },
+}
+
+local function stable()
+    local journal: { [number]: mock.MountData } = {}
+    for _, m in ipairs(MOUNTS) do
+        journal[m.id] = {
+            spellID = m.spell,
+            name = m.name,
+            icon = C_Spell.GetSpellTexture(m.spell),
+            sourceType = 3,
+            display = m.display,
+            faction = 1,
+            collected = m.collected or false,
+            favorite = m.favorite,
+        }
+    end
+    mock.setMounts(journal)
+end
+
+local function setup()
+    scene.begin()
+    mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", subZone = "Goldshire", x = 0.42, y = 0.65, facing = 0.8 })
+    mage.dress()
+    scene.fillBags(BAGS)
+    stable()
+    takeQuests()
+    local book = SuuUI.GetModule("spellbook")
+    if book then
+        book:Set("unlearned", false)
+    end
+    scene.say("CHAT_MSG_GUILD", "Odrik", "raid invites for Molten Core at 8, bring fire resist")
+    scene.say("CHAT_MSG_GUILD", "Maevria", "grats on the staff Elowyn!")
+    scene.say("CHAT_MSG_SAY", "Brannoc", "anyone selling Runecloth?")
+    scene.say("CHAT_MSG_CHANNEL", "Corwen", "LFM Scholomance, need healer and 1 dps", {
+        index = 4,
+        name = "LookingForGroup",
+    })
+    scene.say("CHAT_MSG_WHISPER", "Liraleth", "bring water for the raid pls <3")
+    scene.say("CHAT_MSG_GUILD", "Seldra", "o/ evening all")
+    scene.seconds(6)
+end
+
+local function close()
+    if CharacterFrame and CharacterFrame:IsShown() then
+        mock.pressBinding("TOGGLECHARACTER0")
+    end
+    scene.frames(10)
+end
+
+@if(features.marketing)
+@test("character")
+local function character()
+    setup()
+    mock.pressBinding("TOGGLECHARACTER0")
+    scene.seconds(1)
+    -- (in the emulator the side tabs' marker covers the chosen tab's label,
+    -- "Stats", at the same frame level: the tabs lifted over it)
+    for i = 1, 3 do
+        local tab = frames.asButton(tbl.field(_G, "PaperDollSidebarTab" .. i))
+        if tab then
+            tab:SetFrameLevel(tab:GetFrameLevel() + 4)
+        end
+    end
+    scene.frames(2)
+    mock.screenshot("character")
+end
+
+@if(features.marketing)
+@test("bags")
+local function bags()
+    close()
+    SuuUI.ToggleBags()
+    scene.seconds(1)
+    mock.screenshot("bags")
+    SuuUI.ToggleBags()
+end
+
+@if(features.marketing)
+@test("spellbook")
+local function spellbook()
+    scene.frames(10)
+    mock.pressBinding("TOGGLESPELLBOOK")
+    scene.seconds(1)
+    mock.screenshot("spellbook")
+    mock.pressBinding("TOGGLESPELLBOOK")
+end
+
+@if(features.marketing)
+@test("world map")
+local function worldMap()
+    scene.frames(10)
+    -- the tracker away (the map's quest log lists the same)
+    local tracker = frames.asFrame(tbl.field(trackerModule, "frame"))
+    if tracker then
+        tracker:SetAlpha(0)
+    end
+    scene.frames(5)
+    mock.pressBinding("TOGGLEWORLDMAP")
+    scene.seconds(1)
+    mock.screenshot("world-map")
+    mock.pressBinding("TOGGLEWORLDMAP")
+    if tracker then
+        tracker:SetAlpha(1)
+    end
+end
+
+@if(features.marketing)
+@test("collections")
+local function collections()
+    scene.frames(10)
+    SuuUI.ToggleCollections("mounts")
+    -- (the model shown after two seconds without the game's answer)
+    scene.seconds(3)
+    mock.screenshot("collections")
+    SuuUI.ToggleCollections()
+end
+
+@if(features.marketing)
+@test("settings")
+local function settingsPage()
+    scene.frames(10)
+    SuuUI.OpenSettings("nameplates")
+    scene.seconds(1)
+    mock.screenshot("settings")
+end
